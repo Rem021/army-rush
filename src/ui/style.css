@@ -1968,10 +1968,10 @@ span.gun-img svg {
   z-index: 12;
 }
 .weapon-up.show {
-  animation: wu-in 0.5s cubic-bezier(0.2, 1.6, 0.4, 1) forwards;
+  animation: wu-in 0.24s cubic-bezier(0.2, 1.25, 0.4, 1) forwards;
 }
 .weapon-up.show.leave {
-  animation: wu-out 0.45s ease-in forwards;
+  animation: wu-out 0.28s ease-in forwards;
 }
 .wu-rays {
   position: absolute;
@@ -2010,7 +2010,7 @@ span.gun-img svg {
   filter: drop-shadow(0 0 10px var(--wc)) drop-shadow(0 4px 2px rgba(0, 0, 0, 0.5));
 }
 .weapon-up.show .wu-gun .gun-img {
-  animation: wu-gun 0.55s cubic-bezier(0.2, 1.3, 0.4, 1) 0.08s both;
+  animation: wu-gun 0.22s ease-out 0.03s both;
 }
 /* 枪身上扫过一道光 */
 .wu-gun::after {
@@ -2022,7 +2022,7 @@ span.gun-img svg {
   mix-blend-mode: overlay;
 }
 .weapon-up.show .wu-gun::after {
-  animation: shine 0.9s ease-out 0.45s;
+  animation: shine 0.36s ease-out 0.12s;
 }
 .wu-name {
   position: relative;
@@ -2048,7 +2048,7 @@ span.gun-img svg {
   box-shadow: 0 0 6px var(--wc);
 }
 .wu-pips i.new {
-  animation: pip-new 0.6s ease-out 0.35s both;
+  animation: pip-new 0.28s ease-out 0.1s both;
 }
 .wu-stats {
   position: relative;
@@ -2072,21 +2072,21 @@ span.gun-img svg {
 @keyframes wu-in {
   0% {
     opacity: 0;
-    transform: translateX(-50%) scale(0.3) rotate(-6deg);
+    transform: translate(calc(-50% + var(--wu-enter-x, 0px)), var(--wu-enter-y, 12vh)) scale(0.22);
   }
   100% {
     opacity: 1;
-    transform: translateX(-50%) scale(1) rotate(0);
+    transform: translate(-50%, 0) scale(1);
   }
 }
 @keyframes wu-out {
   0% {
     opacity: 1;
-    transform: translateX(-50%) scale(1);
+    transform: translate(-50%, 0) scale(1);
   }
   100% {
     opacity: 0;
-    transform: translateX(-50%) translateY(46vh) scale(0.2);
+    transform: translate(calc(-50% + var(--wu-exit-x, 0px)), var(--wu-exit-y, 46vh)) scale(0.18);
   }
 }
 @keyframes wu-gun {
@@ -2484,6 +2484,240 @@ span.gun-img svg {
   100% {
     opacity: 0;
     transform: translate(var(--dx), 105vh) rotate(var(--r));
+  }
+}
+
+/* 短屏保留开始、设置和底部导航的可点击区域。 */
+@media (max-height: 700px) {
+  .logo {
+    margin-top: 4px;
+  }
+  .logo-emblem,
+  .logo-sub,
+  .mode-desc {
+    display: none;
+  }
+  .logo-title {
+    font-size: 34px;
+    letter-spacing: 3px;
+  }
+  .menu-dock {
+    gap: 6px;
+  }
+  .mode-card {
+    padding: 6px 10px;
+  }
+  .mode-tile {
+    width: 40px;
+    height: 40px;
+  }
+  .start-btn {
+    min-height: 52px;
+    font-size: 20px;
+  }
+  .nav {
+    padding-top: 2px;
+    padding-bottom: calc(var(--safe-bottom) + 2px);
+  }
+  .nav-item i {
+    height: 26px;
+  }
+  .nav-item svg {
+    width: 21px;
+    height: 21px;
+  }
+}
+
+@media (max-width: 360px) {
+  .topbar {
+    gap: 5px;
+  }
+  .topbar .player-name {
+    display: none;
+  }
+}
+
+@media (max-height: 700px) and (max-width: 599px) {
+  #result {
+    align-items: flex-start;
+    overflow-y: auto;
+    padding: 28px 0 8px;
+    touch-action: pan-y;
+  }
+  #result .dialog {
+    flex: none;
+    width: min(calc(100vw - 24px), 360px);
+    margin: auto;
+    padding: 30px 12px 10px;
+    gap: 5px;
+  }
+  #result .ribbon {
+    top: -19px;
+    min-width: 190px;
+    padding: 6px 30px 8px;
+    font-size: 26px;
+    letter-spacing: 4px;
+  }
+  #result .stars {
+    margin-top: 0;
+  }
+  #result .stars svg {
+    width: 30px;
+    height: 30px;
+  }
+  #result .stars svg:nth-child(2) {
+    width: 38px;
+    height: 38px;
+    margin-top: -6px;
+  }
+  #result .result-stats {
+    gap: 3px;
+  }
+  #result .result-stats div {
+    padding: 4px 9px;
+    font-size: 12px;
+  }
+  #result .result-stats b {
+    font-size: 15px;
+  }
+  #result .reward {
+    padding: 5px;
+  }
+  #result .reward .coin-ico {
+    width: 24px;
+    height: 24px;
+  }
+  #result .reward b {
+    font-size: 26px;
+  }
+  #result .result-ups-title {
+    font-size: 12px;
+  }
+  #result .result-ups-title .pill {
+    height: 22px;
+    font-size: 12px;
+  }
+  #result .result-ups .up-card {
+    padding-top: 3px;
+  }
+  #result .result-ups .up-ico {
+    width: 24px;
+    height: 24px;
+  }
+  #result .result-ups .up-evo {
+    display: none;
+  }
+  #result .dialog .btn-gold {
+    min-height: 44px;
+    font-size: 17px;
+  }
+}
+
+@media (max-height: 500px) and (min-width: 600px) {
+  #menu {
+    padding: calc(var(--safe-top) + 6px) 12px 0;
+  }
+  #menu .logo {
+    position: absolute;
+    left: 3vw;
+    top: 30%;
+    width: 40%;
+    margin: 0;
+  }
+  #menu .menu-dock {
+    position: absolute;
+    top: calc(var(--safe-top) + 58px);
+    right: 2vw;
+    bottom: calc(var(--safe-bottom) + 52px);
+    width: min(50vw, 460px);
+    margin: 0;
+    padding: 0;
+    overflow-y: auto;
+  }
+  #menu .nav {
+    position: absolute;
+    right: 2vw;
+    bottom: 0;
+    width: min(50vw, 460px);
+    margin: 0;
+  }
+  #result {
+    align-items: flex-start;
+    overflow-y: auto;
+    padding: 22px 0 10px;
+    touch-action: pan-y;
+  }
+  #result .dialog {
+    flex: none;
+    display: grid;
+    grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+    align-items: start;
+    width: min(96vw, 800px);
+    margin: auto;
+    padding: 26px 14px 10px;
+    gap: 5px 12px;
+  }
+  #result .ribbon {
+    left: 23%;
+    top: -18px;
+    min-width: 180px;
+    padding: 6px 26px 8px;
+    font-size: 25px;
+    letter-spacing: 4px;
+  }
+  #result .stars {
+    grid-column: 1;
+    grid-row: 1;
+    justify-self: center;
+  }
+  #result .result-sub {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  #result .result-stats {
+    grid-column: 1;
+    grid-row: 3 / span 2;
+  }
+  #result .reward {
+    grid-column: 1;
+    grid-row: 5;
+  }
+  #result .result-ups-title {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  #result .result-ups {
+    grid-column: 2;
+    grid-row: 2 / span 3;
+    align-self: start;
+  }
+  #result #btn-next {
+    grid-column: 2;
+    grid-row: 5;
+  }
+  #result #btn-home {
+    grid-column: 2;
+    grid-row: 6;
+  }
+  #result .result-stats {
+    gap: 3px;
+  }
+  #result .result-stats div {
+    padding: 4px 10px;
+  }
+  #result .reward {
+    padding: 4px;
+  }
+  #result .reward .coin-ico {
+    width: 24px;
+    height: 24px;
+  }
+  #result .reward b {
+    font-size: 27px;
+  }
+  #result .dialog .btn-gold {
+    min-height: 40px;
+    font-size: 17px;
   }
 }
 

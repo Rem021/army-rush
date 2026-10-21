@@ -61,6 +61,8 @@ let resultShown = false;
 let peak = 0;
 /** 已经弹过“武器升级”卡的档位 */
 let shownTier = 0;
+/** 每次重建关卡递增，过期的开场与奖励动画不能进入下一局。 */
+let runId = 0;
 
 const input = {
   active: false,
@@ -106,6 +108,10 @@ const handlers: UIHandlers = {
     const skin = SKINS.find((s) => s.id === id);
     if (!skin) return;
     sfx.unlock();
+    if (save.skin === id) {
+      sfx.click();
+      return;
+    }
     if (!save.owned.includes(id)) {
       if (save.coins < skin.price) {
         haptic([20, 30, 20]);
@@ -153,6 +159,9 @@ const handlers: UIHandlers = {
   pause() {
     if (phase !== 'play') return;
     sfx.click();
+    input.active = false;
+    input.left = false;
+    input.right = false;
     phase = 'paused';
     ui.show('pause');
   },
@@ -217,6 +226,8 @@ function hudTitle(): string {
 }
 
 function buildWorld() {
+  runId++;
+  slowmo = 0;
   const opts = upgradeOpts();
   switch (save.mode) {
     case 'defense':
@@ -238,10 +249,13 @@ function buildWorld() {
   ui.resetHud(hudTitle(), marks);
   input.target = world.squad.x;
   input.active = false;
+  input.left = false;
+  input.right = false;
   resultShown = false;
   peak = world.squad.count;
   shownTier = world.squad.tier;
-  bot = new Bot(mulberry32(Math.floor(Math.random() * 1e9)), 0.1);
+  // 调试自动驾驶使用固定种子和无失误输入，截图流程可复现。
+  bot = debug.autoplay ? new Bot(mulberry32(1), 0) : new Bot(mulberry32(Math.floor(Math.random() * 1e9)), 0.1);
 }
 
 function startGame() {
@@ -253,8 +267,9 @@ function startGame() {
   ui.tip(save.mode);
   // 镜头甩到位以后打出开场横幅
   const bosses = world.spec.defense ? world.spec.defense.spawns.filter((sp) => sp.boss).length : world.bosses.length;
+  const startedRun = runId;
   window.setTimeout(() => {
-    if (phase === 'play') ui.banner(world.defense ? `${hudTitle()} · ${bosses} 只 Boss` : `${hudTitle()} · 开战！`, 'info');
+    if (phase === 'play' && runId === startedRun) ui.banner(world.defense ? `${hudTitle()} · ${bosses} 只 Boss` : `${hudTitle()} · 开战！`, 'info');
   }, 650);
 }
 
@@ -414,9 +429,17 @@ window.addEventListener('keyup', (e) => {
 
 document.addEventListener('visibilitychange', () => {
   if (document.hidden && phase === 'play') {
+    input.active = false;
+    input.left = false;
+    input.right = false;
     phase = 'paused';
     ui.show('pause');
   }
+});
+window.addEventListener('blur', () => {
+  input.active = false;
+  input.left = false;
+  input.right = false;
 });
 
 function resize() {
@@ -436,18 +459,23 @@ let lastCoinFly = 0;
 function route(events: GameEvent[]) {
   renderer.handleEvents(events);
   const now = performance.now();
+  const eventRun = runId;
   for (const e of events) {
     if (e.type === 'banner') ui.banner(e.text, e.tone);
     else if (e.type === 'bossDie') {
       slowmo = 0.5;
       // Boss 赏金：一大把金币从 Boss 身上飞进顶栏
       const p = renderer.toScreen(e.boss.x, 3, e.boss.d);
-      if (p) for (let i = 0; i < 10; i++) window.setTimeout(() => ui.flyCoin(p.x + (Math.random() - 0.5) * 80, p.y + (Math.random() - 0.5) * 50, undefined, true), i * 45);
+      if (p) for (let i = 0; i < 10; i++) window.setTimeout(() => {
+        if (runId === eventRun && phase === 'play') ui.flyCoin(p.x + (Math.random() - 0.5) * 80, p.y + (Math.random() - 0.5) * 50, undefined, true);
+      }, i * 45);
     } else if (e.type === 'bossEnrage') ui.banner(`${BOSSES[e.boss.kind].name} 狂暴了！`, 'boss');
     else if (e.type === 'gem') {
       // 钻石飞进顶栏的钻石框
       const p = renderer.toScreen(e.x, 1.5, e.d);
-      if (p) for (let i = 0; i < Math.min(4, e.amount); i++) window.setTimeout(() => ui.flyCoin(p.x, p.y, '#hud-gems-pill .gem-ico', true, ICON.gem), i * 90);
+      if (p) for (let i = 0; i < Math.min(4, e.amount); i++) window.setTimeout(() => {
+        if (runId === eventRun && phase === 'play') ui.flyCoin(p.x, p.y, '#hud-gems-pill .gem-ico', true, ICON.gem);
+      }, i * 90);
     }
     else if (e.type === 'zombieDie' && e.coins > 0 && now - lastCoinFly > 90) {
       // 金币飞向顶栏（限流，免得满屏都是）
@@ -460,9 +488,10 @@ function route(events: GameEvent[]) {
   }
   // 换了更好的枪（门、补给箱都算）：慢动作一下，中间弹武器升级卡
   if (world.squad.tier > shownTier) {
-    ui.weaponUp(world.squad.tier, shownTier);
+    const origin = renderer.toScreen(world.squad.x, 1.5, world.squad.d);
+    ui.weaponUp(world.squad.tier, shownTier, origin ?? undefined);
     sfx.weaponUp(world.squad.tier);
-    slowmo = Math.max(slowmo, 0.4);
+    slowmo = Math.max(slowmo, 0.18);
     shownTier = world.squad.tier;
   }
 }
@@ -510,7 +539,7 @@ function frame(now: number) {
 
   perf.sim = perf.sim * 0.95 + (performance.now() - ts) * 0.05;
   const tr = performance.now();
-  renderer.update(phase === 'paused' ? 0 : phase === 'menu' ? dt : gdt);
+  renderer.update(phase === 'paused' ? 0 : phase === 'menu' ? dt : gdt, phase === 'paused' ? 0 : dt);
   perf.frame = perf.frame * 0.95 + (performance.now() - tr) * 0.05;
   renderer.render();
 }

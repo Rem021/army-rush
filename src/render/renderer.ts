@@ -60,6 +60,8 @@ const VIEW_AHEAD = 120;
 /** 每帧复用的临时向量（不在主循环里 new，少给垃圾回收添活） */
 const _camPos = new THREE.Vector3();
 const _camLook = new THREE.Vector3();
+const _weaponLook = new THREE.Vector3();
+const _weaponTarget = new THREE.Vector3();
 const _heroPos = new THREE.Vector3();
 const _heroLook = new THREE.Vector3();
 const _badge = new THREE.Vector3();
@@ -107,8 +109,9 @@ export class GameRenderer {
   private readonly debris: Particles;
   private readonly rings: Rings;
   private readonly pillar: Pillar;
-  /** 换枪时镜头往前推一下（1 → 0） */
-  private punch = 0;
+  /** 换枪镜头行程使用真实时间，和卡片保持同一段连续动作 */
+  private weaponCueAge = 0.9;
+  private readonly weaponCueDuration = 0.9;
   private readonly streaks: Streaks;
   private readonly flashes: Flashes;
   /** 子弹打中东西时的白色冲击星 */
@@ -310,10 +313,14 @@ export class GameRenderer {
   }
 
   setSkin(skin: SkinDef) {
+    if (this.skin.id === skin.id) return;
+    const previousBody = this.soldierKit?.body;
     this.skin = skin;
     if (this.soldierKit && this.models.soldier && this.players instanceof SquadHerd) {
       this.soldierKit.body = bakeSoldierBody(this.models.soldier, skin);
       this.players.body.setModel(this.soldierKit.body);
+      // 身体每换一次都会生成一张新的 VAT 浮点纹理；旧纹理已不再被网格使用。
+      previousBody?.pos.dispose();
     } else if (this.players instanceof Crowd) {
       this.players.setGeometry(soldierBody(skin, Math.max(0, this.tier)), soldierLeg(skin.team));
     }
@@ -351,7 +358,7 @@ export class GameRenderer {
     this.debris.clear();
     this.rings.clear();
     this.pillar.clear();
-    this.punch = 0;
+    this.weaponCueAge = this.weaponCueDuration;
     this.streaks.clear();
     this.flashes.clear();
     this.impacts.clear();
@@ -433,7 +440,14 @@ export class GameRenderer {
     // 对局里换了更好的枪：全队闪一下，脚下冲起一道光柱、两圈冲击波，镜头往前推一下（开局建档时不算）
     if (this.tier >= 0 && tier > this.tier && this.world) {
       this.tierFlash = 1;
-      this.punch = 1;
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        this.weaponCueAge = this.weaponCueDuration;
+      } else if (this.weaponCueAge >= this.weaponCueDuration) {
+        this.weaponCueAge = 0;
+      } else if (this.weaponCueAge > this.weaponCueDuration / 2) {
+        // 连续换枪时沿当前镜头位置继续推近，不让镜头跳回基础机位。
+        this.weaponCueAge = this.weaponCueDuration - this.weaponCueAge;
+      }
       const sq = this.world.squad;
       const color = WEAPONS[tier].color;
       const width = Math.max(1.6, this.world.halfWidth + 0.6);
@@ -441,7 +455,7 @@ export class GameRenderer {
       this.rings.spawn(sq.x, -sq.d, width * 2.4, color, 0.6);
       this.rings.spawn(sq.x, -sq.d, width * 4, 0xffffff, 0.9);
       this.sparks.burst(sq.x, 1.2, -sq.d, 60, 11, 0.9, 0.16, [color, 0xffffff], 4, 0.8);
-      this.shake(0.25);
+      this.shake(0.12);
     }
     this.tier = tier;
     if (this.soldierKit && this.players instanceof SquadHerd) {
@@ -711,7 +725,7 @@ export class GameRenderer {
   readonly perf = { render: 0, calls: 0, tris: 0 };
 
   /** 菜单待机或游戏中每帧调用 */
-  update(dt: number) {
+  update(dt: number, realDt = dt) {
     const w = this.world;
     if (!w) return;
     this.time += dt;
@@ -899,7 +913,7 @@ export class GameRenderer {
     this.splats.update(dt);
     this.explosions.update(dt);
 
-    this.placeCamera(w, Math.min(1, dt * 5), dt);
+    this.placeCamera(w, Math.min(1, dt * 5), realDt);
     this.env.update(dt, sq.d);
     const look = this.camLook;
     this.sun.position.set(look.x - 7, 20, look.z + 9);
@@ -962,7 +976,7 @@ export class GameRenderer {
     if (list.length > 160) list.splice(0, list.length - 160);
   }
 
-  private placeCamera(w: World, k: number, dt: number) {
+  private placeCamera(w: World, k: number, realDt: number) {
     // 调试：window.__cam = [px, py, pz, lx, ly, lz] 时用固定镜头（截图看模型用）
     const debugCam = (window as unknown as { __cam?: number[] }).__cam;
     if (debugCam) {
@@ -1017,18 +1031,22 @@ export class GameRenderer {
       this.camLook.copy(look);
     }
     this.camera.position.copy(this.camPos);
-    if (this.punch > 0) {
-      // 换枪：镜头一下推近，再慢慢退回
-      this.punch = Math.max(0, this.punch - dt * 1.4);
-      this.camera.position.lerp(this.camLook, 0.12 * this.punch * this.punch);
+    const cameraTarget = _weaponLook.copy(this.camLook);
+    if (this.weaponCueAge < this.weaponCueDuration) {
+      this.weaponCueAge = Math.min(this.weaponCueDuration, this.weaponCueAge + realDt);
+      const progress = this.weaponCueAge / this.weaponCueDuration;
+      // 从当前机位推近、看向队伍、再沿原路径退回；始终渲染同一场景，没有镜头切换。
+      const focus = Math.sin(Math.PI * progress) ** 2;
+      this.camera.position.lerp(this.camLook, 0.18 * focus);
+      cameraTarget.lerp(_weaponTarget.set(w.squad.x, 1.25, -w.squad.d), 0.1 * focus);
     }
-    this.trauma = Math.max(0, this.trauma - dt * 1.8);
+    this.trauma = Math.max(0, this.trauma - realDt * 1.8);
     const shake = this.trauma * this.trauma * 0.6;
     if (shake > 0) {
       this.camera.position.x += (Math.random() - 0.5) * shake;
       this.camera.position.y += (Math.random() - 0.5) * shake;
     }
-    this.camera.lookAt(this.camLook);
+    this.camera.lookAt(cameraTarget);
   }
 
   /** 世界坐标投到屏幕像素，镜头背后返回 null */

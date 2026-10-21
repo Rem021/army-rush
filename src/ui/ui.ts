@@ -122,6 +122,8 @@ export class UI {
   /** 每档武器的侧面图（真模型渲染），没有就用图标 */
   private guns: string[] = [];
   private weaponUpTimer = 0;
+  private weaponUpEndTimer = 0;
+  private weaponUpReturn: Animation | null = null;
   private evolveTimer = 0;
   private flying = 0;
 
@@ -331,12 +333,15 @@ export class UI {
     return src ? `<img class="gun-img ${cls}" src="${src}" alt="${WEAPONS[tier].name}" draggable="false" />` : `<span class="gun-img ${cls}">${ICON.gun}</span>`;
   }
 
-  /**
-   * 对局里换了更好的枪：屏幕中间弹一张大卡（枪的图、名字、档位、火力倍数、弹道特点），
-   * 一秒多以后缩小飞向底部的武器牌
-   */
-  weaponUp(tier: number, from: number) {
+  /** 对局里换枪：卡片从队伍位置升起，短暂停留，再飞入底部武器牌。 */
+  weaponUp(tier: number, from: number, origin?: { x: number; y: number }) {
     const box = el(this.root, '#weapon-up');
+    const visible = box.classList.contains('show');
+    const leaving = box.classList.contains('leave');
+    const returnFrom = leaving ? getComputedStyle(box).transform : '';
+    const returnOpacity = leaving ? getComputedStyle(box).opacity : '';
+    const banner = el(this.root, '#banner');
+    if (banner.classList.contains('info')) banner.className = 'banner';
     const w = WEAPONS[tier];
     const color = hex(w.color);
     box.style.setProperty('--wc', color);
@@ -347,17 +352,40 @@ export class UI {
     });
     const mult = soldierDps(tier) / Math.max(0.01, soldierDps(from));
     el(box, '.wu-stats').innerHTML = `<span>每人火力 <b>×${mult.toFixed(1)}</b></span><span>${w.trait}</span>`;
-    box.classList.remove('show', 'leave');
-    void box.offsetWidth;
-    box.classList.add('show');
     window.clearTimeout(this.weaponUpTimer);
+    window.clearTimeout(this.weaponUpEndTimer);
+    this.weaponUpReturn?.cancel();
+    this.weaponUpReturn = null;
+    if (visible) {
+      // 连续升级沿用当前卡片，枪在原位变更；退场中收到升级就短距离返回。
+      box.classList.remove('leave');
+      if (leaving && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        this.weaponUpReturn = box.animate(
+          [{ transform: returnFrom, opacity: returnOpacity }, { transform: 'translate(-50%, 0) scale(1)', opacity: 1 }],
+          { duration: 120, easing: 'ease-out' },
+        );
+      }
+    } else {
+      box.classList.remove('show', 'leave');
+      const startX = Math.max(24, Math.min(window.innerWidth - 24, origin?.x ?? window.innerWidth / 2));
+      const startY = Math.max(90, Math.min(window.innerHeight - 80, origin?.y ?? window.innerHeight * 0.65));
+      box.style.setProperty('--wu-enter-x', `${startX - window.innerWidth / 2}px`);
+      box.style.setProperty('--wu-enter-y', `${startY - (window.innerHeight * 0.21 + box.offsetHeight / 2)}px`);
+      void box.offsetWidth;
+      box.classList.add('show');
+    }
     this.weaponUpTimer = window.setTimeout(() => {
+      const card = box.getBoundingClientRect();
+      const badge = el(this.root, '#hud-weapon').getBoundingClientRect();
+      box.style.setProperty('--wu-exit-x', `${badge.left + badge.width / 2 - (card.left + card.width / 2)}px`);
+      box.style.setProperty('--wu-exit-y', `${badge.top + badge.height / 2 - (card.top + card.height / 2)}px`);
       box.classList.add('leave');
-      const badge = el(this.root, '#hud-weapon');
-      badge.classList.remove('charge');
-      void badge.offsetWidth;
-      badge.classList.add('charge');
-    }, 1500);
+      const weaponBadge = el(this.root, '#hud-weapon');
+      weaponBadge.classList.remove('charge');
+      void weaponBadge.offsetWidth;
+      weaponBadge.classList.add('charge');
+      this.weaponUpEndTimer = window.setTimeout(() => box.classList.remove('show', 'leave'), 300);
+    }, 620);
   }
 
   /** 局外升级买到进化那一级：全屏弹一张“进化”卡，前后对比 */
@@ -597,6 +625,18 @@ export class UI {
   // ---------- 游戏内 ----------
 
   resetHud(title: string, marks: number[] = []) {
+    window.clearTimeout(this.weaponUpTimer);
+    window.clearTimeout(this.weaponUpEndTimer);
+    this.weaponUpReturn?.cancel();
+    this.weaponUpReturn = null;
+    window.clearTimeout(this.bannerTimer);
+    window.clearTimeout(this.tipTimer);
+    el(this.root, '#weapon-up').classList.remove('show', 'leave');
+    for (const coin of this.root.querySelectorAll<HTMLElement>('.fly-coin')) {
+      for (const animation of coin.getAnimations()) animation.cancel();
+      coin.remove();
+    }
+    this.flying = 0;
     el(this.root, '#hud-title').textContent = title;
     const box = el(this.root, '#hud-marks');
     box.innerHTML = marks.map((f) => `<i class="hud-mark" style="left:${(f * 100).toFixed(1)}%">${ICON.skull}</i>`).join('');
