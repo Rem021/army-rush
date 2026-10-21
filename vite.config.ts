@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
-  base: './',
+  base: process.env.GITHUB_PAGES === 'true' ? '/army-rush/' : './',
   server: { host: true },
   build: {
     // 用到顶层 await 加载模型，iOS 15+ / 现代浏览器都支持

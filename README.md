@@ -1,5 +1,7 @@
 # 军团冲锋 Army Rush
 
+[在线游玩](https://rem021.github.io/army-rush/)
+
 仿 [Real War: Not Fake](https://apps.apple.com/us/app/real-war-not-fake/id6753818799) 和 Last War 广告玩法的 3D 射击小游戏。网页版，手机竖屏优先，电脑也能玩。
 
 人物、丧尸、Boss 和道具用的是 Quaternius 的 **CC0（公共领域）** 模型，可以免费商用，来源和许可见 [public/models/CREDITS.md](public/models/CREDITS.md)；其余（门、桥、特效、界面图标、音效）由代码生成。模型文件缺失时会自动退回代码生成的小人。
@@ -57,6 +59,10 @@ npm run build      # 输出 dist/，纯静态，可以放到任何静态托管
 ```
 
 iPhone 上用 Safari 打开后“添加到主屏幕”，就能全屏玩。iOS Safari 不支持 `navigator.vibrate`，振动只在安卓上有效。
+
+## 发布
+
+`main` 分支更新后，GitHub Actions 会运行测试、构建并发布 `dist/` 到 GitHub Pages。发布构建设置 `GITHUB_PAGES=true`，将 Vite 的资源根路径设为 `/army-rush/`；本机开发仍使用相对路径。
 
 调试参数（加在网址后面）：
 
