@@ -18,8 +18,9 @@ export const SQUAD_STEER = 14;
 export const FORMATION_SPACING = 0.36;
 /** 最多真正渲染和模拟的士兵数，超出部分只计数 */
 export const MAX_SOLDIERS_SIM = 320;
-/** 人数上限 */
-export const MAX_COUNT = 9999;
+/** 冲锋与无尽的人数上限；防线队伍纵向排布，沿用较高的上限。 */
+export const MAX_COUNT = 280;
+export const MAX_DEFENSE_COUNT = 9999;
 
 export const BULLET_SPEED = 62;
 export const BULLET_RANGE = 44;
@@ -27,9 +28,9 @@ export const BULLET_RANGE = 44;
 export const EMIT_CAP = 48;
 
 /** 门被打一次加 1 需要的命中数：负数时恒定，正数时按指数变难，所以射门收益是对数增长 */
-export const GATE_GROWTH = 1.15;
+export const GATE_GROWTH = 1.23;
 export function gateBaseStep(level: number): number {
-  return 2.5 + 0.12 * (level - 1);
+  return 4.5 + 0.2 * (level - 1);
 }
 export function gateStep(level: number, value: number): number {
   return gateBaseStep(level) * (value > 0 ? Math.pow(GATE_GROWTH, value) : 1);
@@ -101,7 +102,16 @@ export const BOSSES: Record<BossKind, BossDef> = {
   hive: { name: '尸巢母体', radius: 1.9, scale: 2.6, speed: 0.9, hp: 0.85, desc: '不停孵出疾行尸，打死它小怪全灭' },
 };
 
-export const BOSS_SMASH_INTERVAL = 1.05;
+/** 两次蓄力重击后接三次短促连击；末段给玩家重新站位的时间。 */
+export const BOSS_COMBO = [
+  { windup: 1.45, recover: 0.45, damage: 1 },
+  { windup: 1.3, recover: 0.5, damage: 1 },
+  { windup: 0.52, recover: 0.18, damage: 0.65 },
+  { windup: 0.48, recover: 0.18, damage: 0.65 },
+  { windup: 0.46, recover: 2.5, damage: 0.85 },
+] as const;
+/** 近战 Boss 的地面危险带半宽，锁定后不会追着队伍跑。 */
+export const BOSS_STRIKE_HALF = 1.15;
 export const THROW_INTERVAL = 2.3;
 export const THROW_FLIGHT = 1.35;
 export const THROW_RADIUS = 2.1;

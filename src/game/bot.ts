@@ -1,4 +1,4 @@
-import { HALVES, LANES, THROW_RADIUS, WEAPONS, soldierDps } from './config';
+import { BOSS_STRIKE_HALF, HALVES, LANES, THROW_RADIUS, WEAPONS, soldierDps } from './config';
 import type { Rng } from './rng';
 import type { Gate, World } from './world';
 
@@ -21,7 +21,7 @@ export class Bot {
   target(w: World): number {
     // 红圈里的兵全死，看到就躲（防线里就是换到另一条道）
     if (w.defense) return this.dodge(w, this.defenseTarget(w));
-    return w.state === 'boss' ? this.bossTarget(w) : this.runTarget(w);
+    return w.state === 'boss' ? this.dodge(w, this.bossTarget(w)) : this.runTarget(w);
   }
 
   /** 防线：Boss 进射程就集火；放出来的好门快到了就站门道；尸潮压得太近就去清；其余时间打门道的障碍和门 */
@@ -54,19 +54,24 @@ export class Bot {
     return gateX;
   }
 
-  /** 躲红圈 */
+  /** 按地面预警选择安全站位，同时尽量保持原来的攻击目标。 */
   private dodge(w: World, x: number): number {
     const sq = w.squad;
-    for (const p of w.projectiles) {
-      if (p.T - p.t > 1.1) continue;
-      const reach = THROW_RADIUS + w.halfWidth + 0.4;
-      if (Math.abs(p.tx - x) < reach) {
-        const left = p.tx - reach;
-        const right = p.tx + reach;
-        x = Math.abs(left - sq.x) < Math.abs(right - sq.x) && left > w.lo ? left : right < w.hi ? right : left;
-      }
-    }
-    return x;
+    const lo = w.lo + w.halfWidth;
+    const hi = w.hi - w.halfWidth;
+    const clamp = (v: number) => Math.max(lo, Math.min(hi, v));
+    const threats = [
+      ...w.projectiles.filter((p) => p.T - p.t <= 1.1).map((p) => ({ x: p.tx, r: THROW_RADIUS + w.halfWidth + 0.2 })),
+      ...w.bosses.filter((b) => b.alive && b.active && b.attacking).map((b) => ({ x: b.attackX, r: BOSS_STRIKE_HALF + w.halfWidth + 0.2 })),
+    ];
+    if (!threats.length) return clamp(x);
+    const candidates = [clamp(x), lo, hi, ...threats.flatMap((t) => [clamp(t.x - t.r), clamp(t.x + t.r)])];
+    return candidates.reduce((best, v) => {
+      const score = (at: number) =>
+        threats.reduce((s, t) => s + (Math.abs(at - t.x) < t.r ? 100 + (t.r - Math.abs(at - t.x)) * 10 : 0), 0) +
+        Math.abs(at - x) + Math.abs(at - sq.x) * 0.1;
+      return score(v) < score(best) ? v : best;
+    }, candidates[0]);
   }
 
   private bossTarget(w: World): number {
@@ -76,16 +81,6 @@ export class Bot {
     if (alive.length) {
       const focus = alive.find((b) => b.kind === 'hive') ?? alive.reduce((a, b) => (b.hp < a.hp ? b : a));
       x = focus.x;
-    }
-    // 躲红圈
-    for (const p of w.projectiles) {
-      if (p.T - p.t > 1.1) continue;
-      const reach = THROW_RADIUS + w.halfWidth + 0.4;
-      if (Math.abs(p.tx - x) < reach) {
-        const left = p.tx - reach;
-        const right = p.tx + reach;
-        x = Math.abs(left - sq.x) < Math.abs(right - sq.x) && left > w.lo ? left : right < w.hi ? right : left;
-      }
     }
     return x;
   }

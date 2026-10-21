@@ -1,6 +1,7 @@
 import {
   BOSSES,
-  BOSS_SMASH_INTERVAL,
+  BOSS_COMBO,
+  BOSS_STRIKE_HALF,
   DEFENSE_VIEW_D,
   DEFENSE_WALL_D,
   BOSS_STOP,
@@ -14,6 +15,7 @@ import {
   GIANT_SMASH_INTERVAL,
   HIVE_INTERVAL,
   MAX_COUNT,
+  MAX_DEFENSE_COUNT,
   MAX_SOLDIERS_SIM,
   SQUAD_SPEED,
   SQUAD_STEER,
@@ -162,6 +164,12 @@ export interface Boss {
   slam: number;
   flash: number;
   attacking: boolean;
+  /** 近战锁定的危险带；蓄力中玩家可横向撤出。 */
+  attackX: number;
+  attackD: number;
+  attackLength: number;
+  comboStep: number;
+  recover: number;
   smashes: number;
   timer: number;
   fightTime: number;
@@ -338,7 +346,7 @@ export class World {
     if (this.bosses.length > 1) for (const b of this.bosses) b.pair = true;
     // 防线开局站在门道上，第一组门直接吃到
     if (spec.defense) this.squad.x = this.squad.targetX = spec.defense.gateSide * (TRACK_HALF / 2);
-    this.squad.count = Math.max(1, Math.round(opts.startSoldiers));
+    this.squad.count = Math.max(1, Math.min(this.countCap, Math.round(opts.startSoldiers)));
     this.squad.tier = opts.startTier ?? 0;
     this.squad.rate = opts.rateBonus ?? 1;
     this.syncSoldiers(false);
@@ -356,7 +364,7 @@ export class World {
       this.gates.push({ ...g, value, id: this.nextId++, hits: 0, consumed: false, taken: false, bump: 0 });
     }
     for (const b of spec.barrels) {
-      const reward: Reward = b.reward.kind === 'weapon' && b.reward.tier <= start ? { kind: 'soldiers', amount: 10 + 4 * this.spec.level } : b.reward;
+      const reward: Reward = b.reward.kind === 'weapon' && b.reward.tier <= start ? { kind: 'soldiers', amount: 3 + this.spec.level } : b.reward;
       const look = reward !== b.reward && b.look === 'tires' ? 'armor' : b.look;
       this.barrels.push({ ...b, reward, look, id: this.nextId++, maxHp: b.hp, alive: true, bump: 0, armed: false, priced: false });
     }
@@ -388,6 +396,11 @@ export class World {
       slam: 0,
       flash: 0,
       attacking: false,
+      attackX: b.x,
+      attackD: 0,
+      attackLength: 0,
+      comboStep: 0,
+      recover: 0,
       smashes: 0,
       timer: this.rng() * 1.2,
       fightTime: 0,
@@ -429,6 +442,10 @@ export class World {
 
   get weapon() {
     return WEAPONS[this.squad.tier];
+  }
+
+  private get countCap(): number {
+    return this.defense ? MAX_DEFENSE_COUNT : MAX_COUNT;
   }
 
   get fireRate(): number {
@@ -581,10 +598,11 @@ export class World {
 
     // 尸潮道：源源不断。每秒刷出的总血量 = 压力 × 参考火力，Boss 在场时减弱一些
     const bossAlive = this.bosses.some((b) => b.alive);
+    const finalBossAlive = this.bosses.some((b) => b.alive && b.final);
     if (this.time > DEFENSE_TUNING.streamDelay && !(this.time > def.duration && !bossAlive)) {
       const rate = DEFENSE_TUNING.streamRate(L, p);
       this.streamAcc += rate * dt;
-      const hp = this.streamHp(ref, p) * (bossAlive ? 0.55 : 1);
+      const hp = this.streamHp(ref, p) * (finalBossAlive ? 0.35 : bossAlive ? 0.55 : 1);
       while (this.streamAcc >= 1) {
         this.streamAcc -= 1;
         const kind = this.streamKind(p);
@@ -763,7 +781,7 @@ export class World {
     const gap = FORMATION_SPACING * (this.defense ? Math.max(0.78, 1 - n / 900) : 1);
     const R = gap * Math.sqrt(Math.max(1, n));
     // 防线里阵型最宽只占一条道：人再多也是往后排，站哪条道就只打哪条道
-    const laneCap = this.defense ? TRACK_HALF / 2 - 0.25 : Infinity;
+    const laneCap = this.defense ? TRACK_HALF / 2 - 0.25 : 2.0;
     const maxR = Math.max(0.6, Math.min(laneCap, (this.hi - this.lo) / 2 - 0.35));
     const sx = R > maxR ? maxR / R : 1;
     const sz = 1 / sx;
@@ -796,6 +814,7 @@ export class World {
     let half = 0;
     const walk = this.squad.moving ? 11 : 0;
     const cx = this.squad.x;
+    const formationHalf = this.defense ? TRACK_HALF / 2 - 0.25 : 2.0;
     for (let i = 0; i < n; i++) {
       const s = this.soldiers[i];
       const t = this.slot(i, this.form);
@@ -808,6 +827,8 @@ export class World {
         s.ox += (dx / dist) * step;
         s.oz += (dz / dist) * step;
       }
+      // 乘法门瞬间加人时，平滑中的阵型也不能暂时撑满桥面，否则整队无法横移躲 Boss。
+      s.ox = Math.max(-formationHalf, Math.min(formationHalf, s.ox));
       // 不穿墙、不出桥
       const ax = cx + s.ox;
       if (ax < this.lo + 0.2) s.ox = this.lo + 0.2 - cx;
@@ -840,6 +861,27 @@ export class World {
     let killed = 0;
     while (killed < max && this.squad.count > 0) {
       const idx = this.nearestSoldier(x, d, radius);
+      if (idx < 0) break;
+      this.killSoldier(idx);
+      killed++;
+    }
+    return killed;
+  }
+
+  /** Boss 砸击只伤预警的横向区域；整队移出危险带就能避开。 */
+  private killBossLane(x: number, d: number, half: number, length: number, max: number): number {
+    let killed = 0;
+    while (killed < max && this.squad.count > 0) {
+      let idx = -1;
+      let nearest = half;
+      for (let i = 0; i < this.soldiers.length; i++) {
+        if (Math.abs(this.squad.d + this.soldiers[i].oz - d) > length / 2) continue;
+        const dx = Math.abs(this.squad.x + this.soldiers[i].ox - x);
+        if (dx < nearest) {
+          nearest = dx;
+          idx = i;
+        }
+      }
       if (idx < 0) break;
       this.killSoldier(idx);
       killed++;
@@ -912,7 +954,7 @@ export class World {
     if (g.kind === 'add' || g.kind === 'mul') {
       const before = sq.count;
       sq.count = g.kind === 'add' ? before + g.value : Math.round(before * g.value);
-      sq.count = Math.max(0, Math.min(MAX_COUNT, sq.count));
+      sq.count = Math.max(0, Math.min(this.countCap, sq.count));
       this.syncSoldiers();
       this.events.push({ type: 'gatePass', gate: g, before, after: sq.count });
     } else if (g.kind === 'weapon') {
@@ -1188,7 +1230,7 @@ export class World {
       upgraded = reward.tier > sq.tier;
       if (upgraded) sq.tier = reward.tier;
     } else if (reward.kind === 'soldiers') {
-      sq.count = Math.min(MAX_COUNT, sq.count + reward.amount);
+      sq.count = Math.min(this.countCap, sq.count + reward.amount);
       this.syncSoldiers();
     } else if (reward.kind === 'coins') {
       this.coins += reward.amount;
@@ -1405,7 +1447,7 @@ export class World {
       this.addGems(bossGems(b.final, this.rng()), b.x, b.d);
       this.events.push({ type: 'bossDie', boss: b, bounty });
       // 防线中途的 Boss：打死了来一批援军（至少 8 人，大部队加 12%）
-      if (this.defense && !b.final) this.applyReward({ kind: 'soldiers', amount: Math.max(8, Math.round(this.squad.count * 0.12)) }, b.x, b.d);
+      if (this.defense && !b.final) this.applyReward({ kind: 'soldiers', amount: Math.max(4, Math.round(this.squad.count * 0.06)) }, b.x, b.d);
       for (const z of this.zombies) if (z.alive && z.owner === b.id) this.killZombie(z);
       // 防线模式要等全部刷完、清干净才算赢（在 step 里判断）
       if (!this.defense && this.bosses.every((x) => !x.alive)) this.win();
@@ -1492,16 +1534,32 @@ export class World {
         b.attacking = false;
         b.windup = Math.max(0, b.windup - dt * 2);
       } else {
-        b.attacking = true;
-        b.windup += (dt * rage) / BOSS_SMASH_INTERVAL;
+        if (b.recover > 0) {
+          b.recover = Math.max(0, b.recover - dt * rage);
+          b.attacking = false;
+          b.windup = 0;
+          continue;
+        }
+        if (!b.attacking) {
+          // 每一下起手时锁定队伍站位，红色危险带留在原地。
+          b.attacking = true;
+          b.windup = 0;
+          b.attackX = sq.x;
+          b.attackD = sq.d + (this.front + this.back) / 2;
+          b.attackLength = Math.max(2.4, this.front - this.back + 1.2);
+        }
+        const step = BOSS_COMBO[b.comboStep];
+        b.windup += (dt * rage) / step.windup;
         if (b.windup >= 1) {
           b.windup = 0;
           b.slam = 1;
           b.smashes++;
-          // 防线里阵型挤在一条道上，一砸全中，所以砸得轻一点、涨得慢一点
-          const frac = b.kind === 'hive' ? 0.05 : this.defense ? Math.min(0.35, 0.06 + 0.015 * b.smashes) : Math.min(0.5, 0.08 + 0.02 * b.smashes);
-          const killed = this.killNear(b.x, b.d, 99, Math.max(3, Math.ceil(sq.count * frac)));
-          this.events.push({ type: 'bossSmash', boss: b, x: b.x, d: b.d - b.r, killed });
+          const frac = b.kind === 'hive' ? 0.05 : this.defense ? Math.min(0.28, 0.06 + 0.012 * b.smashes) : Math.min(0.38, 0.08 + 0.015 * b.smashes);
+          const killed = this.killBossLane(b.attackX, b.attackD, BOSS_STRIKE_HALF, b.attackLength, Math.max(2, Math.ceil(sq.count * frac * step.damage)));
+          this.events.push({ type: 'bossSmash', boss: b, x: b.attackX, d: b.attackD, killed });
+          b.attacking = false;
+          b.recover = step.recover;
+          b.comboStep = (b.comboStep + 1) % BOSS_COMBO.length;
         }
       }
     }

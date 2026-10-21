@@ -89,6 +89,15 @@ describe('关卡生成', () => {
 });
 
 describe('门', () => {
+  it('冲锋的大型乘法门不会让队伍失去横向闪避空间', () => {
+    const w = new World(emptySpec({ gates: [{ kind: 'mul', x0: -TRACK_HALF, x1: TRACK_HALF, d: 10, value: 4, group: 0 }] }), { ...opts, startSoldiers: 100, rateMult: 0 });
+    run(w, 1.5);
+    expect(w.squad.count).toBe(280);
+    expect(w.halfWidth).toBeLessThanOrEqual(2.3);
+    run(w, 0.6, 4);
+    expect(w.squad.x).toBeGreaterThan(3);
+  });
+
   it('穿过加法门和乘法门', () => {
     const w = new World(
       emptySpec({
@@ -187,6 +196,36 @@ describe('丧尸', () => {
 });
 
 describe('Boss', () => {
+  it('近战先慢击两次再快速三连击', () => {
+    const w = new World(emptySpec({ length: 40, bosses: [{ kind: 'brute', x: 0, hp: 1e9 }] }), { ...opts, startSoldiers: 160, rateMult: 0 });
+    const hits: number[] = [];
+    for (let t = 0; t < 60 && hits.length < 5; t += 1 / 60) {
+      w.update(1 / 60);
+      for (const e of w.drainEvents()) if (e.type === 'bossSmash') hits.push(w.time);
+    }
+    expect(hits).toHaveLength(5);
+    expect(hits[1] - hits[0]).toBeGreaterThan(hits[3] - hits[2] + 0.8);
+    expect(hits[2] - hits[1]).toBeGreaterThan(hits[4] - hits[3]);
+    expect(w.bosses[0].comboStep).toBe(0);
+  });
+
+  it('危险带锁定后，整队横移能躲开砸击', () => {
+    for (const size of [12, 240]) {
+      const w = new World(emptySpec({ length: 40, bosses: [{ kind: 'brute', x: 0, hp: 1e9 }] }), { ...opts, startSoldiers: size, rateMult: 0 });
+      while (!w.bosses[0].attacking || w.bosses[0].windup < 0.1) {
+        w.update(1 / 60);
+        w.drainEvents();
+        expect(w.time).toBeLessThan(30);
+      }
+      expect(w.bosses[0].attackX).toBeCloseTo(0);
+      const count = w.squad.count;
+      run(w, 1.8, 4);
+      expect(w.squad.x).toBeGreaterThan(3);
+      expect(w.drainEvents().find((e) => e.type === 'bossSmash')).toMatchObject({ killed: 0 });
+      expect(w.squad.count).toBe(count);
+    }
+  });
+
   it('双 Boss 都打死才算赢', () => {
     const w = new World(
       emptySpec({

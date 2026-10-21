@@ -5,7 +5,7 @@ import type { Models } from './assets';
 import { ModelBossView, bakeSoldierBody, bossModel, buildSoldier, buildZombies, gunStatic, propGeometry, type SoldierKit } from './characters';
 import { Crowd, type AgentPose } from './crowd';
 import { BlobShadows, BulletMesh, Explosions, Flashes, FloatTexts, Particles, Pillar, Rings, Splats, Streaks, ZombieBars } from './effects';
-import { BarrelView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, stripeTexture } from './entities';
+import { BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, stripeTexture } from './entities';
 import { Environment } from './environment';
 import { HpBar, formatNumber } from './label';
 import { setGunProvider, soldierBody, soldierLeg } from './models';
@@ -141,6 +141,7 @@ export class GameRenderer {
   private barrels = new Map<number, BarrelView>();
   private hazards = new Map<number, HazardView>();
   private bosses: (BossView | ModelBossView)[] = [];
+  private bossStrikes = new Map<number, BossStrikeView>();
   private readonly models: Models;
   private soldierKit: SoldierKit | null = null;
   /** 道具几何体缓存：模型名 + 尺寸 */
@@ -335,12 +336,14 @@ export class GameRenderer {
     for (const v of this.projectiles.values()) v.dispose();
     for (const v of this.strikes.values()) v.dispose();
     for (const b of this.bosses) b.dispose();
+    for (const v of this.bossStrikes.values()) v.dispose();
     this.gates.clear();
     this.barrels.clear();
     this.hazards.clear();
     this.projectiles.clear();
     this.strikes.clear();
     this.bosses = world.bosses.map((b) => this.makeBossView(b, false));
+    this.bossStrikes.clear();
     this.version = -1;
     this.syncViews();
 
@@ -386,7 +389,10 @@ export class GameRenderer {
     if (w.version === this.version) return;
     this.version = w.version;
     // 防线中途刷出来的 Boss 从天而降
-    for (const b of w.bosses) if (!this.bosses.some((v) => v.boss === b)) this.bosses.push(this.makeBossView(b, !!w.defense && w.time > 0.5));
+    for (const b of w.bosses) {
+      if (!this.bosses.some((v) => v.boss === b)) this.bosses.push(this.makeBossView(b, !!w.defense && w.time > 0.5));
+      if (!this.bossStrikes.has(b.id)) this.bossStrikes.set(b.id, new BossStrikeView(this.scene, b));
+    }
     const seen = new Set<number>();
     for (const g of w.gates) {
       seen.add(g.id);
@@ -649,7 +655,7 @@ export class GameRenderer {
           break;
         }
         case 'bossSmash': {
-          this.rings.spawn(e.x, -e.d, 9, 0xff4d4d, 0.55);
+          this.rings.spawn(e.x, -e.d, 3, 0xff4d4d, 0.55);
           this.debris.burst(e.x, 0.3, -e.d, 18, 7, 0.8, 0.22, [0xb8b8b8, 0x8f8f8f], 20, 0.6);
           this.shake(0.55);
           if (e.killed > 0) this.texts.spawn(`-${e.killed}`, sq.x, 2.6, -sq.d, 'big bad', 1, 1.6);
@@ -879,6 +885,7 @@ export class GameRenderer {
         this.shake(0.5);
       }
     }
+    for (const v of this.bossStrikes.values()) v.update();
 
     const projIds = new Set(w.projectiles.map((p) => p.id));
     for (const [id, v] of this.projectiles) {

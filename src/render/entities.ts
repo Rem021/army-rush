@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BOSSES, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
+import { BOSSES, BOSS_STRIKE_HALF, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
 import type { Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
 import { HpBar, Label, formatNumber, labelPlane, labelSprite } from './label';
 import { barrelGeometry, coinGeometry, gunGeometry, tiresGeometry, tiresHeight } from './models';
@@ -394,6 +394,52 @@ function glowRing(color: number): THREE.Mesh {
 }
 
 const DROP_TIME = 0.55;
+
+/** 锁定后留在地面的砸击预警，长度覆盖当时整队的前后排。 */
+export class BossStrikeView {
+  readonly group = new THREE.Group();
+  private readonly fillMat = new THREE.MeshBasicMaterial({ color: 0xff2424, transparent: true, opacity: 0.25, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
+  private readonly edgeMat = new THREE.MeshBasicMaterial({ color: 0xffb047, transparent: true, opacity: 0.9, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
+  private readonly fill = new THREE.Mesh(new THREE.PlaneGeometry(BOSS_STRIKE_HALF * 2, 1), this.fillMat);
+  private readonly edges = [-1, 1].map((side) => {
+    const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 1), this.edgeMat);
+    edge.position.x = side * BOSS_STRIKE_HALF;
+    return edge;
+  });
+
+  constructor(scene: THREE.Scene, readonly boss: Boss) {
+    this.group.visible = false;
+    this.fill.position.y = 0.04;
+    this.fill.rotation.x = -Math.PI / 2;
+    this.fill.renderOrder = 15;
+    for (const edge of this.edges) {
+      edge.position.y = 0.05;
+      edge.rotation.x = -Math.PI / 2;
+      edge.renderOrder = 16;
+    }
+    this.group.add(this.fill, ...this.edges);
+    scene.add(this.group);
+  }
+
+  update() {
+    const b = this.boss;
+    this.group.visible = b.alive && b.active && b.attacking;
+    if (!this.group.visible) return;
+    this.group.position.set(b.attackX, 0, -b.attackD);
+    this.fill.scale.y = b.attackLength;
+    for (const edge of this.edges) edge.scale.y = b.attackLength;
+    this.fillMat.opacity = 0.16 + b.windup * 0.25;
+    this.edgeMat.opacity = 0.55 + b.windup * 0.4;
+  }
+
+  dispose() {
+    this.group.removeFromParent();
+    this.fill.geometry.dispose();
+    for (const edge of this.edges) edge.geometry.dispose();
+    this.fillMat.dispose();
+    this.edgeMat.dispose();
+  }
+}
 
 export class BossView {
   readonly rig: BossRig;
