@@ -540,7 +540,7 @@ svg {
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  padding: 8px 4px 0;
+  padding: 5px 4px 0;
   overflow: hidden;
   border-radius: 14px;
   text-align: center;
@@ -625,7 +625,7 @@ svg {
   box-shadow: 0 0 0 2px #141d33;
 }
 .up-name {
-  margin-top: 3px;
+  margin-top: 1px;
   font-size: 13px;
   font-weight: 900;
   line-height: 1.1;
@@ -642,19 +642,17 @@ svg {
   align-items: center;
   justify-content: center;
   gap: 2px;
-  min-height: 12px;
+  min-height: 22px;
   max-width: 100%;
   font-size: 9.5px;
   font-weight: 800;
-  line-height: 1.3;
+  line-height: 1.15;
   color: var(--gold);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  white-space: normal;
 }
 .up-cost {
   align-self: stretch;
-  margin: 3px -4px 0;
+  margin: 1px -4px 0;
   height: 26px;
   display: flex;
   align-items: center;
@@ -681,12 +679,12 @@ svg {
 /* 离下一次进化还差几级：一排点，点满就进化 */
 .up-evo {
   width: 100%;
-  min-height: 24px;
+  min-height: 32px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 2px;
-  margin-top: 1px;
+  margin-top: 0;
 }
 .evo-pips {
   display: flex;
@@ -799,8 +797,7 @@ svg {
 
 .up-next > span {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  overflow-wrap: anywhere;
 }
 
 /* 枪的侧面图（真模型渲染） */
