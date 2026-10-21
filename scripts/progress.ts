@@ -1,0 +1,51 @@
+// 局外升级的成长模拟：从零升级开始打防线，输了拿金币升级再打，看每关要打几次。
+// 用法：npm run sim:progress -- [关卡数=10] [玩家数=4] [失误率=0.12] [第几号玩家起=0]
+import { Bot } from '../src/game/bot';
+import { upgradeEffects } from '../src/game/config';
+import { clearGems, levelReward, spendGreedy, type UpgradeLevels } from '../src/game/economy';
+import { generateDefense } from '../src/game/level';
+import { mulberry32 } from '../src/game/rng';
+import { World } from '../src/game/world';
+
+const maxLevel = Number(process.argv[2] ?? 10);
+const players = Number(process.argv[3] ?? 4);
+const mistake = Number(process.argv[4] ?? 0.12);
+const first = Number(process.argv[5] ?? 0);
+
+function play(L: number, up: UpgradeLevels, seed: number) {
+  const w = new World(generateDefense(L), { ...upgradeEffects(up), seed });
+  const bot = new Bot(mulberry32(seed * 7919 + 13), mistake);
+  while (w.state === 'run' && w.time < 400) {
+    w.setTarget(bot.target(w));
+    w.update(1 / 30);
+    w.drainEvents();
+  }
+  return w;
+}
+
+const table: string[][] = [];
+for (let p = first; p < first + players; p++) {
+  const up: UpgradeLevels = { soldiers: 0, damage: 0, rate: 0, income: 0, agility: 0 };
+  const wallet = { coins: 0, gems: 0 };
+  let seed = 1000 * (p + 1);
+  for (let L = 1; L <= maxLevel; L++) {
+    let tries = 0;
+    let won = false;
+    const progress: number[] = [];
+    while (!won && tries < 12) {
+      tries++;
+      const w = play(L, up, seed++);
+      won = w.state === 'won';
+      progress.push(Math.round(w.progress * 100));
+      wallet.coins += levelReward(L, won, w.coins, upgradeEffects(up).coinMult).total;
+      wallet.gems += w.gems + (won ? clearGems(L) : 0);
+      spendGreedy(wallet, up);
+    }
+    // 机器可读的一行，给 work/agg.ts 汇总分布用
+    console.log(`#${L},${tries},${won ? 1 : 0},${up.soldiers},${up.damage},${up.rate},${up.income},${up.agility}`);
+    (table[L - 1] ??= []).push(`${won ? tries : '✗'}次(${progress.join('/')}) 兵${up.soldiers}火${up.damage}速${up.rate}金${up.income}机${up.agility}`);
+    if (!won) break;
+  }
+}
+console.log(`失误率 ${mistake}，玩家 ${first + 1}–${first + players}。每格：第几次过关(每次打到的进度%) 过关后升级等级`);
+table.forEach((row, i) => console.log(`第 ${String(i + 1).padStart(2)} 关  ${row.join('  |  ')}`));
