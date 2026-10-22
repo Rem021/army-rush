@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { Bot } from '../src/game/bot';
-import { LANE_HALF, THROW_RADIUS, TRACK_HALF, UPGRADES, WEAPONS, ZOMBIES, upgradeEffects } from '../src/game/config';
+import { BOSS_COMBO, LANE_HALF, THROW_RADIUS, TRACK_HALF, UPGRADES, WEAPONS, ZOMBIES, upgradeEffects } from '../src/game/config';
 import { levelReward, spendGreedy } from '../src/game/economy';
 import { generateCampaign, generateDefense, generateEndlessStart, type LevelSpec } from '../src/game/level';
 import { mulberry32 } from '../src/game/rng';
 import { World } from '../src/game/world';
+import { BOSS_IMPACT, bossMotion, bossPose } from '../src/render/bossMotion';
 
 function emptySpec(over: Partial<LevelSpec> = {}): LevelSpec {
   return {
@@ -199,14 +200,64 @@ describe('Boss', () => {
   it('近战先慢击两次再快速三连击', () => {
     const w = new World(emptySpec({ length: 40, bosses: [{ kind: 'brute', x: 0, hp: 1e9 }] }), { ...opts, startSoldiers: 160, rateMult: 0 });
     const hits: number[] = [];
-    for (let t = 0; t < 60 && hits.length < 5; t += 1 / 60) {
+    const combo: number[] = [];
+    let overlap = false;
+    let breather = false;
+    let lastRecovery = -1;
+    for (let t = 0; t < 60 && (hits.length < 5 || !breather); t += 1 / 60) {
       w.update(1 / 60);
-      for (const e of w.drainEvents()) if (e.type === 'bossSmash') hits.push(w.time);
+      const b = w.bosses[0];
+      const motion = bossMotion(b);
+      if (b.recover > 0) {
+        if (b.comboStep === 0 && b.recover <= BOSS_COMBO[4].recover - 0.58) {
+          breather = true;
+          expect(motion.kind).toBe('none');
+        } else {
+          expect(motion.kind).toBe('release');
+          expect(motion.phase).toBeGreaterThanOrEqual(lastRecovery);
+          lastRecovery = motion.phase;
+        }
+      } else lastRecovery = -1;
+      if (b.attacking && b.comboStep === 3 && b.slam > 0.1) {
+        overlap = true;
+        expect(motion.kind).toBe('windup');
+        expect(motion.phase).toBeLessThan(BOSS_IMPACT);
+      }
+      for (const e of w.drainEvents()) if (e.type === 'bossSmash') {
+        hits.push(w.time);
+        combo.push(e.combo);
+        expect(motion.phase).toBeCloseTo(BOSS_IMPACT, 1);
+      }
     }
     expect(hits).toHaveLength(5);
+    expect(combo).toEqual([0, 1, 2, 3, 4]);
+    expect(overlap).toBe(true);
+    expect(breather).toBe(true);
     expect(hits[1] - hits[0]).toBeGreaterThan(hits[3] - hits[2] + 0.8);
     expect(hits[2] - hits[1]).toBeGreaterThan(hits[4] - hits[3]);
     expect(w.bosses[0].comboStep).toBe(0);
+  });
+
+  it('模型备用动作在命中前后衔接，投弹收招后再起手', () => {
+    const before = bossPose(BOSS_IMPACT - 0.0001);
+    const after = bossPose(BOSS_IMPACT + 0.0001);
+    expect(Math.abs(before.arm - after.arm)).toBeLessThan(0.01);
+    expect(Math.abs(before.body - after.body)).toBeLessThan(0.01);
+
+    const w = new World(emptySpec({ length: 40, bosses: [{ kind: 'thrower', x: 0, hp: 1e9 }] }), { ...opts, startSoldiers: 80, rateMult: 0 });
+    let sawRelease = false;
+    let sawIdle = false;
+    let sawNextWindup = false;
+    for (let t = 0; t < 12; t += 1 / 60) {
+      w.update(1 / 60);
+      const b = w.bosses[0];
+      const motion = bossMotion(b);
+      if (b.slam > 0) sawRelease ||= motion.kind === 'release';
+      if (sawRelease && b.slam === 0 && b.windup < 0.5) sawIdle ||= motion.kind === 'none';
+      if (sawIdle && b.windup >= 0.5) sawNextWindup ||= motion.kind === 'windup';
+      w.drainEvents();
+    }
+    expect(sawRelease && sawIdle && sawNextWindup).toBe(true);
   });
 
   it('危险带锁定后，整队横移能躲开砸击', () => {

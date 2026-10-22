@@ -655,9 +655,11 @@ export class GameRenderer {
           break;
         }
         case 'bossSmash': {
-          this.rings.spawn(e.x, -e.d, 3, 0xff4d4d, 0.55);
-          this.debris.burst(e.x, 0.3, -e.d, 18, 7, 0.8, 0.22, [0xb8b8b8, 0x8f8f8f], 20, 0.6);
-          this.shake(0.55);
+          const quick = e.combo >= 2;
+          const finisher = e.combo === 4;
+          this.rings.spawn(e.x, -e.d, finisher ? 3.7 : quick ? 2.4 : 3.2, 0xff4d4d, quick ? 0.38 : 0.55);
+          this.debris.burst(e.x, 0.3, -e.d, finisher ? 20 : quick ? 10 : 18, 7, 0.8, 0.22, [0xb8b8b8, 0x8f8f8f], 20, 0.6);
+          this.shake(finisher ? 0.54 : quick ? 0.28 : 0.48);
           if (e.killed > 0) this.texts.spawn(`-${e.killed}`, sq.x, 2.6, -sq.d, 'big bad', 1, 1.6);
           break;
         }

@@ -282,7 +282,8 @@ function hapticsFor(events: GameEvent[]) {
     if (e.type === 'gatePass') haptic(e.after >= e.before ? 18 : [35, 40, 35]);
     else if (e.type === 'barrelBreak') haptic(25);
     else if (e.type === 'blocked') haptic(30);
-    else if (e.type === 'bossSmash' || e.type === 'giantSmash') haptic(70);
+    else if (e.type === 'bossSmash') haptic(e.combo === 4 ? 75 : e.combo >= 2 ? 38 : 65);
+    else if (e.type === 'giantSmash') haptic(70);
     else if (e.type === 'explode' && e.source === 'impact') haptic(90);
     else if (e.type === 'reward' && e.reward.kind === 'weapon' && e.upgraded) haptic([20, 30, 20]);
     else if (e.type === 'bossDie') haptic([40, 40, 80]);

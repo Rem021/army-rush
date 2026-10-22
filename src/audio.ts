@@ -189,9 +189,11 @@ export class Sfx {
           break;
         case 'giantSmash':
         case 'bossSmash':
-          if (this.ready('smash', 0.2)) {
-            this.hiss(0.5, 0.5, 'lowpass', 900, 60);
-            this.tone('sine', 80, 30, 0.5, 0.5);
+          if (this.ready('smash', 0.12)) {
+            const quick = e.type === 'bossSmash' && e.combo >= 2;
+            const finisher = e.type === 'bossSmash' && e.combo === 4;
+            this.hiss(quick ? 0.22 : 0.42, quick ? 0.3 : 0.48, 'lowpass', quick ? 1150 : 900, 60);
+            this.tone('sine', quick ? 105 : 80, 30, quick ? 0.24 : 0.46, finisher ? 0.5 : quick ? 0.32 : 0.46);
           }
           break;
         case 'throw':
