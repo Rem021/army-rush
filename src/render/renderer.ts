@@ -126,6 +126,7 @@ export class GameRenderer {
    * 画质档位 0 高 / 1 中 / 2 低：按真实帧率自动升降（手机人一多就降分辨率、少画几个兵、关阴影）。
    * 网址加 ?quality=0/1/2 可以固定。
    */
+  reducedMotion = false;
   private quality = 0;
   private qualityLocked = false;
   private frameEma = 1 / 60;
@@ -446,7 +447,7 @@ export class GameRenderer {
     // 对局里换了更好的枪：全队闪一下，脚下冲起一道光柱、两圈冲击波，镜头往前推一下（开局建档时不算）
     if (this.tier >= 0 && tier > this.tier && this.world) {
       this.tierFlash = 1;
-      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      if (this.reducedMotion) {
         this.weaponCueAge = this.weaponCueDuration;
       } else if (this.weaponCueAge >= this.weaponCueDuration) {
         this.weaponCueAge = 0;
@@ -477,6 +478,7 @@ export class GameRenderer {
   }
 
   shake(amount: number) {
+    if (this.reducedMotion) return;
     this.trauma = Math.min(1, this.trauma + amount);
   }
 
@@ -722,6 +724,7 @@ export class GameRenderer {
   }
 
   private flash(kind: 'bad' | 'boss') {
+    if (this.reducedMotion) return;
     const el = document.getElementById('vignette');
     if (!el) return;
     el.className = '';
@@ -1041,7 +1044,7 @@ export class GameRenderer {
     }
     this.camera.position.copy(this.camPos);
     const cameraTarget = _weaponLook.copy(this.camLook);
-    if (this.weaponCueAge < this.weaponCueDuration) {
+    if (!this.reducedMotion && this.weaponCueAge < this.weaponCueDuration) {
       this.weaponCueAge = Math.min(this.weaponCueDuration, this.weaponCueAge + realDt);
       const progress = this.weaponCueAge / this.weaponCueDuration;
       // 从当前机位推近、看向队伍、再沿原路径退回；始终渲染同一场景，没有镜头切换。
@@ -1050,7 +1053,7 @@ export class GameRenderer {
       cameraTarget.lerp(_weaponTarget.set(w.squad.x, 1.25, -w.squad.d), 0.1 * focus);
     }
     this.trauma = Math.max(0, this.trauma - realDt * 1.8);
-    const shake = this.trauma * this.trauma * 0.6;
+    const shake = this.reducedMotion ? 0 : this.trauma * this.trauma * 0.6;
     if (shake > 0) {
       this.camera.position.x += (Math.random() - 0.5) * shake;
       this.camera.position.y += (Math.random() - 0.5) * shake;

@@ -1,5 +1,6 @@
 import { AMMO, BOSSES, MODES, SKINS, UPGRADES, WEAPONS, soldierDps, type GameMode, type UpgradeId } from '../game/config';
-import { isBossLevel, recommendUpgrade } from '../game/economy';
+import { isBossLevel, recommendUpgrade, upgradeGain } from '../game/economy';
+import { TACTICS, type TacticId } from '../game/tactics';
 import type { World } from '../game/world';
 import { formatNumber } from '../render/label';
 import type { SaveData } from '../save';
@@ -18,6 +19,11 @@ export interface UIHandlers {
   restart(): void;
   toggleSound(): void;
   toggleHaptics(): void;
+  tactic(id: TacticId): void;
+  practice(mode: 'defense' | 'campaign', level: number): void;
+  cycleMotion(): void;
+  cycleSensitivity(): void;
+  retreat(): void;
   /** 重置全部进度（设置里，点两次确认） */
   resetProgress(): void;
 }
@@ -34,10 +40,13 @@ export interface ResultInfo {
   home: string;
   /** 0–3 星，null 不显示 */
   stars: number | null;
+  advice?: string;
+  detail?: string;
+  practice?: boolean;
 }
 
 type Screen = 'menu' | 'hud' | 'result' | 'pause';
-type Sheet = 'upgrades' | 'skins' | 'modes' | 'records' | 'settings';
+type Sheet = 'upgrades' | 'skins' | 'modes' | 'records' | 'settings' | 'tactics' | 'help';
 
 const SHEET_TITLES: Record<Sheet, string> = {
   upgrades: '军械库',
@@ -45,6 +54,8 @@ const SHEET_TITLES: Record<Sheet, string> = {
   modes: '选择模式',
   records: '战绩',
   settings: '设置',
+  tactics: '战术选择',
+  help: '战地手册',
 };
 
 const UPGRADE_LOOK: Record<UpgradeId, { icon: string; bg: string }> = {
@@ -153,6 +164,8 @@ export class UI {
           <div class="chip ammo" id="hud-ammo">${ICON.ammo}<span></span></div>
         </div>
         <div class="boss-bars" id="boss-bars"></div>
+        <div id="hud-cue" class="hud-cue"></div>
+        <div id="resume-count" class="resume-count" hidden>准备 · 1</div>
         <div class="banner" id="banner"></div>
         <div class="weapon-up" id="weapon-up">
           <div class="wu-rays"></div>
@@ -177,6 +190,7 @@ export class UI {
         <div class="menu-dock">
           <button class="panel mode-card" id="mode-card"></button>
           <div class="home-ups" id="home-ups"></div>
+          <div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
           <button class="btn btn-gold start-btn" id="btn-start">开始战斗<span class="sub" id="start-sub"></span></button>
         </div>
         <div class="nav">
@@ -217,9 +231,12 @@ export class UI {
           <div class="stars" id="result-stars"></div>
           <div class="result-sub" id="result-sub"></div>
           <div class="result-stats" id="result-stats"></div>
+          <div class="result-advice" id="result-advice"></div>
+          <div class="result-detail" id="result-detail"></div>
           <div class="reward">${coin()}<b id="r-coins">+0</b></div>
           <div class="result-ups-title">升级部队<span class="wallet"><span class="pill gem-pill"><span class="gem-ico">${ICON.gem}</span><span id="result-gems">0</span></span><span class="pill">${coin('small')}<span id="result-balance">0</span></span></span></div>
           <div class="home-ups result-ups" id="result-ups"></div>
+          <button class="result-tactic" data-sheet="tactics">调整战术</button>
           <button class="btn btn-gold" id="btn-next">下一关</button>
           <button class="btn btn-ghost" id="btn-home">返回主页</button>
         </div>
@@ -229,8 +246,8 @@ export class UI {
         <div class="dialog panel">
           <div class="ribbon">暂停</div>
           <button class="btn btn-gold" id="btn-resume">继续战斗</button>
-          <button class="btn btn-blue" id="btn-restart">重新开始</button>
-          <button class="btn btn-ghost" id="btn-quit">返回主页</button>
+          <button class="btn btn-blue" id="btn-restart">保留战利品并重试</button>
+          <button class="btn btn-ghost" id="btn-quit">撤退并结算</button>
         </div>
       </div>
     `;
@@ -239,7 +256,7 @@ export class UI {
     on('#btn-pause', () => h.pause());
     on('#btn-resume', () => h.resume());
     on('#btn-restart', () => h.restart());
-    on('#btn-quit', () => h.home());
+    on('#btn-quit', () => h.retreat());
     on('#btn-start', () => h.start());
     on('#btn-settings', () => this.openSheet('settings'));
     on('#mode-card', () => this.openSheet('modes'));
@@ -273,6 +290,15 @@ export class UI {
         h.mode(mode.dataset.mode as GameMode);
         this.closeSheet();
       }
+      const tactic = t.closest<HTMLElement>('[data-tactic]');
+      if (tactic) h.tactic(tactic.dataset.tactic as TacticId);
+      const practice = t.closest<HTMLElement>('[data-practice]');
+      if (practice) {
+        const id = practice.dataset.practice as 'defense' | 'campaign';
+        const field = el<HTMLInputElement>(root, `#practice-${id}`);
+        if (field.checkValidity()) h.practice(id, Number(field.value));
+        else field.reportValidity();
+      }
       const reset = t.closest<HTMLElement>('[data-reset]');
       if (reset) {
         // 第一次点变红提示，3 秒内再点一次才真的重置
@@ -292,7 +318,9 @@ export class UI {
       const toggle = t.closest<HTMLElement>('[data-toggle]');
       if (toggle) {
         if (toggle.dataset.toggle === 'sound') h.toggleSound();
-        else h.toggleHaptics();
+        else if (toggle.dataset.toggle === 'haptics') h.toggleHaptics();
+        else if (toggle.dataset.toggle === 'motion') h.cycleMotion();
+        else if (toggle.dataset.toggle === 'sensitivity') h.cycleSensitivity();
       }
     });
   }
@@ -359,7 +387,7 @@ export class UI {
     if (visible) {
       // 连续升级沿用当前卡片，枪在原位变更；退场中收到升级就短距离返回。
       box.classList.remove('leave');
-      if (leaving && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      if (leaving && !this.root.classList.contains('reduced-motion')) {
         this.weaponUpReturn = box.animate(
           [{ transform: returnFrom, opacity: returnOpacity }, { transform: 'translate(-50%, 0) scale(1)', opacity: 1 }],
           { duration: 120, easing: 'ease-out' },
@@ -473,6 +501,7 @@ export class UI {
 
   /** 存档变了以后刷新主页和打开的弹层 */
   refreshMenu() {
+    el(this.root, '#home-tactic').textContent = `战术 · ${TACTICS.find((t) => t.id === this.save.tactic)!.name}`;
     const s = this.save;
     const coins = formatNumber(s.coins);
     el(this.root, '#menu-coins').textContent = coins;
@@ -515,7 +544,7 @@ export class UI {
       const label = next && u.id === 'damage' ? this.gunImg(u.evolutions.indexOf(next) + 1, 'card') : next ? `<span>${next.name}</span>` : '';
       const evo = next ? `<div class="up-evo">${evoPips(u, lvl)}<div class="up-next">${label}</div></div>` : '<div class="up-evo"></div>';
       const price = maxed ? '满级' : gems ? `<span class="gem-ico small">${ICON.gem}</span>${cost}` : `${coin('small')}${formatNumber(cost)}`;
-      return `<button class="up-card ${maxed || poor ? 'disabled' : 'ready'} ${evolving ? 'evolve' : ''} ${rec === u.id ? 'recommend' : ''} ${gems ? 'gems' : ''}" data-up="${u.id}">
+      return `<button class="up-card ${maxed || poor ? 'disabled' : 'ready'} ${evolving ? 'evolve' : ''} ${rec === u.id ? 'recommend' : ''} ${gems ? 'gems' : ''}" data-up="${u.id}" aria-label="${u.name} ${u.value(lvl)}${maxed ? ' 满级' : `，下级 ${upgradeGain(s.upgrades, u.id).text}，价格 ${cost} ${gems ? '钻石' : '金币'}`}" title="${maxed ? '已满级' : upgradeGain(s.upgrades, u.id).text}">
         <div class="up-ico" style="background:${look.bg}">${look.icon}<i class="up-lv">${lvl}</i></div>
         <div class="up-name">${u.name}</div>
         <div class="up-val">${u.value(lvl)}</div>
@@ -546,7 +575,7 @@ export class UI {
     switch (this.sheet) {
       case 'upgrades':
         // 军械库：每条升级线的效果和进化路线
-        body.innerHTML = UPGRADES.map((u) => {
+        body.innerHTML = `<div class="guide-note">推荐按开局直伤 / 花费比较。穿透、溅射、养门和机动各有用途，请结合关卡选择。</div>` + UPGRADES.map((u) => {
           const lvl = s.upgrades[u.id];
           const look = UPGRADE_LOOK[u.id];
           const maxed = lvl >= u.max;
@@ -561,7 +590,7 @@ export class UI {
             <div class="mode-tile" style="background:${look.bg};color:#fff">${look.icon}</div>
             <div class="row-main">
               <div class="row-title">${u.name}<span class="lv">Lv.${lvl}</span><span class="up-now">${u.value(lvl)}${maxed ? '' : ` → <b>${u.value(lvl + 1)}</b>`}</span></div>
-              ${pips}${track}
+              ${pips}${track}<div class="upgrade-gain">${maxed ? '已满级' : upgradeGain(s.upgrades, u.id).text}</div>
             </div>
             <button class="btn btn-gold buy ${maxed || poor ? 'disabled' : ''}" data-up="${u.id}">${maxed ? '满级' : gems ? `<span class="gem-ico">${ICON.gem}</span>${cost}` : `${coin()}${formatNumber(cost)}`}</button>
           </div>`;
@@ -596,6 +625,10 @@ export class UI {
             </div>
           </button>`;
         }).join('');
+        body.innerHTML += `<div class="guide-note">已通关关卡可随时演练：使用当前升级和战术，不消耗资源，也不结算金币、钻石和战绩。</div>${(['defense', 'campaign'] as const).map((id) => {
+          const best = id === 'defense' ? s.defenseBest : s.best;
+          return best < 1 ? '' : `<div class="practice-row"><label for="practice-${id}">${id === 'defense' ? '防线' : '冲锋'}演练 · 1–${best} 关</label><input id="practice-${id}" type="number" inputmode="numeric" min="1" max="${best}" step="1" value="${best}" /><button class="btn btn-blue" data-practice="${id}">开始演练</button></div>`;
+        }).join('')}`;
         break;
       case 'records': {
         const stat = (icon: string, bg: string, label: string, value: string) =>
@@ -610,10 +643,18 @@ export class UI {
         </div>`;
         break;
       }
+      case 'tactics':
+        body.innerHTML = `<div class="guide-note">免费切换，下一局生效。敌人不会因为你变强而加血。</div>${TACTICS.map((t) => `<button class="row tactic-row ${s.tactic === t.id ? 'active' : ''}" data-tactic="${t.id}" aria-pressed="${s.tactic === t.id}"><div class="row-main"><div class="row-title">${t.name}${s.tactic === t.id ? ' · 已选择' : ''}</div><div class="row-sub">${t.desc}</div></div></button>`).join('')}<div class="guide-note">数字门按命中次数涨数；连射更擅长养门。破甲对装甲目标的持续伤害比均衡高约 15%，但养门更慢、清普通尸潮稍弱。关卡路线固定，可用演练比较打法。</div>`;
+        break;
+      case 'help':
+        body.innerHTML = `<div class="guide"><h3>单手就能玩</h3><p>按住空白处左右拖动，子弹自动打向正前方。手指放在屏幕下部也能换道。设置里可调灵敏度。</p><h3>防线：两条道，两件事</h3><p>开局先拆门道障碍，打破后回到门道接住一串增益门。尸潮接近桥头时切去清怪；一直贪补给会被包围。</p><h3>看清数字，再选路</h3><p>+ 是加人，− 是减员，× 是人数倍率，枪和闪电分别升级武器和射速。红门可以射成正数；数字门按命中次数成长，敌人和障碍按伤害掉血。</p><h3>Boss：先躲，再打</h3><p>砸击先锁红色危险带，整队移出去；两次慢砸后有三连击，停顿时再集火。油桶红圈内的士兵都会被炸。</p><h3>失败也有进步</h3><p>战斗所得会保留，结算会告诉你怎样损兵。免费换战术，升级前到军械库看真实收益。模式页可演练已通关关卡；撤退和主动重试保留战利品，但没有额外新手补贴。</p></div>`;
+        break;
       case 'settings':
         body.innerHTML = `
           <button class="row" data-toggle="sound" style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#4a5a80,#25304d)">${ICON.soundOn}</div><div class="row-main"><div class="row-title">音效</div><div class="row-sub">枪声、爆炸和提示音</div></div><span class="toggle ${s.sound ? 'on' : ''}"></span></button>
           <button class="row" data-toggle="haptics" style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#4a5a80,#25304d)">${ICON.vibrate}</div><div class="row-main"><div class="row-title">振动</div><div class="row-sub">安卓有效，iOS 网页不支持</div></div><span class="toggle ${s.haptics ? 'on' : ''}"></span></button>
+          <button class="row" data-toggle="motion" style="text-align:left"><div class="row-main"><div class="row-title">动态效果：${s.motion === 'system' ? '跟随系统' : s.motion === 'reduced' ? '减少' : '完整'}</div><div class="row-sub">减少时关闭镜头震动、推近和全屏闪光</div></div></button>
+          <button class="row" data-toggle="sensitivity" style="text-align:left"><div class="row-main"><div class="row-title">拖动灵敏度：${s.sensitivity === 1 ? '标准' : s.sensitivity < 1 ? '精细' : '灵敏'}</div><div class="row-sub">切换精细 / 标准 / 灵敏，移动速度由机动升级决定</div></div></button>
           <button class="row danger-row" data-reset style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#ff6b6b,#b5121f)">${ICON.close}</div><div class="row-main"><div class="row-title" id="reset-title">重置全部进度</div><div class="row-sub">关卡、金币、钻石、升级、皮肤、战绩全部清零，从头开始</div></div></button>
           <div class="credits">人物、丧尸、Boss 和道具模型：Quaternius（CC0 公共领域）</div>`;
         break;
@@ -641,6 +682,7 @@ export class UI {
     const box = el(this.root, '#hud-marks');
     box.innerHTML = marks.map((f) => `<i class="hud-mark" style="left:${(f * 100).toFixed(1)}%">${ICON.skull}</i>`).join('');
     this.marks = [...box.querySelectorAll<HTMLElement>('.hud-mark')].map((e, i) => ({ el: e, at: marks[i] * 100 }));
+    el(this.root, '#hud-cue').textContent = '';
     this.lastPct = -1;
     this.lastTier = -1;
     this.lastRate = -1;
@@ -729,10 +771,30 @@ export class UI {
       }
     }
     this.updateBossBars(w);
+    const cue = el(this.root, '#hud-cue');
+    const boss = w.bosses.find((b) => b.active && b.alive && b.attacking);
+    const released = w.defense && w.gates.some((g) => !g.consumed && g.d > w.squad.d && g.d < 16);
+    const danger = w.projectiles.length > 0 || !!boss;
+    const text = w.projectiles.length ? '油桶将落地 · 整队移出红圈' : boss ? `${boss.comboStep < 2 ? '蓄力重击' : '快速连击'} ${boss.comboStep + 1}/5 · 移出危险带`
+      : released ? '补给已放行 · 回门道接门' : '';
+    if (cue.textContent !== text) cue.textContent = text;
+    cue.classList.toggle('danger', danger);
+    cue.classList.toggle('visible', !!text);
+  }
+
+  resumeCountdown(show: boolean) {
+    el(this.root, '#resume-count').hidden = !show;
+  }
+
+  showPause(practice: boolean) {
+    el(this.root, '#btn-restart').textContent = practice ? '重新演练（无奖励）' : '保留战利品并重试';
+    el(this.root, '#btn-quit').textContent = practice ? '结束演练（无奖励）' : '撤退并结算';
+    this.show('pause');
   }
 
   /** 一枚金币从屏幕上某处飞进顶栏的金币框 */
   flyCoin(x: number, y: number, to = '.hud-coins .coin-ico', force = false, icon = ICON.coin) {
+    if (this.root.classList.contains('reduced-motion')) return;
     if (this.flying >= 8 && !force) return;
     if (!force && this.current !== 'hud') return;
     const target = el(this.root, to).getBoundingClientRect();
@@ -811,6 +873,7 @@ export class UI {
   /** 胜利彩带：从屏幕上方撒一把，三秒后清掉 */
   private confetti() {
     const box = el(this.root, '#result');
+    if (this.root.classList.contains('reduced-motion')) return;
     box.querySelectorAll('.confetti').forEach((c) => c.remove());
     const colors = ['#ffd34d', '#ff6b6b', '#4da3ff', '#3ddc84', '#c39bff', '#ffffff'];
     for (let i = 0; i < 46; i++) {
@@ -838,6 +901,10 @@ export class UI {
       stars.innerHTML = [0, 1, 2].map((i) => (i < info.stars! ? ICON.star.replace('<svg', '<svg class="on"') : ICON.starOff)).join('');
     }
     el(this.root, '#result-sub').textContent = info.sub;
+    el(this.root, '#result-advice').textContent = info.advice ?? '';
+    el(this.root, '#result-detail').textContent = info.detail ?? '';
+    for (const sel of ['.reward', '.result-ups-title', '#result-ups']) el(this.root, sel).style.display = info.practice ? 'none' : '';
+    el(this.root, '#result').classList.toggle('practice', !!info.practice);
     el(this.root, '#result-stats').innerHTML = info.stats.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
     const next = el(this.root, '#btn-next');
     next.style.display = info.next ? '' : 'none';

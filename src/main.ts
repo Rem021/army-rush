@@ -3,6 +3,8 @@ import { Sfx, vibrate } from './audio';
 import { Bot } from './game/bot';
 import { BOSSES, MODES, SKINS, TRACK_HALF, UPGRADES, upgradeEffects, type GameMode, type UpgradeId } from './game/config';
 import { generateCampaign, generateDefense, generateEndlessStart } from './game/level';
+import { LOSS_INFO } from './game/feedback';
+import { applyTactic, type TacticId } from './game/tactics';
 import { clearGems, isBossLevel, levelReward } from './game/economy';
 import { formatNumber } from './render/label';
 import { mulberry32 } from './game/rng';
@@ -55,6 +57,8 @@ let bot = new Bot(mulberry32(12345), 0.1);
 
 type Phase = 'menu' | 'play' | 'paused' | 'result';
 let phase: Phase = 'menu';
+let practice: { mode: 'defense' | 'campaign'; level: number } | null = null;
+let resumeAt = 0;
 let world!: World;
 let resultShown = false;
 /** 本局兵力巅峰，算星级用 */
@@ -138,19 +142,52 @@ const handlers: UIHandlers = {
     buildWorld();
     ui.refreshMenu();
   },
+  tactic(id: TacticId) {
+    if (phase !== 'menu' && phase !== 'result') return;
+    save.tactic = id;
+    writeSave(save);
+    if (phase === 'menu') buildWorld();
+    ui.refreshMenu();
+  },
+  practice(mode, level) {
+    const best = mode === 'defense' ? save.defenseBest : save.best;
+    if (!Number.isInteger(level) || level < 1 || level > best) return;
+    practice = { mode, level };
+    ui.closeSheet();
+    buildWorld();
+    startGame();
+  },
+  cycleMotion() {
+    save.motion = save.motion === 'system' ? 'reduced' : save.motion === 'reduced' ? 'full' : 'system';
+    syncMotion();
+    writeSave(save);
+    ui.refreshMenu();
+  },
+  cycleSensitivity() {
+    save.sensitivity = save.sensitivity === 1 ? 1.3 : save.sensitivity === 1.3 ? 0.75 : 1;
+    writeSave(save);
+    ui.refreshMenu();
+  },
+  retreat() {
+    if (phase !== 'paused') return;
+    world.state = 'lost';
+    finish(true);
+  },
   next() {
+    if (phase !== 'result') return;
     sfx.click();
     buildWorld();
     startGame();
   },
   retry() {
+    if (phase !== 'result') return;
     sfx.click();
     buildWorld();
     startGame();
   },
   home() {
     sfx.click();
-    // Boss 连战中途撤退：金币已经按轮发过了，回到第一轮
+    practice = null;
     renderer.menu = true;
     buildWorld();
     phase = 'menu';
@@ -163,15 +200,22 @@ const handlers: UIHandlers = {
     input.left = false;
     input.right = false;
     phase = 'paused';
-    ui.show('pause');
+    ui.showPause(!!practice);
   },
   resume() {
+    if (phase !== 'paused') return;
     sfx.click();
     phase = 'play';
+    resumeAt = performance.now() + 900;
     ui.show('hud');
   },
   restart() {
+    if (phase !== 'paused') return;
     sfx.click();
+    if (phase === 'paused' && !practice) {
+      world.state = 'lost';
+      finish(true);
+    }
     buildWorld();
     startGame();
   },
@@ -185,6 +229,7 @@ const handlers: UIHandlers = {
   },
   resetProgress() {
     resetSave(save);
+    practice = null;
     sfx.enabled = save.sound;
     renderer.setSkin(currentSkin());
     renderer.menu = true;
@@ -202,6 +247,14 @@ const handlers: UIHandlers = {
   },
 };
 const ui = new UI(uiRoot, save, handlers);
+const motionQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+function syncMotion() {
+  const reduced = save.motion === 'reduced' || (save.motion === 'system' && motionQuery.matches);
+  renderer.reducedMotion = reduced;
+  uiRoot.classList.toggle('reduced-motion', reduced);
+}
+motionQuery.addEventListener('change', syncMotion);
+syncMotion();
 // 皮肤页的头像、各档枪的图都用真模型拍
 if (models.soldier) {
   ui.setPortraits(renderPortraits(models.soldier, SKINS));
@@ -211,27 +264,24 @@ if (models.soldier) {
 /** 局外升级折算成开局参数 */
 function upgradeOpts(): WorldOptions {
   const e = upgradeEffects(save.upgrades);
-  return { startSoldiers: e.startSoldiers, damageMult: e.damageMult, rateMult: e.rateMult, startTier: e.startTier, ammo: e.ammo, gateBonus: e.gateBonus, steerMult: e.steerMult, warnMult: e.warnMult, coinMult: e.coinMult };
+  return applyTactic(e, save.tactic);
 }
 
 function hudTitle(): string {
-  switch (save.mode) {
-    case 'defense':
-      return `防线 · 第 ${save.defenseLevel} 关${isBossLevel(save.defenseLevel) ? ' · Boss 关' : ''}`;
-    case 'endless':
-      return '无尽';
-    default:
-      return `冲锋 · 第 ${save.level} 关`;
-  }
+  const mode = world.spec.mode;
+  const level = world.spec.level;
+  if (mode === 'endless') return '无尽';
+  return `${practice ? '演练 · ' : ''}${mode === 'defense' ? '防线' : '冲锋'} · 第 ${level} 关${isBossLevel(level) ? ' · Boss 关' : ''}`;
 }
 
 function buildWorld() {
   runId++;
   slowmo = 0;
+  resumeAt = 0;
   const opts = upgradeOpts();
-  switch (save.mode) {
+  switch (practice?.mode ?? save.mode) {
     case 'defense':
-      world = new World(generateDefense(save.defenseLevel), opts);
+      world = new World(generateDefense(practice?.level ?? save.defenseLevel), opts);
       break;
     case 'endless': {
       const start = generateEndlessStart(Math.floor(Math.random() * 1e9));
@@ -239,7 +289,7 @@ function buildWorld() {
       break;
     }
     default:
-      world = new World(generateCampaign(save.level), opts);
+      world = new World(generateCampaign(practice?.level ?? save.level), opts);
   }
   world.squad.moving = false;
   renderer.loadLevel(world);
@@ -264,7 +314,7 @@ function startGame() {
   renderer.menu = false;
   world.squad.moving = !world.defense;
   ui.show('hud');
-  ui.tip(save.mode);
+  ui.tip(world.spec.mode);
   // 镜头甩到位以后打出开场横幅
   const bosses = world.spec.defense ? world.spec.defense.spawns.filter((sp) => sp.boss).length : world.bosses.length;
   const startedRun = runId;
@@ -292,20 +342,25 @@ function hapticsFor(events: GameEvent[]) {
   }
 }
 
-function finish() {
+function finish(retreated = false) {
+  if (resultShown) return;
   resultShown = true;
   // 钻石：这局拿到多少就存多少（输了也算）
-  save.gems += world.gems;
+  if (!practice) save.gems += world.gems;
   const won = world.state === 'won';
   const kills = world.kills;
-  save.kills += kills;
+  if (!practice) save.kills += kills;
   let info: ResultInfo;
-  const mode = save.mode;
-  const lostSub = world.bosses.some((b) => b.active) ? '差一点就打倒 Boss 了' : `打到了 ${Math.round(world.progress * 100)}%`;
-  const bossLeft = world.bosses.filter((b) => b.active).reduce((s, b) => s + Math.max(0, b.hp), 0);
-  const bossMax = world.bosses.reduce((s, b) => s + b.maxHp, 0);
+  const mode = world.spec.mode;
+  const lostSub = retreated ? '本局战斗收益已保留' : `打到了 ${Math.round(world.progress * 100)}%${world.bosses.some((b) => b.active && b.alive) ? ' · Boss 尚未击败' : ''}`;
+  const bossLeft = world.bosses.filter((b) => b.active && b.alive).reduce((s, b) => s + Math.max(0, b.hp), 0);
+  const bossMax = world.bosses.filter((b) => b.active && b.alive).reduce((s, b) => s + b.maxHp, 0);
 
-  if (mode === 'endless') {
+  if (practice) {
+    info = { mode, won, title: won ? '演练完成' : '演练结束', sub: `${hudTitle()} · 不消耗资源，不改变进度`,
+      stats: [['击杀', String(kills)], ['进度', `${Math.round(world.progress * 100)}%`]],
+      coins: 0, next: '再练一次', home: '返回主页', stars: null, practice: true };
+  } else if (mode === 'endless') {
     const dist = Math.floor(world.squad.d);
     const record = dist > save.endlessBest;
     save.endlessBest = Math.max(save.endlessBest, dist);
@@ -326,8 +381,8 @@ function finish() {
       stars: null,
     };
   } else {
-    const level = mode === 'defense' ? save.defenseLevel : save.level;
-    const reward = levelReward(level, won, world.coins, upgradeEffects(save.upgrades).coinMult);
+    const level = world.spec.level;
+    const reward = retreated ? { total: Math.floor(world.coins), bonus: 0 } : levelReward(level, won, world.coins, upgradeEffects(save.upgrades).coinMult, world.progress);
     const coins = reward.total;
     // Boss 关通关再给 1 颗钻石
     const bonusGems = won ? clearGems(level) : 0;
@@ -346,7 +401,7 @@ function finish() {
     save.coins += coins;
     // 金币明细：战斗里拿到的（击杀 + Boss 赏金）和通关/新手奖励
     const stats: [string, string][] = [['击杀', `${kills} · ${formatNumber(Math.floor(world.coins))} 金币`]];
-    if (reward.bonus > 0) stats.push([won ? (isBossLevel(level) ? 'Boss 关通关奖励' : '通关奖励') : '新手奖励', `+${formatNumber(reward.bonus)}`]);
+    if (reward.bonus > 0) stats.push([won ? (isBossLevel(level) ? 'Boss 关通关奖励' : '通关奖励') : (level <= 3 ? '新手 / 推进补给' : '推进补给'), `+${formatNumber(reward.bonus)}`]);
     if (world.gems + bonusGems > 0) stats.push(['钻石', `+${world.gems + bonusGems}`]);
     if (won) stats.push(['剩余兵力', String(world.squad.count)]);
     else if (world.bosses.some((b) => b.active)) stats.push(['Boss 剩余', `${Math.max(1, Math.round((bossLeft / Math.max(1, bossMax)) * 100))}%`]);
@@ -356,7 +411,7 @@ function finish() {
     info = {
       mode,
       won,
-      title: won ? '胜利' : '失败',
+      title: won ? '胜利' : retreated ? '撤退结算' : '失败',
       sub,
       stats,
       coins,
@@ -365,7 +420,11 @@ function finish() {
       stars: won ? (keep >= 0.6 ? 3 : keep >= 0.3 ? 2 : 1) : null,
     };
   }
-  writeSave(save);
+  const cause = world.stats.mainLoss;
+  if (cause) info.stats.push(['主要损兵', `${LOSS_INFO[cause].name} · ${world.stats.losses[cause]} 人`]);
+  info.advice = retreated ? '调整战术或升级后可重试；同一关的路线保持不变。' : world.stats.advice(won, !!world.defense);
+  info.detail = `接门 ${world.stats.gatesTaken} · 漏门 ${world.stats.gatesMissed} · 拆补给 ${world.stats.supplies} · 躲砸击 ${world.stats.dodges}`;
+  if (!practice) writeSave(save);
   phase = 'result';
   ui.showResult(info);
 }
@@ -384,7 +443,8 @@ function steerLimits(): [number, number] {
 app.addEventListener('pointerdown', (e) => {
   if ((e.target as HTMLElement).closest('button, .modal, .sheet-wrap')) return;
   sfx.unlock();
-  if (phase !== 'play') return;
+  if (phase !== 'play' || input.active || !e.isPrimary || e.button !== 0) return;
+  app.setPointerCapture(e.pointerId);
   input.active = true;
   input.pointerId = e.pointerId;
   input.startX = e.clientX;
@@ -393,7 +453,7 @@ app.addEventListener('pointerdown', (e) => {
 
 window.addEventListener('pointermove', (e) => {
   if (!input.active || e.pointerId !== input.pointerId) return;
-  const span = TRACK_HALF * 2 * DRAG_GAIN;
+  const span = TRACK_HALF * 2 * DRAG_GAIN * save.sensitivity;
   const dx = ((e.clientX - input.startX) / Math.max(1, window.innerWidth)) * span;
   const [lo, hi] = steerLimits();
   const raw = input.startTarget + dx;
@@ -410,8 +470,12 @@ const endPointer = (e: PointerEvent) => {
 };
 window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', endPointer);
+app.addEventListener('lostpointercapture', endPointer);
 
 window.addEventListener('keydown', (e) => {
+  if ((e.target as HTMLElement)?.matches('input, select, textarea')) return;
+  if (['ArrowLeft', 'ArrowRight', ' '].includes(e.key) && phase === 'play') e.preventDefault();
+  if (phase !== 'play' && phase !== 'paused' && phase !== 'menu') return;
   if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') input.left = true;
   if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') input.right = true;
   if ((e.key === ' ' || e.key === 'Enter') && phase === 'menu' && ui.screen === 'menu' && !ui.sheetOpen) {
@@ -438,6 +502,7 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 window.addEventListener('blur', () => {
+  if (phase === 'play') handlers.pause();
   input.active = false;
   input.left = false;
   input.right = false;
@@ -510,7 +575,8 @@ function frame(now: number) {
   const slow = slowmo > 0 ? 0.3 : 1;
   slowmo = Math.max(0, slowmo - dt);
   const gdt = dt * GAME_SPEED * slow;
-  if (phase === 'play') {
+  ui.resumeCountdown(phase === 'play' && now < resumeAt);
+  if (phase === 'play' && now >= resumeAt) {
     for (let k = 0; k < debug.speed; k++) {
       if (debug.autoplay) {
         input.target = bot.target(world);

@@ -10,7 +10,8 @@
     "test": "vitest run",
     "sim": "tsx scripts/sim.ts",
     "sim:progress": "tsx scripts/progress.ts",
-    "smoke": "tsx scripts/smoke.ts"
+    "smoke": "tsx scripts/smoke.ts",
+    "smoke:experience": "tsx scripts/experience-smoke.ts"
   },
   "dependencies": {
     "three": "^0.186.1"

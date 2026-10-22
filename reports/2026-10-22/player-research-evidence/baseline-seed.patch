@@ -1,0 +1,18 @@
+--- a/scripts/progress.ts
++++ b/scripts/progress.ts
+@@ -30,14 +30,13 @@
+ for (let p = first; p < first + players; p++) {
+   const up: UpgradeLevels = { soldiers: 0, damage: 0, rate: 0, income: 0, agility: 0 };
+   const wallet = { coins: 0, gems: 0 };
+-  let seed = 1000 * (p + 1);
+   for (let L = 1; L <= maxLevel; L++) {
+     let tries = 0;
+     let won = false;
+     const progress: number[] = [];
+     while (!won && tries < 12) {
+       tries++;
+-      const { w, peak } = play(L, up, seed++);
++      const { w, peak } = play(L, up, 100000 * (p + 1) + L * 100 + tries);
+       (peaks[L - 1] ??= []).push(peak);
+       won = w.state === 'won';
+       progress.push(Math.round(w.progress * 100));

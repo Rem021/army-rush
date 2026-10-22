@@ -1,0 +1,38 @@
+{
+  "receipts": [
+    {
+      "viewport": "390x844",
+      "practiceIsolation": true,
+      "resumeGrace": true,
+      "pointerOwnership": true,
+      "retreatOnce": true,
+      "saveReload": true,
+      "motionOverride": true,
+      "upgradePreview": true,
+      "controlsUnobscured": true
+    },
+    {
+      "viewport": "320x568",
+      "practiceIsolation": true,
+      "resumeGrace": true,
+      "pointerOwnership": true,
+      "retreatOnce": true,
+      "saveReload": true,
+      "motionOverride": true,
+      "upgradePreview": true,
+      "controlsUnobscured": true
+    },
+    {
+      "viewport": "844x390",
+      "practiceIsolation": true,
+      "resumeGrace": true,
+      "pointerOwnership": true,
+      "retreatOnce": true,
+      "saveReload": true,
+      "motionOverride": true,
+      "upgradePreview": true,
+      "controlsUnobscured": true
+    }
+  ],
+  "errors": []
+}
