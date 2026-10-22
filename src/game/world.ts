@@ -169,6 +169,8 @@ export interface Boss {
   attackD: number;
   attackLength: number;
   comboStep: number;
+  /** 已贴近队伍后保持连招，不因减员引起的阵型长度变化重新进入追赶阶段。 */
+  engaged: boolean;
   recover: number;
   smashes: number;
   timer: number;
@@ -230,7 +232,7 @@ export type GameEvent =
   | { type: 'explode'; x: number; d: number; r: number; source: 'exploder' | 'impact' | 'strike'; killed: number }
   | { type: 'giantSmash'; x: number; d: number; killed: number }
   | { type: 'bossStart'; bosses: Boss[] }
-  | { type: 'bossSmash'; boss: Boss; x: number; d: number; killed: number }
+  | { type: 'bossSmash'; boss: Boss; x: number; d: number; killed: number; combo: number }
   | { type: 'throw'; boss: Boss; proj: Projectile }
   | { type: 'hiveSpawn'; boss: Boss; count: number }
   | { type: 'bossDie'; boss: Boss; bounty: number }
@@ -400,6 +402,7 @@ export class World {
       attackD: 0,
       attackLength: 0,
       comboStep: 0,
+      engaged: false,
       recover: 0,
       smashes: 0,
       timer: this.rng() * 1.2,
@@ -1488,7 +1491,8 @@ export class World {
       const inLane = this.defense && b.d > DEFENSE_WALL_D + b.r;
       const lim = inLane ? 0.8 : double && !this.defense ? 0.9 : 4.5;
       const tx = Math.max(b.homeX - lim, Math.min(b.homeX + lim, sq.x));
-      b.x += Math.max(-1, Math.min(1, tx - b.x)) * 0.9 * dt;
+      // 蓄力和挥击时站稳，别在锁定危险带后横滑。
+      if (!b.attacking) b.x += Math.max(-1, Math.min(1, tx - b.x)) * 0.9 * dt;
       const reach = front + b.r + 0.5;
 
       if (b.kind === 'thrower' && b.fightTime < 22) {
@@ -1526,7 +1530,8 @@ export class World {
         }
       }
 
-      if (b.d > reach) {
+      if (b.d <= reach) b.engaged = true;
+      if (b.d > reach && !b.engaged) {
         // 防线里 Boss 从 60 多米外走过来，走快一点才有压迫感
         const pace = (b.kind === 'thrower' ? 2 : 1) * (this.defense ? (b.kind === 'brute' ? 1.5 : 2.2) : 1);
         b.d = Math.max(reach, b.d - def.speed * pace * rage * dt);
@@ -1534,6 +1539,8 @@ export class World {
         b.attacking = false;
         b.windup = Math.max(0, b.windup - dt * 2);
       } else {
+        // 阵型缩短时向前补位，但不打断已开始的五连击。
+        if (b.d > reach) b.d = Math.max(reach, b.d - def.speed * rage * dt);
         if (b.recover > 0) {
           b.recover = Math.max(0, b.recover - dt * rage);
           b.attacking = false;
@@ -1556,7 +1563,7 @@ export class World {
           b.smashes++;
           const frac = b.kind === 'hive' ? 0.05 : this.defense ? Math.min(0.28, 0.06 + 0.012 * b.smashes) : Math.min(0.38, 0.08 + 0.015 * b.smashes);
           const killed = this.killBossLane(b.attackX, b.attackD, BOSS_STRIKE_HALF, b.attackLength, Math.max(2, Math.ceil(sq.count * frac * step.damage)));
-          this.events.push({ type: 'bossSmash', boss: b, x: b.attackX, d: b.attackD, killed });
+          this.events.push({ type: 'bossSmash', boss: b, x: b.attackX, d: b.attackD, killed, combo: b.comboStep });
           b.attacking = false;
           b.recover = step.recover;
           b.comboStep = (b.comboStep + 1) % BOSS_COMBO.length;

@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { BOSSES, type BossKind, type SkinDef, type ZombieKind } from '../game/config';
 import type { Boss } from '../game/world';
+import { bossMotion } from './bossMotion';
 import type { LoadedModel, Models } from './assets';
 import { HpBar, formatNumber } from './label';
 import { bakeModel, staticGeometry, type BakedModel } from './vat';
@@ -283,14 +284,14 @@ const BOSS_SOURCE: Record<BossKind, { model: keyof Models; height: number; tint?
 };
 
 const DROP_TIME = 0.55;
-/** 攻击动作里出手（拳头砸下、棒子挥出、咬下去）大约在整段的哪个位置 */
-const IMPACT = 0.5;
-
 /** 用外部模型的 Boss：骨骼动画（只有一两个，直接用 AnimationMixer） */
 export class ModelBossView {
   readonly root = new THREE.Group();
   private readonly mixer: THREE.AnimationMixer;
   private readonly actions: Record<'walk' | 'idle' | 'attack' | 'death' | 'hit', THREE.AnimationAction | null>;
+  private readonly attackVariants: [THREE.AnimationAction | null, THREE.AnimationAction | null];
+  private attackIndex = -1;
+  private lastMotion: 'none' | 'windup' | 'release' = 'none';
   private current: THREE.AnimationAction | null = null;
   private readonly materials: THREE.MeshLambertMaterial[] = [];
   private readonly bar = new HpBar(360, 96);
@@ -298,6 +299,8 @@ export class ModelBossView {
   private dropT = -1;
   private landed = false;
   private deathT = 0;
+  private lastX: number;
+  private lastD: number;
   readonly scale: number;
 
   constructor(
@@ -342,12 +345,20 @@ export class ModelBossView {
       death: find(['Death']),
       hit: find(['HitReact', 'HitRecieve']),
     };
+    const attack = this.actions.attack;
+    // 连击交替使用同一段动作的两个实例，上一击收势可与下一击起手交叉淡化。
+    this.attackVariants = [attack, attack ? this.mixer.clipAction(attack.getClip().clone()) : null];
     for (const k of ['attack', 'death', 'hit'] as const) {
       const a = this.actions[k];
       if (a) {
         a.setLoop(THREE.LoopOnce, 1);
         a.clampWhenFinished = true;
       }
+    }
+    const secondAttack = this.attackVariants[1];
+    if (secondAttack) {
+      secondAttack.setLoop(THREE.LoopOnce, 1);
+      secondAttack.clampWhenFinished = true;
     }
     this.play(this.actions.idle);
 
@@ -358,6 +369,8 @@ export class ModelBossView {
     this.hpSprite.position.y = src.height + 0.9;
     this.root.add(this.hpSprite);
     this.root.position.set(boss.x, 0, -boss.d);
+    this.lastX = boss.x;
+    this.lastD = boss.d;
     if (dropIn) this.dropT = 0;
     scene.add(this.root);
   }
@@ -380,6 +393,9 @@ export class ModelBossView {
 
   update(dt: number, time: number) {
     const b = this.boss;
+    const moving = dt > 0 && Math.hypot(b.x - this.lastX, b.d - this.lastD) / dt > 0.12;
+    this.lastX = b.x;
+    this.lastD = b.d;
     // 狂暴后动作也快一点
     this.mixer.timeScale = b.enraged ? 1.3 : 1;
     let drop = 0;
@@ -398,6 +414,7 @@ export class ModelBossView {
 
     if (!b.alive) {
       this.deathT += dt;
+      for (const attack of this.attackVariants) if (attack) attack.paused = false;
       this.play(this.actions.death, 0.1);
       this.hpSprite.visible = false;
       this.root.position.y = -Math.max(0, this.deathT - 1.4) * 0.8;
@@ -407,24 +424,18 @@ export class ModelBossView {
     }
 
     this.bar.set(b.hp / b.maxHp, formatNumber(Math.max(0, Math.ceil(b.hp))), '#e3262f', BOSSES[b.kind].name);
-    // 贴脸攻击（三种 Boss 都会）和投弹屠夫扔油桶：攻击动画按蓄力进度直接“拖”到对应的帧——
-    // 蓄力时播到出手前，砸下去/扔出去那一刻正好出手，然后把收势播完。以前靠捕捉“砸地那一下”触发，经常漏掉
-    const throwing = b.kind === 'thrower' && !b.attacking && b.fightTime < 22 && (b.windup > 0.05 || b.slam > 0.05);
-    const attack = this.actions.attack;
-    if ((b.attacking || throwing) && attack) {
-      if (this.current !== attack) {
-        attack.reset().play();
-        if (this.current) attack.crossFadeFrom(this.current, 0.12, false);
-        this.current = attack;
-      }
+    const motion = bossMotion(b);
+    if (motion.kind === 'windup' && this.lastMotion !== 'windup') this.attackIndex = (this.attackIndex + 1) % 2;
+    const attack = this.attackVariants[Math.max(0, this.attackIndex)];
+    if (motion.kind !== 'none' && attack) {
+      this.play(attack, this.lastMotion === 'release' ? 0.1 : 0.14);
       attack.paused = true;
-      const k = b.slam > 0.05 ? IMPACT + (1 - b.slam) * (1 - IMPACT) : Math.min(IMPACT, b.windup * IMPACT);
-      attack.time = k * attack.getClip().duration;
+      attack.time = motion.phase * attack.getClip().duration;
     } else {
-      if (attack) attack.paused = false;
-      const moving = b.active && !b.attacking && (b.kind !== 'thrower' || b.windup < 0.05);
-      this.play(moving ? this.actions.walk : this.actions.idle);
+      for (const variant of this.attackVariants) if (variant) variant.paused = false;
+      this.play(moving ? this.actions.walk : this.actions.idle, 0.18);
     }
+    this.lastMotion = motion.kind;
     this.mixer.update(dt);
   }
 

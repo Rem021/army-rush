@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { BOSSES, BOSS_STRIKE_HALF, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
 import type { Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
+import { bossMotion, bossPose } from './bossMotion';
 import { HpBar, Label, formatNumber, labelPlane, labelSprite } from './label';
 import { barrelGeometry, coinGeometry, gunGeometry, tiresGeometry, tiresHeight } from './models';
 import {
@@ -450,6 +451,9 @@ export class BossView {
   /** 从天而降：-1 表示不播 */
   private dropT = -1;
   private landed = false;
+  private lastX: number;
+  private lastD: number;
+  private walkBlend = 0;
   readonly scale: number;
 
   constructor(
@@ -470,6 +474,8 @@ export class BossView {
     this.hpSprite.renderOrder = 20;
     this.rig.hpAnchor.add(this.hpSprite);
     this.rig.root.position.set(boss.x, 0, -boss.d);
+    this.lastX = boss.x;
+    this.lastD = boss.d;
     scene.add(this.rig.root);
   }
 
@@ -487,6 +493,10 @@ export class BossView {
 
   update(dt: number, time: number) {
     const { rig, boss } = this;
+    const moving = dt > 0 && Math.hypot(boss.x - this.lastX, boss.d - this.lastD) / dt > 0.12;
+    this.lastX = boss.x;
+    this.lastD = boss.d;
+    const motion = bossMotion(boss);
     let drop = 0;
     if (this.dropT >= 0) {
       const k = this.dropT / DROP_TIME;
@@ -518,8 +528,9 @@ export class BossView {
     }
 
     this.bar.set(boss.hp / boss.maxHp, formatNumber(Math.max(0, Math.ceil(boss.hp))), '#e3262f', BOSSES[boss.kind].name);
-    const walking = boss.active && !boss.attacking && boss.kind !== 'thrower' ? 1 : boss.kind === 'thrower' && boss.active ? 0.4 : 0;
-    const walk = Math.sin(boss.phase) * walking;
+    const walking = motion.kind === 'none' && moving ? (boss.kind === 'thrower' ? 0.4 : 1) : 0;
+    this.walkBlend += (walking - this.walkBlend) * Math.min(1, dt * 9);
+    const walk = Math.sin(boss.phase) * this.walkBlend;
     rig.legL.rotation.x = walk * 0.55;
     rig.legR.rotation.x = -walk * 0.55;
     rig.body.position.y = Math.abs(walk) * 0.06;
@@ -532,27 +543,26 @@ export class BossView {
       rig.armR.rotation.z = -Math.sin(time * 2 + 1) * 0.4;
     }
 
-    if (boss.kind === 'thrower' && !boss.attacking) {
-      // 蓄力把油桶举到身后，扔出去后手往前甩
-      const w = boss.windup;
-      rig.armR.rotation.x = -w * 2.6 + boss.slam * 1.4;
+    if (boss.kind === 'thrower' && !boss.attacking && boss.fightTime < 22) {
+      const pose = bossPose(motion.phase);
+      rig.armR.rotation.x = motion.kind === 'none' ? walk * 0.5 : pose.arm;
       rig.armL.rotation.x = Math.sin(time * 2) * 0.2;
       if (rig.drum) rig.drum.visible = this.throwT > 0.5;
-      rig.body.rotation.x = w * 0.12 - boss.slam * 0.2;
+      rig.body.rotation.x = motion.kind === 'none' ? 0 : pose.body;
+      rig.body.position.y += pose.lift;
       return;
     }
 
-    if (boss.attacking) {
-      const w = boss.windup;
-      const raise = w < 0.75 ? w / 0.75 : 1 - (w - 0.75) / 0.25;
-      const armX = -raise * 2.6 + boss.slam * 0.6;
-      rig.armL.rotation.x = armX;
-      rig.armR.rotation.x = armX;
-      rig.body.rotation.x = raise * 0.18 - boss.slam * 0.25;
-    } else if (boss.kind !== 'hive') {
+    if (motion.kind !== 'none') {
+      const pose = bossPose(motion.phase);
+      rig.armL.rotation.x = pose.arm;
+      rig.armR.rotation.x = pose.arm;
+      rig.body.rotation.x = pose.body;
+      rig.body.position.y += pose.lift;
+    } else {
       rig.armL.rotation.x = -walk * 0.5;
       rig.armR.rotation.x = walk * 0.5;
-      rig.body.rotation.x = -boss.slam * 0.25;
+      rig.body.rotation.x = 0;
     }
   }
 
