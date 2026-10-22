@@ -151,12 +151,17 @@ export const TUNING = {
   /** 巨尸血量 = 估算秒伤 × 这个秒数 */
   giantSeconds: (L: number) => Math.min(6, 2.2 + 0.3 * L),
   /** Boss 总血量 = 估算秒伤 × 这个秒数 */
-  bossSeconds: (L: number) => Math.min(22, 10 + 0.9 * L),
-  addGate: (L: number) => 2 + Math.floor(L * 0.4),
+  bossSeconds: (L: number) => L === 1 ? 8.5 : Math.min(22, 10 + 0.9 * L),
+  addGate: (L: number) => 1 + Math.floor(L / 5),
   badGate: (L: number) => 5 + Math.floor(L * 1.5),
   /** 到 Boss 时的基准兵力（按正常升级的玩家校准） */
-  baseline: (L: number) => 30 + 7 * L,
+  baseline: (L: number) => 17 + 4 * L,
 };
+
+/** 人质笼只补少量兵力，避免队伍越大、奖励越滚越多。 */
+function cageSoldiers(L: number, count: number): number {
+  return Math.max(1, Math.round(1 + L / 3 + count * 0.025));
+}
 
 /**
  * 难度曲线：关卡进度 p 处“应该”有的兵力。尸潮、桶、巨尸、Boss 都按它来定规模，
@@ -322,7 +327,7 @@ export function generateEndlessStart(seed: number): { spec: LevelSpec; gen: Gen;
 function opening(g: Gen, d: number): number {
   const { rng, L } = g;
   if (g.base) g.E = g.base(d);
-  const a = TUNING.addGate(L) + 1;
+  const a = Math.max(3, TUNING.addGate(L) + 1);
   const b = Math.max(1, Math.round(a / 3));
   const group = g.group++;
   const [left, right] = rng() < 0.5 ? [a, b] : [b, a];
@@ -383,7 +388,7 @@ export const DEFENSE_TUNING = {
   stopD: 19,
   spacing: 8.5,
   /** 打到最后时的基准兵力，用来算“预期火力” */
-  baseline: (L: number) => 85 + 20 * (L - 1),
+  baseline: (L: number) => 44 + 11 * (L - 1),
   /** 持续尸潮要吃掉参考火力的几成（每秒刷出的总血量 / 参考火力）；封顶 0.72，留出打障碍和 Boss 的余量 */
   pressure: (L: number, p: number) => Math.min(0.72, (0.25 + 0.35 * p) * (1 + 0.055 * (L - 1))),
   /** 每秒刷几只 */
@@ -396,21 +401,21 @@ export const DEFENSE_TUNING = {
   /** 一大波的总血量 = 这么多秒的持续尸潮（人数多，单只血量相应摊薄） */
   waveSeconds: (L: number, p: number) => 4.5 + 4 * p + 0.15 * L,
   waveSize: (L: number, p: number) => Math.round(10 + 3 * L + 26 * p),
-  bossSeconds: (L: number) => Math.min(30, 16 + 1.1 * L) * Math.pow(0.9, Math.max(0, L - 8)),
+  bossSeconds: (L: number) => Math.min(24, 12 + L) * Math.pow(0.85, Math.max(0, L - 7)),
   /** 中途一批批来的 Boss：几只、每只要全力打几秒 */
   midBosses: (L: number) => (L === 1 ? 1 : L <= 4 ? 2 : 3),
   midSeconds: (L: number) => Math.min(18, 9 + 0.6 * L),
   /** 关底的预期火力（每秒伤害）；第 5 关起多涨一截，后面的关要靠永久升级 */
-  /** 局外升级有进化、金币倍数，成长很快，难度每关都涨 25%；中段（进化集中解锁的那几关）再多加一点 */
-  expectedEnd: (L: number) => 12500 * DEFENSE_TUNING.scale * Math.pow(1.25, Math.min(L - 1, 8)) * Math.pow(1.17, Math.max(0, L - 9)) * (1 + 0.03 * Math.min(L - 1, 8)) * sawtooth(L) * pacing(L),
+  /** 局外升级有进化、金币倍数；低人数上限下每关参考火力先涨 20%，中段再加一点。 */
+  expectedEnd: (L: number) => 12500 * DEFENSE_TUNING.scale * Math.pow(1.2, Math.min(L - 1, 8)) * Math.pow(1.15, Math.max(0, L - 9)) * (1 + 0.03 * Math.min(L - 1, 8)) * sawtooth(L) * pacing(L),
   /** 整体难度系数；缩小门和障碍的增兵后，按成长模拟重新校准 */
-  scale: 0.29,
+  scale: 0.08,
   /**
    * 第 seg 个大障碍的血量：第一个很好打（开局一个人几秒打掉），之后一个比一个高一大截——
    * 前面每个约是上一个的 3.7 倍，往后慢慢降到约 2.5 倍。门道打得越深越难，后面的障碍要硬拆就得放着尸潮不管
    */
   blockerHp: (L: number, seg: number) => {
-    let hp = 40 * DEFENSE_TUNING.blockerScale * Math.pow(1.25, L - 1) * pacing(L) * sawtooth(L);
+    let hp = 40 * DEFENSE_TUNING.blockerScale * Math.pow(1.2, L - 1) * pacing(L) * sawtooth(L);
     for (let i = 0; i < seg; i++) hp *= DEFENSE_TUNING.blockerGrowth + 1.2 * Math.exp(-i / 3);
     return hp;
   },
@@ -436,7 +441,7 @@ function pacing(L: number): number {
  * 锯齿形难度：每 5 关一个 Boss 关，下一关放松 12%。
  * Boss 关的加成看是哪对 Boss：带投弹手的两对（炸弹圈一炸一片）本身就难，加成小一点
  */
-const BOSS_LEVEL_HARD = [1.2, 1.1, 1.12];
+const BOSS_LEVEL_HARD = [1.22, 1.1, 1.12];
 function sawtooth(L: number): number {
   if (isBossLevel(L)) return BOSS_LEVEL_HARD[(L / 5 - 1) % 3];
   return isRestLevel(L) ? 0.88 : 1;
@@ -516,7 +521,7 @@ export function generateDefense(level: number): LevelSpec {
       tier = Math.min(topTier, tier + 1);
       spec.barrels.push({ x: gx, d, r, hp, reward: { kind: 'weapon', tier }, look: 'tires', block: true });
     } else if (kind === 'armor') {
-      spec.barrels.push({ x: gx, d, r, hp, reward: { kind: 'soldiers', amount: Math.round(3 + L + seg * 1.5) }, look: 'armor', block: true });
+      spec.barrels.push({ x: gx, d, r, hp, reward: { kind: 'soldiers', amount: Math.round(1 + L / 2 + seg * 0.5) }, look: 'armor', block: true });
     } else if (kind === 'strike') {
       spec.barrels.push({ x: gx, d, r, hp, reward: { kind: 'airstrike' }, look: 'crate', block: true });
     } else {
@@ -533,13 +538,13 @@ export function generateDefense(level: number): LevelSpec {
         const bonus = bonusCycle[(seg - 1) % bonusCycle.length];
         gate =
           bonus === 'mul'
-            ? { kind: 'mul', x0: gx0, x1: gx1, d, value: 1.5, group: g.group++ }
+            ? { kind: 'mul', x0: gx0, x1: gx1, d, value: 1.25, group: g.group++ }
             : bonus === 'rate'
               ? { kind: 'rate', x0: gx0, x1: gx1, d, value: randInt(rng, 2, 6) * 2, group: g.group++ }
               : { kind: 'weapon', x0: gx0, x1: gx1, d, value: Math.max(1, tier), group: g.group++ };
       } else {
         // 门道全是正门（越往后数字越大），朝它开枪还能再往上打
-        const value = TUNING.addGate(L) + randInt(rng, 0, 2) + Math.min(5, Math.floor(seg / 4));
+        const value = TUNING.addGate(L) + 1 + randInt(rng, 0, 1) + Math.min(3, Math.floor(seg / 5));
         gate = { kind: 'add', x0: gx0, x1: gx1, d, value, group: g.group++ };
       }
       g.spec.gates.push(gate);
@@ -586,10 +591,7 @@ export function baselineDefense(L: number, p: number): number {
   return 3 + (DEFENSE_TUNING.baseline(L) - 3) * Math.pow(q, 1.2);
 }
 
-/**
- * 防线某时刻的“预期火力”（每秒伤害），按自动驾驶（不买永久升级、会用战场商店）实测的中位数拟合：
- * 关底约 12000 × (1 + 0.35×(关卡−1))，随进度大约平方增长。
- */
+/** 防线某时刻的参考火力，随关卡和进度增长；具体曲线由成长模拟校准。 */
 export function expectedDefenseDps(L: number, p: number): number {
   const end = (globalThis as { __expScale?: number }).__expScale ?? DEFENSE_TUNING.expectedEnd(L);
   return Math.max(60, end * Math.pow(Math.max(0, Math.min(1, p)), 1.8));
@@ -646,7 +648,7 @@ function triad(g: Gen, d: number, mood: 'easy' | 'normal' = 'normal'): number {
   const bad = -(TUNING.badGate(L) + randInt(rng, 0, 4));
   const patterns: [GateOpt[], number][] = [
     [[{ kind: 'add', value: good }, { kind: 'add', value: bad }], 3],
-    [[{ kind: 'add', value: good * 2 }, { kind: 'mul', value: 2 }], 1.4],
+    [[{ kind: 'add', value: good * 2 }, { kind: 'mul', value: 1.5 }], 1.4],
     [[{ kind: 'add', value: Math.round(bad * 0.6) }, { kind: 'add', value: Math.round(bad * 0.4) }], mood === 'easy' ? 0 : 1],
   ];
   if (feats.weaponGates && g.tier < g.topTier) {
@@ -677,13 +679,13 @@ function sideHorde(g: Gen, d: number): number {
   const roll = rng();
   let gate: GateOpt;
   if (feats.weaponGates && g.tier < g.topTier && roll < 0.3) gate = { kind: 'weapon', value: Math.max(1, g.tier) };
-  else if (roll < 0.55 && L >= 3) gate = { kind: 'mul', value: 2 };
+  else if (roll < 0.55 && L >= 3) gate = { kind: 'mul', value: 1.5 };
   else gate = { kind: 'add', value: TUNING.addGate(L) + randInt(rng, 0, 3) };
   g.spec.gates.push({ ...gate, x0: gx0, x1: gx0 + TRACK_HALF, d: gd, group: g.group++ });
   const hx0 = side < 0 ? 0.2 : -TRACK_HALF + 0.2;
   const count = hordeSize(g, 1);
   horde(g, hx0, hx0 + TRACK_HALF - 0.4, d + 4, count, mix(g));
-  const amount = Math.round(2 + L + g.E * 0.08);
+  const amount = cageSoldiers(L, g.E);
   addBarrel(g, -side * HALVES[1], d + 26, crateHp(g, 0.8), { kind: 'soldiers', amount });
   const gateSide = outcomePower(g, gate);
   const hordeSideE = g.E + amount * 0.8 - count * TUNING.leak(L) * 1.2;
@@ -738,9 +740,9 @@ function pickLane(g: Gen, d: number): number {
   const riskyCount = hordeSize(g, 1.15);
   horde(g, r0 + 0.3, r1 - 0.3, d + 4, riskyCount, mix(g));
   if (feats.giant && g.E >= 25 && rng() < 0.4) addGiant(g, (r0 + r1) / 2, d + 16, 0.6);
-  const amount = Math.round(2 + L + g.E * 0.08);
+  const amount = cageSoldiers(L, g.E);
   addBarrel(g, (r0 + r1) / 2, d + 28, crateHp(g, 0.7), { kind: 'soldiers', amount });
-  const mul = L >= 6 && rng() < 0.3 ? 2 : 1.5;
+  const mul = L >= 6 && rng() < 0.3 ? 1.5 : 1.25;
   g.spec.gates.push({ kind: 'mul', x0: r0, x1: r1, d: d + 44, value: mul, group: g.group++ });
   const riskyLoss = riskyCount * TUNING.leak(L) * 1.3 * Math.max(0.5, Math.min(2.5, riskyCount / Math.max(1, start.E)));
   const riskyE = Math.max(1, start.E - riskyLoss + amount * 0.7) * mul;
@@ -774,7 +776,7 @@ function crateRow(g: Gen, d: number, force?: ('weapon' | 'cage' | 'airstrike' | 
       addBarrel(g, x, dd, crateHp(g, 0.45 + 0.08 * tier), { kind: 'weapon', tier });
       g.tier = tier;
     } else if (k === 'cage') {
-      const amount = Math.round(2 + L + g.E * 0.08);
+      const amount = cageSoldiers(L, g.E);
       addBarrel(g, x, dd, crateHp(g, 0.8), { kind: 'soldiers', amount });
       g.E += amount * 0.5;
     } else if (k === 'airstrike') {
@@ -866,7 +868,7 @@ function finale(g: Gen, length: number, kinds?: BossKind[], hpMul = 1) {
   if (g.tier < g.topTier) crateRow(g, length - 78, ['weapon']);
   // 乘法门与大加门：队伍较大时乘法门更划算
   if (g.base) g.E = g.base(length - 46);
-  const mul = L >= 8 ? 2 : 1.5;
+  const mul = L >= 8 ? 1.5 : 1.25;
   const big = Math.max(TUNING.addGate(L) * 2, Math.round(g.E * (mul - 1) * 0.7));
   pairGates(g, length - 46, { kind: 'mul', value: mul }, { kind: 'add', value: big });
   const bossKinds = kinds ?? campaignBosses(L);

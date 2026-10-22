@@ -366,7 +366,7 @@ export class World {
       this.gates.push({ ...g, value, id: this.nextId++, hits: 0, consumed: false, taken: false, bump: 0 });
     }
     for (const b of spec.barrels) {
-      const reward: Reward = b.reward.kind === 'weapon' && b.reward.tier <= start ? { kind: 'soldiers', amount: 3 + this.spec.level } : b.reward;
+      const reward: Reward = b.reward.kind === 'weapon' && b.reward.tier <= start ? { kind: 'soldiers', amount: 1 + Math.ceil(this.spec.level / 3) } : b.reward;
       const look = reward !== b.reward && b.look === 'tires' ? 'armor' : b.look;
       this.barrels.push({ ...b, reward, look, id: this.nextId++, maxHp: b.hp, alive: true, bump: 0, armed: false, priced: false });
     }
@@ -587,7 +587,8 @@ export class World {
         const pair = spawns.filter((x) => x.boss && Math.abs(x.t - sp.t) <= 2).length > 1;
         b.final = final;
         b.pair = pair;
-        const seconds = final ? DEFENSE_TUNING.bossSeconds(L) * (pair ? 0.6 : 1) : DEFENSE_TUNING.midSeconds(L);
+        const pairFactor = pair ? Math.max(0.3, 0.6 - 0.06 * Math.max(0, L - 5)) : 1;
+        const seconds = final ? DEFENSE_TUNING.bossSeconds(L) * pairFactor : DEFENSE_TUNING.midSeconds(L);
         // 防线里巨尸王会冲到脸上，尸巢母体站得远，血量按种类修正一下
         const kindHp = b.kind === 'brute' ? 0.75 : b.kind === 'hive' ? 1.35 : 1;
         b.maxHp = b.hp = Math.max(300 * L, Math.round(ref * seconds * kindHp));
@@ -1449,8 +1450,8 @@ export class World {
       this.coins += bounty;
       this.addGems(bossGems(b.final, this.rng()), b.x, b.d);
       this.events.push({ type: 'bossDie', boss: b, bounty });
-      // 防线中途的 Boss：打死了来一批援军（至少 8 人，大部队加 12%）
-      if (this.defense && !b.final) this.applyReward({ kind: 'soldiers', amount: Math.max(4, Math.round(this.squad.count * 0.06)) }, b.x, b.d);
+      // 防线中途 Boss 只补少量援军，避免多轮 Boss 后兵力滚雪球。
+      if (this.defense && !b.final) this.applyReward({ kind: 'soldiers', amount: Math.max(2, Math.round(this.squad.count * 0.025)) }, b.x, b.d);
       for (const z of this.zombies) if (z.alive && z.owner === b.id) this.killZombie(z);
       // 防线模式要等全部刷完、清干净才算赢（在 step 里判断）
       if (!this.defense && this.bosses.every((x) => !x.alive)) this.win();
