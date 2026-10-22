@@ -18,9 +18,9 @@ export const SQUAD_STEER = 14;
 export const FORMATION_SPACING = 0.36;
 /** 最多真正渲染和模拟的士兵数，超出部分只计数 */
 export const MAX_SOLDIERS_SIM = 320;
-/** 冲锋与无尽的人数上限；防线队伍纵向排布，沿用较高的上限。 */
-export const MAX_COUNT = 280;
-export const MAX_DEFENSE_COUNT = 9999;
+/** 防止增兵连续叠加后挤满桥面；防线纵向排布，允许稍大的队伍。 */
+export const MAX_COUNT = 60;
+export const MAX_DEFENSE_COUNT = 64;
 
 export const BULLET_SPEED = 62;
 export const BULLET_RANGE = 44;
@@ -28,9 +28,9 @@ export const BULLET_RANGE = 44;
 export const EMIT_CAP = 48;
 
 /** 门被打一次加 1 需要的命中数：负数时恒定，正数时按指数变难，所以射门收益是对数增长 */
-export const GATE_GROWTH = 1.23;
+export const GATE_GROWTH = 1.32;
 export function gateBaseStep(level: number): number {
-  return 4.5 + 0.2 * (level - 1);
+  return 6.5 + 0.3 * (level - 1);
 }
 export function gateStep(level: number, value: number): number {
   return gateBaseStep(level) * (value > 0 ? Math.pow(GATE_GROWTH, value) : 1);

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Bot } from '../src/game/bot';
-import { BOSS_COMBO, LANE_HALF, THROW_RADIUS, TRACK_HALF, UPGRADES, WEAPONS, ZOMBIES, upgradeEffects } from '../src/game/config';
+import { BOSS_COMBO, LANE_HALF, MAX_COUNT, MAX_DEFENSE_COUNT, THROW_RADIUS, TRACK_HALF, UPGRADES, WEAPONS, ZOMBIES, upgradeEffects } from '../src/game/config';
 import { levelReward, spendGreedy } from '../src/game/economy';
 import { generateCampaign, generateDefense, generateEndlessStart, type LevelSpec } from '../src/game/level';
 import { mulberry32 } from '../src/game/rng';
@@ -87,13 +87,25 @@ describe('关卡生成', () => {
     expect(generateDefense(3).defense).not.toBeNull();
     expect(generateEndlessStart(1).spec.length).toBe(Infinity);
   });
+
+  it('加人门和障碍奖励保持小额，人数上限防止连续叠加', () => {
+    const rush = generateCampaign(1);
+    const cages = rush.barrels.filter((b) => b.reward.kind === 'soldiers');
+    expect(cages.length).toBeGreaterThan(0);
+    expect(Math.max(...cages.map((b) => b.reward.kind === 'soldiers' ? b.reward.amount : 0))).toBeLessThanOrEqual(3);
+    const defense = generateDefense(1);
+    const firstArmor = defense.barrels.find((b) => b.reward.kind === 'soldiers');
+    expect(firstArmor?.reward).toMatchObject({ kind: 'soldiers', amount: 3 });
+    expect(Math.max(...defense.gates.filter((g) => g.kind === 'add').slice(0, 3).map((g) => g.value))).toBeLessThanOrEqual(3);
+    expect(MAX_COUNT).toBeLessThan(MAX_DEFENSE_COUNT);
+  });
 });
 
 describe('门', () => {
   it('冲锋的大型乘法门不会让队伍失去横向闪避空间', () => {
     const w = new World(emptySpec({ gates: [{ kind: 'mul', x0: -TRACK_HALF, x1: TRACK_HALF, d: 10, value: 4, group: 0 }] }), { ...opts, startSoldiers: 100, rateMult: 0 });
     run(w, 1.5);
-    expect(w.squad.count).toBe(280);
+    expect(w.squad.count).toBe(MAX_COUNT);
     expect(w.halfWidth).toBeLessThanOrEqual(2.3);
     run(w, 0.6, 4);
     expect(w.squad.x).toBeGreaterThan(3);
@@ -321,11 +333,12 @@ describe('模式', () => {
 describe('防线', () => {
   it('队伍不动，门滑过来；中途的 Boss 死了不算赢', () => {
     const spec = generateDefense(4);
-    const w = new World(spec, { startSoldiers: 400, damageMult: 30, rateMult: 2 });
+    const w = new World(spec, { startSoldiers: MAX_DEFENSE_COUNT, damageMult: 30, rateMult: 2 });
+    const bot = new Bot(mulberry32(1));
     let midBossDead = false;
     let passed = 0;
     for (let t = 0; t < 200 && w.state === 'run'; t += 1 / 30) {
-      w.setTarget(spec.defense!.gateSide * 2.7);
+      w.setTarget(bot.target(w));
       w.update(1 / 30);
       for (const e of w.drainEvents()) {
         if (e.type === 'bossDie' && w.time < spec.defense!.duration - 1) midBossDead = true;
@@ -388,7 +401,7 @@ describe('防线', () => {
 
   it('死一个人只有补位的那个人挪动，整队不会跟着换位置', () => {
     const spec = emptySpec({ length: Infinity, defense: { conveyor: 6, spawnD: 60, stopD: 10, gateSide: 1, duration: 300, spawns: [] } });
-    const w = new World(spec, { startSoldiers: 120, damageMult: 1, rateMult: 0 });
+    const w = new World(spec, { startSoldiers: MAX_DEFENSE_COUNT, damageMult: 1, rateMult: 0 });
     run(w, 2, 2.7);
     const before = w.soldiers.map((s) => ({ s, x: s.ox, z: s.oz }));
     w['killSoldier'](10);
@@ -478,7 +491,7 @@ describe('Boss 惩罚、子弹和升级进化', () => {
     emptySpec({ length: Infinity, defense: { conveyor: 6, spawnD: 60, stopD: 10, gateSide: 1, duration: 300, spawns: [] }, ...over });
 
   it('油桶落地：红圈里的兵全部炸死，防线里也会炸', () => {
-    const w = new World(defenseSpec(), { startSoldiers: 120, damageMult: 1, rateMult: 0 });
+    const w = new World(defenseSpec(), { startSoldiers: MAX_DEFENSE_COUNT, damageMult: 1, rateMult: 0 });
     run(w, 1.5, 2.7);
     const x = w.squad.x;
     const d = w.squad.d - 2;
@@ -489,7 +502,7 @@ describe('Boss 惩罚、子弹和升级进化', () => {
     w.update(1 / 60);
     const boom = w.drainEvents().find((e) => e.type === 'explode');
     expect(boom && boom.type === 'explode' && boom.killed).toBe(before);
-    expect(w.squad.count).toBe(120 - before);
+    expect(w.squad.count).toBe(MAX_DEFENSE_COUNT - before);
   });
 
   it('防线里子弹不会被 Boss 吸走，一律直着飞', () => {

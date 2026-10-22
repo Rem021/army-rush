@@ -15,15 +15,18 @@ const first = Number(process.argv[5] ?? 0);
 function play(L: number, up: UpgradeLevels, seed: number) {
   const w = new World(generateDefense(L), { ...upgradeEffects(up), seed });
   const bot = new Bot(mulberry32(seed * 7919 + 13), mistake);
+  let peak = w.squad.count;
   while (w.state === 'run' && w.time < 400) {
     w.setTarget(bot.target(w));
     w.update(1 / 30);
+    peak = Math.max(peak, w.squad.count);
     w.drainEvents();
   }
-  return w;
+  return { w, peak };
 }
 
 const table: string[][] = [];
+const peaks: number[][] = [];
 for (let p = first; p < first + players; p++) {
   const up: UpgradeLevels = { soldiers: 0, damage: 0, rate: 0, income: 0, agility: 0 };
   const wallet = { coins: 0, gems: 0 };
@@ -34,7 +37,8 @@ for (let p = first; p < first + players; p++) {
     const progress: number[] = [];
     while (!won && tries < 12) {
       tries++;
-      const w = play(L, up, seed++);
+      const { w, peak } = play(L, up, seed++);
+      (peaks[L - 1] ??= []).push(peak);
       won = w.state === 'won';
       progress.push(Math.round(w.progress * 100));
       wallet.coins += levelReward(L, won, w.coins, upgradeEffects(up).coinMult).total;
@@ -49,3 +53,7 @@ for (let p = first; p < first + players; p++) {
 }
 console.log(`失误率 ${mistake}，玩家 ${first + 1}–${first + players}。每格：第几次过关(每次打到的进度%) 过关后升级等级`);
 table.forEach((row, i) => console.log(`第 ${String(i + 1).padStart(2)} 关  ${row.join('  |  ')}`));
+peaks.forEach((values, i) => {
+  const sorted = [...values].sort((a, b) => a - b);
+  console.log(`@peak,${i + 1},${sorted[Math.floor(sorted.length / 2)]},${sorted[Math.ceil(sorted.length * 0.9) - 1]},${sorted.at(-1)}`);
+});
