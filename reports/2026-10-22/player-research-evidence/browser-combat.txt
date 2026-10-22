@@ -1,0 +1,23 @@
+
+> army-rush@0.1.0 smoke
+> tsx scripts/smoke.ts http://127.0.0.1:5177/army-rush/ work/shots/player-combat-final
+
+{
+  "fpsRun": 61,
+  "fpsBoss": 61,
+  "fpsDouble": 61,
+  "state1": {
+    "mode": "defense",
+    "state": "run",
+    "count": 1,
+    "d": 0,
+    "t": 8
+  },
+  "state2": {
+    "state": "won",
+    "count": 41,
+    "kills": 18,
+    "level": 2,
+    "coins": 1694
+  }
+}

@@ -213,7 +213,7 @@ export interface Gen {
   feats: Feats;
   /** 尸潮人数额外倍数（无尽模式随距离上涨） */
   hordeMul: number;
-  /** 给定位置的基准兵力；无尽模式为 null，用实际兵力 */
+  /** 给定位置的基准兵力；无尽模式为 null，由距离预算和生成器维护 */
   base: ((d: number) => number) | null;
   /** 丧尸血量额外倍数（无尽模式随距离上涨） */
   hpMul: number;
@@ -314,7 +314,7 @@ export function generateCampaign(level: number, seed?: number): LevelSpec {
   return finish(g);
 }
 
-/** 无尽模式的开头一段；后续内容由 extendEndless 按实际兵力续上 */
+/** 无尽模式的开头一段；后续内容由 extendEndless 按距离预算续上 */
 export function generateEndlessStart(seed: number): { spec: LevelSpec; gen: Gen; until: number } {
   const spec = emptySpec('endless', 1, 0, Infinity);
   const gen = createGen(spec, seed, 1, 3, 0);
@@ -342,8 +342,8 @@ function opening(g: Gen, d: number): number {
   return d + 26;
 }
 
-/** 无尽模式续生成：难度随距离上涨，规模参考实际兵力。返回这次新增的内容 */
-export function extendEndless(gen: Gen, from: number, to: number, power: { count: number; tier: number; rate: number }) {
+/** 无尽模式续生成：同一种子和距离使用同一预算，不读取玩家强度。 */
+export function extendEndless(gen: Gen, from: number, to: number) {
   const added = emptySpec('endless', 1, 0, Infinity);
   const prev = gen.spec;
   gen.spec = added;
@@ -355,10 +355,8 @@ export function extendEndless(gen: Gen, from: number, to: number, power: { count
     gen.hpMul = 1 + d / 1100;
     gen.feats = featsFor(gen.L);
     gen.topTier = maxWeaponTier(Math.ceil(gen.L));
-    // 估算向实际兵力靠拢，玩家越强尸潮越大；再叠一条指数曲线，满编部队迟早也顶不住
-    gen.E = Math.max(3, gen.E * 0.4 + power.count * 0.6, 15 * Math.exp(d / 700));
-    gen.tier = Math.max(gen.tier, power.tier);
-    gen.rate = power.rate;
+    // 距离继续加压；枪械和射速预算沿用生成器的预期取门路线，不追涨实际升级。
+    gen.E = Math.max(3, 15 * Math.exp(d / 700));
     const giantDue = gen.feats.giant && Math.floor(d / 420) > Math.floor((d - 60) / 420);
     const t: Template = giantDue
       ? 'miniBoss'
@@ -394,28 +392,34 @@ export const DEFENSE_TUNING = {
   /** 每秒刷几只 */
   streamRate: (L: number, p: number) => Math.min(6, 2.35 + 2.1 * p + 0.1 * L),
   /** 普通丧尸至少要挨几发手枪（照顾刚开局的小部队） */
-  minHits: (L: number) => 2 + 0.3 * L,
+  minHits: (L: number) => 2 + 0.3 * Math.min(L, 30),
   /** 大障碍要全力打几秒 */
   blockerSeconds: (L: number) => Math.min(16, 8 + 0.7 * L),
   waveEvery: (L: number) => Math.max(10, 15 - 0.4 * L),
   /** 一大波的总血量 = 这么多秒的持续尸潮（人数多，单只血量相应摊薄） */
   waveSeconds: (L: number, p: number) => 4.5 + 4 * p + 0.15 * L,
-  waveSize: (L: number, p: number) => Math.round(10 + 3 * L + 26 * p),
+  waveSize: (L: number, p: number) => Math.min(100, Math.round(10 + 3 * L + 26 * p)),
   bossSeconds: (L: number) => Math.min(24, 12 + L) * Math.pow(0.85, Math.max(0, L - 7)),
   /** 中途一批批来的 Boss：几只、每只要全力打几秒 */
   midBosses: (L: number) => (L === 1 ? 1 : L <= 4 ? 2 : 3),
   midSeconds: (L: number) => Math.min(18, 9 + 0.6 * L),
   /** 关底的预期火力（每秒伤害）；第 5 关起多涨一截，后面的关要靠永久升级 */
   /** 局外升级有进化、金币倍数；低人数上限下每关参考火力先涨 20%，中段再加一点。 */
-  expectedEnd: (L: number) => 12500 * DEFENSE_TUNING.scale * Math.pow(1.2, Math.min(L - 1, 8)) * Math.pow(1.15, Math.max(0, L - 9)) * (1 + 0.03 * Math.min(L - 1, 8)) * sawtooth(L) * pacing(L),
+  expectedEnd: (L: number) => {
+    const early = Math.pow(1.2, Math.min(L - 1, 8));
+    const middle = Math.pow(1.15, Math.max(0, Math.min(7, L - 9)));
+    // 第 16 关后渐缓，匹配兵力与升级上限，避免无限指数血量墙。
+    const late = 1 + 0.25 * (1 - Math.exp(-Math.max(0, L - 16) / 8));
+    return 12500 * DEFENSE_TUNING.scale * early * middle * late * (1 + 0.03 * Math.min(L - 1, 8)) * sawtooth(L) * pacing(L);
+  },
   /** 整体难度系数；缩小门和障碍的增兵后，按成长模拟重新校准 */
-  scale: 0.08,
+  scale: 0.064,
   /**
    * 第 seg 个大障碍的血量：第一个很好打（开局一个人几秒打掉），之后一个比一个高一大截——
    * 前面每个约是上一个的 3.7 倍，往后慢慢降到约 2.5 倍。门道打得越深越难，后面的障碍要硬拆就得放着尸潮不管
    */
   blockerHp: (L: number, seg: number) => {
-    let hp = 40 * DEFENSE_TUNING.blockerScale * Math.pow(1.2, L - 1) * pacing(L) * sawtooth(L);
+    let hp = 40 * DEFENSE_TUNING.blockerScale * Math.pow(1.2, Math.min(19, L - 1)) * (1 + 0.35 * (1 - Math.exp(-Math.max(0, L - 20) / 10))) * pacing(L) * sawtooth(L);
     for (let i = 0; i < seg; i++) hp *= DEFENSE_TUNING.blockerGrowth + 1.2 * Math.exp(-i / 3);
     return hp;
   },
@@ -427,11 +431,11 @@ export const DEFENSE_TUNING = {
 };
 
 /**
- * 按成长模拟校准的节奏修正：第 1 关放低（输一把买几级就能过），
+ * 按成长模拟校准的节奏修正：第 1 关提供零升级通过的机会，
  * 前中段玩家升级来得快（价格低、进化集中），难度跟上去；后段本来就难，往回收一点。
  */
 function pacing(L: number): number {
-  if (L === 1) return 0.55;
+  if (L === 1) return 0.30;
   // 第 2 关单独压低：刚过第 1 关时升级还很少，不能一下子难七成
   if (L === 2) return 0.64;
   return 0.62 + 0.7 * (1 - Math.exp(-(L - 1) / 3)) - 0.4 * Math.max(0, Math.min(1, (L - 10) / 6));
@@ -481,7 +485,7 @@ export function defenseMidTimes(L: number): number[] {
  * 防线：队伍守在桥头不动。
  * 门道是一条排队的队列：几扇数字门，然后一个很耐打的大障碍（武器箱、装甲路障、补给箱），
  * 障碍滑到 stopD 就卡住，后面的门跟着停；打掉它，队列才继续往前，到下一个障碍又卡住。
- * 另一侧源源不断地刷丧尸（血量跟着玩家火力走，见 World），中途有巨尸和精英，最后是 Boss。
+ * 另一侧源源不断地刷丧尸（血量使用固定关卡预算，见 World），中途有巨尸和精英，最后是 Boss。
  */
 export function generateDefense(level: number): LevelSpec {
   const L = Math.max(1, Math.floor(level));

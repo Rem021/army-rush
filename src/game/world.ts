@@ -52,6 +52,7 @@ import {
   type WallSpec,
   type ZombieSpec,
 } from './level';
+import { CombatStats, type LossCause } from './feedback';
 import { GEMS, bossBounty, bossGems, killCoins } from './economy';
 import { mulberry32, randRange, type Rng } from './rng';
 
@@ -97,6 +98,8 @@ export interface Bullet {
   pierce: number;
   /** 上一个打中的丧尸（穿透时不重复打） */
   lastHit: number;
+  /** 合并弹丸代表的逻辑命中数，防止性能上限吞掉射门收益。 */
+  gateHits?: number;
 }
 
 export interface Gate extends GateSpec {
@@ -260,6 +263,8 @@ export interface WorldOptions {
   warnMult?: number;
   /** 金币倍数（局外金币升级） */
   coinMult?: number;
+  /** 战术对装甲目标的额外倍率，不影响数字门。 */
+  armorMult?: number;
   seed?: number;
   /** 无尽模式：继续生成内容的生成器 */
   endless?: { gen: Gen; until: number };
@@ -285,6 +290,7 @@ export class World {
   readonly projectiles: Projectile[] = [];
   readonly strikes: Strike[] = [];
   events: GameEvent[] = [];
+  readonly stats = new CombatStats();
   kills = 0;
   coins = 0;
   /** 本局拿到的钻石（打 Boss 一定给，打丧尸碰运气） */
@@ -324,7 +330,6 @@ export class World {
   /** 防线模式：刷新表和进度 */
   readonly defense: DefenseSpec | null;
   private spawnIdx = 0;
-  private dpsSmooth = 0;
   /** 门道队列当前速度：放行后从 0 加速到 conveyor */
   private queueV = 0;
   private streamAcc = 0;
@@ -474,18 +479,15 @@ export class World {
   }
 
   private step(dt: number) {
-    this.time += dt;
     const sq = this.squad;
     if (this.state !== 'run' && this.state !== 'boss') {
       this.endTime += dt;
       sq.moving = false;
-      this.updateBullets(dt);
       this.layout(dt);
-      this.updateProjectiles(dt);
-      this.updateStrikes(dt);
       this.decay(dt);
       return;
     }
+    this.time += dt;
 
     const prevD = sq.d;
     if (this.defense) {
@@ -534,21 +536,19 @@ export class World {
 
   // ---------- 防线 ----------
 
-  /** 参考火力：主要看这关的预期火力，也跟一点玩家实际火力（0.45 次方）；升级和拿门是真的有用的 */
+  /** 固定关卡预算：升级、临场拿门或损兵都不会反向改变敌人血量。 */
   private refDps(at?: number): number {
     const def = this.defense!;
     const L = this.spec.level;
     const p = at ?? Math.min(1, this.time / def.duration);
     const expected = expectedDefenseDps(L, p);
-    return Math.pow(Math.max(1, expected), 0.85) * Math.pow(Math.max(1, this.dpsSmooth), 0.15);
+    return expected;
   }
 
   private runDefense(dt: number) {
     const def = this.defense!;
     const L = this.spec.level;
     const p = Math.min(1, this.time / def.duration);
-    const dps = this.dps();
-    this.dpsSmooth = this.dpsSmooth > 0 ? this.dpsSmooth + (dps - this.dpsSmooth) * Math.min(1, dt / 4) : dps;
     const ref = this.refDps();
     const spawns = def.spawns;
     const ex = -def.gateSide * (TRACK_HALF / 2);
@@ -591,7 +591,7 @@ export class World {
         const seconds = final ? DEFENSE_TUNING.bossSeconds(L) * pairFactor : DEFENSE_TUNING.midSeconds(L);
         // 防线里巨尸王会冲到脸上，尸巢母体站得远，血量按种类修正一下
         const kindHp = b.kind === 'brute' ? 0.75 : b.kind === 'hive' ? 1.35 : 1;
-        b.maxHp = b.hp = Math.max(300 * L, Math.round(ref * seconds * kindHp));
+        b.maxHp = b.hp = Math.max(300 * Math.min(L, 30), Math.round(ref * seconds * kindHp));
         b.active = true;
         this.bosses.push(b);
         this.events.push({ type: 'bossStart', bosses: [b] });
@@ -696,16 +696,7 @@ export class World {
   private startBoss() {
     this.state = 'boss';
     this.squad.moving = false;
-    // 兵力滚雪球滚得太大时，Boss 至少也要打这么多秒，保证 Boss 战有看头
-    const minSeconds = Math.min(14, 7 + 0.5 * this.spec.level);
-    const total = this.bosses.reduce((s, b) => s + b.maxHp, 0);
-    const floor = this.dps() * minSeconds;
-    if (total > 0 && floor > total) {
-      for (const b of this.bosses) {
-        b.maxHp = Math.round((b.maxHp / total) * floor);
-        b.hp = b.maxHp;
-      }
-    }
+    // Boss 使用生成时的固定血量，优秀站位和局外升级可以真正缩短战斗。
     for (const b of this.bosses) b.active = true;
     this.events.push({ type: 'bossStart', bosses: this.bosses });
     if (this.bosses.length === 0) this.win();
@@ -715,7 +706,7 @@ export class World {
 
   private extend() {
     const e = this.endless!;
-    const { added, until } = extendEndless(e.gen, e.until, e.until + 220, { count: this.squad.count, tier: this.squad.tier, rate: this.squad.rate });
+    const { added, until } = extendEndless(e.gen, e.until, e.until + 220);
     e.until = until;
     this.addContent(added);
   }
@@ -849,9 +840,10 @@ export class World {
     this.halfWidth = Math.min(half + 0.25, (this.hi - this.lo) / 2);
   }
 
-  private killSoldier(index: number) {
+  private killSoldier(index: number, cause: LossCause) {
     const s = this.soldiers[index];
     if (!s) return;
+    this.stats.lose(cause, 1);
     this.events.push({ type: 'soldierDie', x: this.squad.x + s.ox, d: this.squad.d + s.oz });
     // 用最后一个人补这个空位：阵型按编号排，从中间删会让后面所有人换位置（看起来整队抽搐）
     const last = this.soldiers.pop()!;
@@ -861,12 +853,12 @@ export class World {
   }
 
   /** 杀掉离某点最近的 n 个士兵，返回实际杀了几个 */
-  private killNear(x: number, d: number, radius: number, max: number): number {
+  private killNear(x: number, d: number, radius: number, max: number, cause: LossCause): number {
     let killed = 0;
     while (killed < max && this.squad.count > 0) {
       const idx = this.nearestSoldier(x, d, radius);
       if (idx < 0) break;
-      this.killSoldier(idx);
+      this.killSoldier(idx, cause);
       killed++;
     }
     return killed;
@@ -887,7 +879,7 @@ export class World {
         }
       }
       if (idx < 0) break;
-      this.killSoldier(idx);
+      this.killSoldier(idx, 'boss');
       killed++;
     }
     return killed;
@@ -947,7 +939,11 @@ export class World {
         }
       }
       if (!chosen && wide && bestOverlap >= Math.min(this.halfWidth, (wide.x1 - wide.x0) / 2) * 0.9) chosen = wide;
-      if (!chosen) continue;
+      if (!chosen) {
+        if (list.some((g) => g.kind !== 'add' || g.value > 0)) this.stats.gatesMissed++;
+        continue;
+      }
+      this.stats.gatesTaken++;
       chosen.taken = true;
       this.applyGate(chosen);
     }
@@ -959,6 +955,7 @@ export class World {
       const before = sq.count;
       sq.count = g.kind === 'add' ? before + g.value : Math.round(before * g.value);
       sq.count = Math.max(0, Math.min(this.countCap, sq.count));
+      this.stats.lose('gate', Math.max(0, before - sq.count));
       this.syncSoldiers();
       this.events.push({ type: 'gatePass', gate: g, before, after: sq.count });
     } else if (g.kind === 'weapon') {
@@ -972,28 +969,21 @@ export class World {
     }
   }
 
-  private gateHit(g: Gate) {
-    g.hits += 1;
+  private gateHit(g: Gate, hits = 1) {
+    g.hits += hits;
     g.bump = 1;
     const L = this.spec.level;
-    if (g.kind === 'weapon') {
-      // 最多打到本关武器上限 +1
-      if (g.value >= Math.min(WEAPONS.length - 1, maxWeaponTier(L) + 1)) return;
-      const step = weaponGateStep(L, g.value);
-      if (g.hits >= step) {
-        g.hits -= step;
-        g.value += 1;
-        this.events.push({ type: 'gateUp', gate: g });
-      }
-      return;
-    }
-    if (g.kind === 'rate' && g.value >= RATE_GATE_MAX) return;
-    const step = g.kind === 'rate' ? rateGateStep(L, g.value) : gateStep(L, g.value);
-    if (g.hits >= step) {
+    let changed = false;
+    for (;;) {
+      if (g.kind === 'weapon' && g.value >= Math.min(WEAPONS.length - 1, maxWeaponTier(L) + 1)) break;
+      if (g.kind === 'rate' && g.value >= RATE_GATE_MAX) break;
+      const step = g.kind === 'weapon' ? weaponGateStep(L, g.value) : g.kind === 'rate' ? rateGateStep(L, g.value) : gateStep(L, g.value);
+      if (g.hits < step) break;
       g.hits -= step;
-      g.value += 1;
-      this.events.push({ type: 'gateUp', gate: g });
+      g.value++;
+      changed = true;
     }
+    if (changed) this.events.push({ type: 'gateUp', gate: g });
   }
 
   // ---------- 射击 ----------
@@ -1019,6 +1009,7 @@ export class World {
       dmg *= shotsPerSec / MAX_SHOTS_PER_SEC;
       shotsPerSec = MAX_SHOTS_PER_SEC;
     }
+    const gateHits = (sq.count * this.fireRate) / Math.max(0.001, shotsPerSec);
     this.shotAcc += shotsPerSec * dt;
     // 只有冲锋终点的 Boss 战，正对着 Boss 的那几列兵会把子弹稍微偏过去；
     // 防线里不偏——以前所有子弹都被 Boss 吸过去，旁边的小怪就没人打了
@@ -1055,6 +1046,7 @@ export class World {
       nb.vx = vx;
       nb.vd = vd;
       nb.dmg = dmg;
+      nb.gateHits = gateHits;
       nb.travel = 0;
       nb.pierce = this.ammo.pierce;
       nb.lastHit = -1;
@@ -1169,18 +1161,20 @@ export class World {
     const hd = b.d + dd * bestT;
     const color = this.weapon.color;
     if (kind === 1) {
-      this.gateHit(target as Gate);
+      this.gateHit(target as Gate, b.gateHits ?? 1);
       this.events.push({ type: 'hit', x: hx, d: hd, y: 1.2, target: 'gate', color, dmg: 0, id: (target as Gate).id });
     } else if (kind === 2) {
       const br = target as Barrel;
-      br.hp -= b.dmg;
+      const damage = b.dmg * (this.opts.armorMult ?? 1);
+      br.hp -= damage;
       br.bump = 1;
-      this.events.push({ type: 'hit', x: hx, d: hd, y: 0.9, target: 'barrel', color, dmg: b.dmg, id: br.id });
+      this.events.push({ type: 'hit', x: hx, d: hd, y: 0.9, target: 'barrel', color, dmg: damage, id: br.id });
       if (br.hp <= 0) this.breakBarrel(br);
     } else if (kind === 3) {
       const z = target as Zombie;
-      this.damageZombie(z, b.dmg);
-      this.events.push({ type: 'hit', x: hx, d: hd, y: z.kind === 'giant' ? 2 : 0.7, target: z.kind === 'giant' ? 'giant' : 'zombie', color, dmg: b.dmg, id: z.id });
+      const damage = b.dmg * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1);
+      this.damageZombie(z, damage);
+      this.events.push({ type: 'hit', x: hx, d: hd, y: z.kind === 'giant' ? 2 : 0.7, target: z.kind === 'giant' ? 'giant' : 'zombie', color, dmg: damage, id: z.id });
       this.splash(hx, hd, b.dmg, z.id);
       // 穿甲：打穿这只接着飞，伤害打七折
       if (b.pierce > 0 && z.kind !== 'giant') {
@@ -1191,8 +1185,9 @@ export class World {
       }
     } else {
       const boss = target as Boss;
-      this.damageBoss(boss, b.dmg);
-      this.events.push({ type: 'hit', x: hx, d: hd, y: 2.4, target: 'boss', color, dmg: b.dmg, id: boss.id });
+      const damage = b.dmg * (this.opts.armorMult ?? 1);
+      this.damageBoss(boss, damage);
+      this.events.push({ type: 'hit', x: hx, d: hd, y: 2.4, target: 'boss', color, dmg: damage, id: boss.id });
       this.splash(hx, hd, b.dmg, -1);
     }
     return true;
@@ -1209,7 +1204,7 @@ export class World {
       const dx = z.x - x;
       const dd = z.d - d;
       if (dx * dx + dd * dd > r2 + z.r * z.r) continue;
-      this.damageZombie(z, dmg * a.splashDmg);
+      this.damageZombie(z, dmg * a.splashDmg * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1));
       hit = true;
     }
     if (hit && this.rng() < 0.4) this.events.push({ type: 'splash', x, d, r: a.splash });
@@ -1221,6 +1216,7 @@ export class World {
     if (!br.alive) return;
     br.alive = false;
     br.hp = 0;
+    this.stats.supplies++;
     // 卡住的大障碍被打掉：队列重新起步
     if (br.block && br.armed) this.queueV = 0;
     this.events.push({ type: 'barrelBreak', barrel: br });
@@ -1257,7 +1253,7 @@ export class World {
         const dx = sq.x + s.ox - br.x;
         const dd = sq.d + s.oz - br.d;
         if (dx * dx + dd * dd < rr) {
-          this.killSoldier(i);
+          this.killSoldier(i, 'barrel');
           br.hp -= Math.max(2, br.maxHp * 0.035);
           br.bump = 1;
           if (br.hp <= 0) {
@@ -1316,16 +1312,17 @@ export class World {
       // 投弹：红圈里的士兵全部炸死——看到红圈就得躲。
       // 人数超过模拟上限时，场上每个兵代表好几个人，按比例一起算
       const per = this.squad.count / Math.max(1, this.soldiers.length);
-      const bodies = this.killNear(x, d, radius, Infinity);
+      const bodies = this.killNear(x, d, radius, Infinity, 'bomb');
       const extra = Math.round(bodies * (per - 1));
       if (extra > 0) {
+        this.stats.lose('bomb', Math.min(extra, this.squad.count));
         this.squad.count = Math.max(0, this.squad.count - extra);
         this.syncSoldiers(false);
       }
       event.killed = bodies + extra;
     } else if (source === 'exploder') {
       // 自爆：至少带走 3 人，大部队每只最多 6%
-      this.killNear(x, d, radius, Math.max(3, Math.ceil(this.squad.count * 0.06)));
+      this.killNear(x, d, radius, Math.max(3, Math.ceil(this.squad.count * 0.06)), 'explosion');
     }
   }
 
@@ -1371,7 +1368,7 @@ export class World {
             if (z.kind === 'exploder') {
               this.killZombie(z, false);
             } else {
-              this.killNear(z.x, z.d, z.r + CONTACT_PAD + 0.4 + Math.min(2, z.weight * 0.05), Math.round(def.kills * z.weight));
+              this.killNear(z.x, z.d, z.r + CONTACT_PAD + 0.4 + Math.min(2, z.weight * 0.05), Math.round(def.kills * z.weight), 'zombie');
               this.killZombie(z, false);
             }
           }
@@ -1391,13 +1388,13 @@ export class World {
         z.grind = Math.min(z.grind, 1);
         break;
       }
-      this.killSoldier(idx);
+      this.killSoldier(idx, 'giant');
       z.grind -= 1;
     }
     z.atk += dt;
     if (z.atk >= GIANT_SMASH_INTERVAL && this.nearestSoldier(z.x, z.d, z.r + 1.6) >= 0) {
       z.atk = 0;
-      const killed = this.killNear(z.x, z.d, z.r + 1.4, Math.max(3, Math.ceil(this.squad.count * (this.defense ? 0.03 : 0.05))));
+      const killed = this.killNear(z.x, z.d, z.r + 1.4, Math.max(3, Math.ceil(this.squad.count * (this.defense ? 0.03 : 0.05))), 'giant');
       this.events.push({ type: 'giantSmash', x: z.x, d: z.d, killed });
     }
   }
@@ -1424,13 +1421,13 @@ export class World {
           const dd = d - h.d0;
           if (dx * dx + dd * dd < SAW_RADIUS * SAW_RADIUS) {
             this.events.push({ type: 'trap', x, d });
-            this.killSoldier(i);
+            this.killSoldier(i, 'hazard');
           }
         } else if (x >= h.x0 && x <= h.x1 && d >= h.d0 && d <= h.d1) {
           s.spike += dt;
           if (s.spike >= SPIKE_EXPOSURE && s.luck < SPIKE_LETHALITY) {
             this.events.push({ type: 'trap', x, d });
-            this.killSoldier(i);
+            this.killSoldier(i, 'hazard');
           }
         }
       }
@@ -1465,7 +1462,7 @@ export class World {
   }
 
   private win() {
-    if (this.state === 'won') return;
+    if (this.state === 'won' || this.state === 'lost') return;
     this.state = 'won';
     for (const z of this.near) if (z.alive && z.active) this.killZombie(z, false, false);
     this.projectiles.length = 0;
@@ -1564,6 +1561,7 @@ export class World {
           b.smashes++;
           const frac = b.kind === 'hive' ? 0.05 : this.defense ? Math.min(0.28, 0.06 + 0.012 * b.smashes) : Math.min(0.38, 0.08 + 0.015 * b.smashes);
           const killed = this.killBossLane(b.attackX, b.attackD, BOSS_STRIKE_HALF, b.attackLength, Math.max(2, Math.ceil(sq.count * frac * step.damage)));
+          if (killed === 0) this.stats.dodges++;
           this.events.push({ type: 'bossSmash', boss: b, x: b.attackX, d: b.attackD, killed, combo: b.comboStep });
           b.attacking = false;
           b.recover = step.recover;

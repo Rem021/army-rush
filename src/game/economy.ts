@@ -1,4 +1,4 @@
-import { UPGRADES, ZOMBIES, type UpgradeId, type ZombieKind } from './config';
+import { UPGRADES, WEAPONS, ZOMBIES, soldierDps, upgradeEffects, type UpgradeId, type ZombieKind } from './config';
 
 /**
  * 金币经济（参考 Kongregate《The Math of Idle Games》、Royal Match/SayGames 的关卡节奏数据）：
@@ -11,7 +11,7 @@ import { UPGRADES, ZOMBIES, type UpgradeId, type ZombieKind } from './config';
  */
 export const ECON = {
   /** 每过一关，所有金币数额乘这么多 */
-  growth: 1.16,
+  growth: 1.22,
   /** 击杀金币 = 丧尸基础金币 × 这个系数 */
   kill: 0.6,
   /** 中途 Boss 赏金 */
@@ -24,6 +24,8 @@ export const ECON = {
   bossLevel: 2,
   /** 新手奖励：前几关输了额外给（第 1 关输一把就能买到第一批升级） */
   rookie: [90, 70, 45, 20],
+  /** 正常败退按到达进度给补给，最多为通关奖励的 35%；主动撤退不领取。 */
+  progressSupply: 0.35,
 };
 
 /** 关卡越往后，金币数额越大 */
@@ -59,10 +61,11 @@ export function clearBonus(level: number): number {
 
 /**
  * 结算：runCoins 是战斗里已经拿到的（击杀 + Boss 赏金，已经乘过金币倍数），
- * 赢了加通关奖励，前几关输了加新手奖励。
+ * 赢了加通关奖励；失败按推进给补给，与前期新手奖励取较大值。
  */
-export function levelReward(level: number, won: boolean, runCoins: number, coinMult = 1): { total: number; bonus: number } {
-  const bonus = won ? clearBonus(level) : (ECON.rookie[level - 1] ?? 0);
+export function levelReward(level: number, won: boolean, runCoins: number, coinMult = 1, progress = 0): { total: number; bonus: number } {
+  const supply = clearBonus(level) * ECON.progressSupply * Math.max(0, Math.min(1, progress));
+  const bonus = won ? clearBonus(level) : Math.max(ECON.rookie[level - 1] ?? 0, supply);
   const b = Math.round(bonus * coinMult);
   return { total: Math.floor(runCoins) + b, bonus: b };
 }
@@ -113,7 +116,24 @@ export function spendGreedy(wallet: Wallet, levels: UpgradeLevels) {
   }
 }
 
-/** 界面上的“推荐”：买得起的战斗升级里最划算的；下一级就进化的优先，钻石够就先推荐兵力 */
+/** 开局单目标直伤收益；穿透和溅射依赖敌人分布，另外说明，不伪装成固定 DPS。 */
+export function upgradeGain(levels: UpgradeLevels, id: UpgradeId): { dps: number; gates: number; text: string } {
+  const a = upgradeEffects(levels);
+  const b = upgradeEffects({ ...levels, [id]: levels[id] + 1 });
+  const power = (e: typeof a) => e.startSoldiers * soldierDps(e.startTier) * e.damageMult * e.rateMult;
+  const shots = (e: typeof a) => e.startSoldiers * e.rateMult * WEAPONS[e.startTier].rate;
+  const dps = power(b) / power(a) - 1;
+  const gates = shots(b) / shots(a) - 1;
+  const pct = (v: number) => `${(v * 100).toFixed(1)}%`;
+  let text = id === 'income' ? `结算金币 +${pct(b.coinMult / a.coinMult - 1)}`
+    : id === 'agility' ? `跟手速度 +${pct(b.steerMult / a.steerMult - 1)}${b.warnMult > a.warnMult ? '，油桶预警延长' : ''}`
+    : `开局直伤 +${pct(dps)}${gates > 0 ? `，射门命中 +${pct(gates)}` : '；射门命中不变'}`;
+  if (b.ammo > a.ammo) text += '；新弹种提升群体伤害';
+  if (b.gateBonus > a.gateBonus) text += '；加人门收益提升';
+  return { dps, gates, text };
+}
+
+/** 只比较买得起的战斗升级的边际直伤 / 成本，钻石和金币不混算。 */
 export function recommendUpgrade(wallet: Wallet, levels: UpgradeLevels): UpgradeId | null {
   let best: (typeof UPGRADES)[number] | null = null;
   let bestScore = Infinity;
@@ -123,8 +143,7 @@ export function recommendUpgrade(wallet: Wallet, levels: UpgradeLevels): Upgrade
     if (lvl >= u.max) continue;
     const cost = u.cost(lvl);
     if (cost > (u.currency === 'gems' ? wallet.gems : wallet.coins)) continue;
-    const evolving = u.evolutions.some((e) => e.at === lvl + 1);
-    const score = u.currency === 'gems' ? 0 : cost * (evolving ? 0.5 : 1);
+    const score = u.currency === 'gems' ? 0 : cost / Math.max(0.0001, upgradeGain(levels, u.id).dps);
     if (score < bestScore) {
       bestScore = score;
       best = u;

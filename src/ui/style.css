@@ -2625,11 +2625,30 @@ span.gun-img svg {
     position: absolute;
     top: calc(var(--safe-top) + 58px);
     right: 2vw;
-    bottom: calc(var(--safe-bottom) + 52px);
+    bottom: calc(var(--safe-bottom) + 64px);
     width: min(50vw, 460px);
     margin: 0;
     padding: 0;
     overflow-y: auto;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-content: end;
+    gap: 6px;
+  }
+  #menu .mode-card, #menu .home-ups {
+    grid-column: 1 / -1;
+  }
+  #menu .brief-actions {
+    gap: 4px;
+  }
+  #menu .brief-actions button {
+    min-width: 0;
+    padding: 5px;
+    font-size: 11px;
+  }
+  #menu .start-btn {
+    font-size: 18px;
+    letter-spacing: 2px;
   }
   #menu .nav {
     position: absolute;
@@ -2718,24 +2737,54 @@ span.gun-img svg {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  #ui *,
-  #ui *::before,
-  #ui *::after {
-    animation-duration: 0.01ms !important;
-    animation-delay: 0ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-  }
-  .start-btn,
-  .start-btn::after,
-  .logo-title,
-  .up-card.ready:not(.bought)::after,
-  .wu-rays,
-  .ev-rays {
-    animation: none !important;
-  }
-  .confetti {
-    display: none;
-  }
+/* 调研整改：操作入口和复盘保持在拇指可触及的位置。 */
+.brief-actions { display:flex; gap:8px; width:100%; }
+.brief-actions button, .result-tactic { min-height:44px; flex:1; border:1px solid #ffffff24; border-radius:12px; background:#182a43dc; color:#e4edfa; font:700 13px var(--font); padding:8px 12px; cursor:pointer; }
+.result-tactic { width:100%; flex:none; }
+.guide-note { color:#c3d1e3; font-size:13px; line-height:1.7; padding:12px 4px; }
+.guide { font-size:14px; line-height:1.8; color:#d7e2f0; padding:0 6px 12px; }
+.guide h3 { color:#ffd34d; font-size:16px; margin:18px 0 5px; }
+.guide p { margin:0; }
+.tactic-row { text-align:left; width:100%; min-height:76px; }
+.tactic-row .row-sub { white-space:normal; line-height:1.6; }
+.tactic-row.active { border-color:#ffd34d; background:#ffd34d12; }
+.practice-row { display:grid; grid-template-columns:minmax(0,1fr) 64px; gap:10px; padding:14px; background:#ffffff08; border-radius:14px; margin-top:8px; }
+.practice-row label { align-self:center; font-size:13px; color:#d7e2f0; }
+.practice-row input { width:100%; min-width:0; min-height:44px; border:1px solid #ffffff40; border-radius:8px; background:#0d182b; color:white; padding:6px; font-size:16px; }
+.practice-row .btn { grid-column:1/-1; min-height:44px; font-size:14px; }
+.upgrade-gain { color:#8fe1bd; font-size:12px; line-height:1.55; margin-top:6px; white-space:normal; }
+.result-advice { width:100%; padding:10px 12px; border:1px solid #8bbdff40; border-radius:12px; color:#cce1ff; background:#21395688; font-size:12px; line-height:1.65; }
+.result-detail { color:#adbdd2; font-size:11px; text-align:center; line-height:1.5; }
+#result { overflow-y:auto; touch-action:pan-y; align-items:flex-start; padding-top:max(32px, calc(var(--safe-top) + 26px)); padding-bottom:max(16px,var(--safe-bottom)); }
+#result .dialog { flex:none; margin:auto; gap:8px; }
+#result .result-stats b { font-size:15px; text-align:right; }
+#result .result-stats div { gap:10px; }
+.hud-cue { position:absolute; bottom:calc(var(--safe-bottom) + 74px); left:50%; transform:translateX(-50%); padding:8px 12px; max-width:94vw; width:max-content; color:#c6f6e0; background:#112c2ee8; border:1px solid #6ce0b1a0; border-radius:10px; font-size:12px; font-weight:800; opacity:0; pointer-events:none; }
+.hud-cue.visible { opacity:1; }
+.hud-cue.danger { color:#ffe6dc; background:#661e21ed; border-color:#ffaba0; }
+.resume-count { position:absolute; top:42%; left:50%; transform:translateX(-50%); padding:18px 30px; border-radius:18px; color:#fff2ba; background:#101c31eb; font-size:24px; font-weight:900; }
+.resume-count[hidden] { display:none; }
+#ui.reduced-motion *, #ui.reduced-motion *::before, #ui.reduced-motion *::after { animation-duration:0.01ms !important; animation-delay:0ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; scroll-behavior:auto !important; }
+@media (max-height:700px) and (orientation:portrait) {
+  .brief-actions { gap:5px; }
+  .brief-actions button { padding:4px; }
+  #result .dialog { gap:5px; }
+  #result .result-advice { padding:6px 9px; font-size:11px; }
 }
+@media (orientation:landscape) and (max-height:600px) {
+  #result .result-advice { grid-column:1; grid-row:6; }
+  #result .result-detail { grid-column:1; grid-row:7; }
+  #result .result-tactic { grid-column:2; grid-row:5; }
+  #result #btn-next { grid-column:2; grid-row:6; }
+  #result #btn-home { grid-column:2; grid-row:7; }
+}
+
+@media (min-height:701px) and (orientation:portrait) {
+  #result .result-stats div { padding:6px 10px; }
+  #result .dialog { padding-top:38px; gap:7px; }
+  #result .stars svg { width:36px; height:36px; }
+  #result .stars svg:nth-child(2) { width:46px; height:46px; }
+}
+
+#ui.reduced-motion .start-btn, #ui.reduced-motion .start-btn::after, #ui.reduced-motion .logo-title, #ui.reduced-motion .up-card.ready:not(.bought)::after, #ui.reduced-motion .wu-rays, #ui.reduced-motion .ev-rays { animation:none !important; }
+#ui.reduced-motion .confetti { display:none; }

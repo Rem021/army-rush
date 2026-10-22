@@ -1,0 +1,842 @@
+{
+  "baseline_commit": "1add0b9",
+  "mistake": 0.12,
+  "max_attempts_per_level": 12,
+  "seed": "100000 * (player_index + 1) + level * 100 + attempt",
+  "simulation_step_seconds": 0.03333333333333333,
+  "summary_note": "Median, nearest-rank P90 and max are for cleared runs only; censored means still not cleared after 12 tries, not cleared in 12. Late baseline levels have survivor bias.",
+  "scenarios": {
+    "baseline": {
+      "players": 12,
+      "max_level": 20,
+      "max_peak": 64,
+      "source_sha256": "dbf3714b57f9529ec80509325420cf7ea362ed9e5d4b1abab6df8e741854a0db",
+      "levels": [
+        {
+          "level": 1,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 2.0,
+          "p90_cleared": 3,
+          "max_cleared": 4
+        },
+        {
+          "level": 2,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 4.0,
+          "p90_cleared": 5,
+          "max_cleared": 7
+        },
+        {
+          "level": 3,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 5.5,
+          "p90_cleared": 9,
+          "max_cleared": 10
+        },
+        {
+          "level": 4,
+          "reached": 12,
+          "cleared": 11,
+          "censored": 1,
+          "median_cleared": 6,
+          "p90_cleared": 9,
+          "max_cleared": 9
+        },
+        {
+          "level": 5,
+          "reached": 11,
+          "cleared": 11,
+          "censored": 0,
+          "median_cleared": 3,
+          "p90_cleared": 5,
+          "max_cleared": 7
+        },
+        {
+          "level": 6,
+          "reached": 11,
+          "cleared": 11,
+          "censored": 0,
+          "median_cleared": 2,
+          "p90_cleared": 4,
+          "max_cleared": 6
+        },
+        {
+          "level": 7,
+          "reached": 11,
+          "cleared": 11,
+          "censored": 0,
+          "median_cleared": 4,
+          "p90_cleared": 9,
+          "max_cleared": 9
+        },
+        {
+          "level": 8,
+          "reached": 11,
+          "cleared": 11,
+          "censored": 0,
+          "median_cleared": 5,
+          "p90_cleared": 8,
+          "max_cleared": 11
+        },
+        {
+          "level": 9,
+          "reached": 11,
+          "cleared": 11,
+          "censored": 0,
+          "median_cleared": 6,
+          "p90_cleared": 7,
+          "max_cleared": 11
+        },
+        {
+          "level": 10,
+          "reached": 11,
+          "cleared": 11,
+          "censored": 0,
+          "median_cleared": 4,
+          "p90_cleared": 11,
+          "max_cleared": 12
+        },
+        {
+          "level": 11,
+          "reached": 11,
+          "cleared": 8,
+          "censored": 3,
+          "median_cleared": 5.5,
+          "p90_cleared": 9,
+          "max_cleared": 9
+        },
+        {
+          "level": 12,
+          "reached": 8,
+          "cleared": 7,
+          "censored": 1,
+          "median_cleared": 8,
+          "p90_cleared": 11,
+          "max_cleared": 11
+        },
+        {
+          "level": 13,
+          "reached": 7,
+          "cleared": 7,
+          "censored": 0,
+          "median_cleared": 5,
+          "p90_cleared": 12,
+          "max_cleared": 12
+        },
+        {
+          "level": 14,
+          "reached": 7,
+          "cleared": 7,
+          "censored": 0,
+          "median_cleared": 1,
+          "p90_cleared": 6,
+          "max_cleared": 6
+        },
+        {
+          "level": 15,
+          "reached": 7,
+          "cleared": 7,
+          "censored": 0,
+          "median_cleared": 2,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 16,
+          "reached": 7,
+          "cleared": 7,
+          "censored": 0,
+          "median_cleared": 2,
+          "p90_cleared": 5,
+          "max_cleared": 5
+        },
+        {
+          "level": 17,
+          "reached": 7,
+          "cleared": 5,
+          "censored": 2,
+          "median_cleared": 2,
+          "p90_cleared": 8,
+          "max_cleared": 8
+        },
+        {
+          "level": 18,
+          "reached": 5,
+          "cleared": 4,
+          "censored": 1,
+          "median_cleared": 8.5,
+          "p90_cleared": 12,
+          "max_cleared": 12
+        },
+        {
+          "level": 19,
+          "reached": 4,
+          "cleared": 1,
+          "censored": 3,
+          "median_cleared": 2,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 20,
+          "reached": 1,
+          "cleared": 0,
+          "censored": 1,
+          "median_cleared": null,
+          "p90_cleared": null,
+          "max_cleared": null
+        }
+      ]
+    },
+    "balanced": {
+      "players": 12,
+      "max_level": 20,
+      "max_peak": 64,
+      "source_sha256": "4dd3f6eabee86f998f66c375250aa3b29b1d55a470c8c1beb4a933ed1f61d69b",
+      "levels": [
+        {
+          "level": 1,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 2
+        },
+        {
+          "level": 2,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 3,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 4.0,
+          "p90_cleared": 6,
+          "max_cleared": 7
+        },
+        {
+          "level": 4,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 6,
+          "max_cleared": 7
+        },
+        {
+          "level": 5,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 2.0,
+          "p90_cleared": 5,
+          "max_cleared": 5
+        },
+        {
+          "level": 6,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 3
+        },
+        {
+          "level": 7,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 3
+        },
+        {
+          "level": 8,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 9,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 10,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 4,
+          "max_cleared": 7
+        },
+        {
+          "level": 11,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.5,
+          "p90_cleared": 4,
+          "max_cleared": 5
+        },
+        {
+          "level": 12,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 2.0,
+          "p90_cleared": 4,
+          "max_cleared": 5
+        },
+        {
+          "level": 13,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 3.5,
+          "p90_cleared": 5,
+          "max_cleared": 6
+        },
+        {
+          "level": 14,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 2
+        },
+        {
+          "level": 15,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 2
+        },
+        {
+          "level": 16,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 17,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 1
+        },
+        {
+          "level": 18,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 2
+        },
+        {
+          "level": 19,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 20,
+          "reached": 12,
+          "cleared": 12,
+          "censored": 0,
+          "median_cleared": 2.5,
+          "p90_cleared": 8,
+          "max_cleared": 12
+        }
+      ]
+    },
+    "volley": {
+      "players": 8,
+      "max_level": 16,
+      "max_peak": 64,
+      "source_sha256": "6a5fd537ca91b324dd9fb7f94106cf0b7b2c9358a5ba640e48676fa7bf327e2f",
+      "levels": [
+        {
+          "level": 1,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 2,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        },
+        {
+          "level": 3,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 3.5,
+          "p90_cleared": 6,
+          "max_cleared": 6
+        },
+        {
+          "level": 4,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 5,
+          "max_cleared": 5
+        },
+        {
+          "level": 5,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.0,
+          "p90_cleared": 5,
+          "max_cleared": 5
+        },
+        {
+          "level": 6,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 7,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 8,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.5,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 9,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 10,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 4.0,
+          "p90_cleared": 7,
+          "max_cleared": 7
+        },
+        {
+          "level": 11,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 8,
+          "max_cleared": 8
+        },
+        {
+          "level": 12,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 13,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.5,
+          "p90_cleared": 6,
+          "max_cleared": 6
+        },
+        {
+          "level": 14,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 1
+        },
+        {
+          "level": 15,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 1
+        },
+        {
+          "level": 16,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.5,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        }
+      ]
+    },
+    "breaker": {
+      "players": 8,
+      "max_level": 16,
+      "max_peak": 64,
+      "source_sha256": "3b3e463ac9f9ad2dcac2a251ee1dd3ff28706f88068741482499388b9fdf1c59",
+      "levels": [
+        {
+          "level": 1,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 2,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 3,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        },
+        {
+          "level": 4,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 3.0,
+          "p90_cleared": 9,
+          "max_cleared": 9
+        },
+        {
+          "level": 5,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.5,
+          "p90_cleared": 5,
+          "max_cleared": 5
+        },
+        {
+          "level": 6,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        },
+        {
+          "level": 7,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.5,
+          "p90_cleared": 5,
+          "max_cleared": 5
+        },
+        {
+          "level": 8,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 9,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 1
+        },
+        {
+          "level": 10,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.5,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        },
+        {
+          "level": 11,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 4.0,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        },
+        {
+          "level": 12,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.5,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 13,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.5,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        },
+        {
+          "level": 14,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 1
+        },
+        {
+          "level": 15,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 1
+        },
+        {
+          "level": 16,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        }
+      ]
+    },
+    "combat": {
+      "players": 8,
+      "max_level": 16,
+      "max_peak": 64,
+      "source_sha256": "efa12b6f851aa6508b1771e4434fc7ddbbd4f75745c927a490d87e8c520b3dec",
+      "levels": [
+        {
+          "level": 1,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 2,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 3,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.5,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        },
+        {
+          "level": 4,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.5,
+          "p90_cleared": 6,
+          "max_cleared": 6
+        },
+        {
+          "level": 5,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.0,
+          "p90_cleared": 5,
+          "max_cleared": 5
+        },
+        {
+          "level": 6,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.5,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 7,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.5,
+          "p90_cleared": 5,
+          "max_cleared": 5
+        },
+        {
+          "level": 8,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 2.0,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        },
+        {
+          "level": 9,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 10,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 6.0,
+          "p90_cleared": 8,
+          "max_cleared": 8
+        },
+        {
+          "level": 11,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 4.5,
+          "p90_cleared": 11,
+          "max_cleared": 11
+        },
+        {
+          "level": 12,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 3,
+          "max_cleared": 3
+        },
+        {
+          "level": 13,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 5.0,
+          "p90_cleared": 11,
+          "max_cleared": 11
+        },
+        {
+          "level": 14,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 1,
+          "max_cleared": 1
+        },
+        {
+          "level": 15,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 2,
+          "max_cleared": 2
+        },
+        {
+          "level": 16,
+          "reached": 8,
+          "cleared": 8,
+          "censored": 0,
+          "median_cleared": 1.0,
+          "p90_cleared": 4,
+          "max_cleared": 4
+        }
+      ]
+    }
+  }
+}

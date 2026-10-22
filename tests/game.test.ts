@@ -404,7 +404,7 @@ describe('防线', () => {
     const w = new World(spec, { startSoldiers: MAX_DEFENSE_COUNT, damageMult: 1, rateMult: 0 });
     run(w, 2, 2.7);
     const before = w.soldiers.map((s) => ({ s, x: s.ox, z: s.oz }));
-    w['killSoldier'](10);
+    w['killSoldier'](10, 'zombie');
     run(w, 0.15, 2.7);
     const moved = before.filter((b) => w.soldiers.includes(b.s) && Math.hypot(b.s.ox - b.x, b.s.oz - b.z) > 0.3);
     expect(moved.length).toBeLessThanOrEqual(1);
@@ -445,24 +445,24 @@ describe('防线', () => {
     }
     expect(counts[0]).toBeGreaterThan(0);
     for (let i = 1; i < counts.length; i++) expect(counts[i]).toBeGreaterThan(counts[i - 1]);
-    // 难度主要看关卡，只跟一点点玩家火力：火力高很多时，同种丧尸血量也高一些
+    // 同关同进度的敌血固定，升级不会触发敌人追涨
     const unit = (w: World) => {
       const recent = w.zombies.slice(-12);
       return recent.reduce((s, z) => s + z.maxHp / ZOMBIES[z.kind].hp, 0) / recent.length;
     };
-    expect(unit(strong)).toBeGreaterThan(unit(weak) * 1.3);
+    expect(unit(strong)).toBeCloseTo(unit(weak), 6);
   });
 
 });
 
 describe('局外升级', () => {
-  it('什么都不升级，第 1 关打不过；升几级就能过', () => {
+  it('第 1 关可凭操作零升级通过，升级后依然可通关', () => {
     const play = (lvl: number, seed: number) => {
       const w = new World(generateDefense(1), { ...upgradeEffects({ soldiers: lvl, damage: lvl, rate: lvl }), seed });
       autoplay(w, 300, 0);
       return w;
     };
-    for (const seed of [1, 2]) expect(play(0, seed).state).toBe('lost');
+    expect([1, 2, 3].some((seed) => play(0, seed).state === 'won')).toBe(true);
     expect([1, 2, 3].some((seed) => play(4, seed).state === 'won')).toBe(true);
   });
 

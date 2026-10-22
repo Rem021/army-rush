@@ -1,7 +1,7 @@
 // 平衡脚本：用自动驾驶跑关卡，看胜率、到 Boss 时的人数和打 Boss 用时。
 // 用法：npm run sim -- [模式=defense|campaign|endless] [最大关卡=12] [每关局数=6]
 import { Bot } from '../src/game/bot';
-import { damageMult, rateMult, startSoldiers, upgradeEffects } from '../src/game/config';
+import { upgradeEffects } from '../src/game/config';
 import { generateCampaign, generateDefense, generateEndlessStart, type LevelSpec } from '../src/game/level';
 import { mulberry32 } from '../src/game/rng';
 import { World, type WorldOptions } from '../src/game/world';
@@ -100,7 +100,7 @@ function campaign() {
     for (let L = 1; L <= maxLevel; L++) {
       const up = p.upgrades(L);
       const spec = generateCampaign(L);
-      const opts = { startSoldiers: startSoldiers(up.soldiers), damageMult: damageMult(up.damage), rateMult: rateMult(up.rate) };
+      const opts = upgradeEffects(up);
       const rs = Array.from({ length: runs }, (_, i) => play(spec, opts, i + 1, p.mistake));
       const avg = (f: (r: (typeof rs)[number]) => number) => rs.reduce((s, r) => s + f(r), 0) / rs.length;
       const wins = rs.filter((r) => r.w.state === 'won').length;
@@ -133,7 +133,7 @@ function endless() {
     const dist: number[] = [];
     for (let run = 1; run <= runs; run++) {
       const start = generateEndlessStart(900 + run);
-      const r = play(start.spec, { startSoldiers: startSoldiers(up.soldiers), damageMult: damageMult(up.damage), rateMult: rateMult(up.rate), endless: { gen: start.gen, until: start.until } }, run, p.mistake, 600);
+      const r = play(start.spec, { ...upgradeEffects(up), endless: { gen: start.gen, until: start.until } }, run, p.mistake, 600);
       dist.push(Math.round(r.w.squad.d));
     }
     console.log(`无尽 · ${p.name}（按第 5 关的升级）跑了：`, dist.join(', '));
@@ -175,7 +175,7 @@ console.log('\n估算准确度（段落结束时 实际/估算，几何平均）
 for (const [seg, a] of [...accuracy].sort((x, y) => x[1].logSum / x[1].n - y[1].logSum / y[1].n)) {
   console.log(`  ${seg.padEnd(10)} ×${Math.exp(a.logSum / a.n).toFixed(2)}  （${a.n} 次）`);
 }
-console.log('\n各段落损失（死亡人数 / 进入时人数）：');
+console.log('\n各段落累计损兵 / 入段兵力（有增援时可超过 100%）：');
 for (const [seg, b] of [...blame].sort((a, c) => c[1].lost / Math.max(1, c[1].entered) - a[1].lost / Math.max(1, a[1].entered))) {
   console.log(`  ${seg.padEnd(10)} ${((b.lost / Math.max(1, b.entered)) * 100).toFixed(0).padStart(4)}%  （${b.n} 次）`);
 }

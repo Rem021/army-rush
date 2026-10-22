@@ -1,3 +1,4 @@
+import { TACTICS, type TacticId } from './game/tactics';
 import { MODES, SKINS, type GameMode, type UpgradeId } from './game/config';
 
 export interface SaveData {
@@ -20,6 +21,9 @@ export interface SaveData {
   wins: number;
   sound: boolean;
   haptics: boolean;
+  tactic: TacticId;
+  motion: 'system' | 'reduced' | 'full';
+  sensitivity: number;
 }
 
 const KEY = 'army-rush.save.v1';
@@ -41,6 +45,9 @@ function defaults(): SaveData {
     wins: 0,
     sound: true,
     haptics: true,
+    tactic: 'balanced',
+    motion: 'system',
+    sensitivity: 1,
   };
 }
 
@@ -55,6 +62,9 @@ export function loadSave(): SaveData {
     return {
       ...base,
       ...data,
+      tactic: TACTICS.some((t) => t.id === data.tactic) ? data.tactic! : base.tactic,
+      motion: ['system', 'reduced', 'full'].includes(data.motion ?? '') ? data.motion! : base.motion,
+      sensitivity: [0.75, 1, 1.3].includes(data.sensitivity ?? 0) ? data.sensitivity! : base.sensitivity,
       upgrades: { ...base.upgrades, ...(data.upgrades ?? {}) },
       owned: Array.isArray(data.owned) && data.owned.length ? data.owned : base.owned,
     };
@@ -63,10 +73,10 @@ export function loadSave(): SaveData {
   }
 }
 
-/** 一键重置：进度、金币、钻石、升级、皮肤、战绩全部回到新号状态（音效、振动设置保留） */
+/** 一键重置：进度、金币、钻石、升级、皮肤、战绩全部回到新号状态（音效、振动、灵敏度与动态偏好保留） */
 export function resetSave(data: SaveData) {
-  const { sound, haptics } = data;
-  Object.assign(data, defaults(), { sound, haptics });
+  const { sound, haptics, motion, sensitivity } = data;
+  Object.assign(data, defaults(), { sound, haptics, motion, sensitivity });
   writeSave(data);
 }
 
