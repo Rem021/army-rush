@@ -2788,3 +2788,31 @@ span.gun-img svg {
 
 #ui.reduced-motion .start-btn, #ui.reduced-motion .start-btn::after, #ui.reduced-motion .logo-title, #ui.reduced-motion .up-card.ready:not(.bought)::after, #ui.reduced-motion .wu-rays, #ui.reduced-motion .ev-rays { animation:none !important; }
 #ui.reduced-motion .confetti { display:none; }
+
+
+/* 火力狂潮：独立击杀面板与单手超载按钮。 */
+#carnage-hud[hidden] { display: none; }
+.carnage-score { position: absolute; left: 14px; top: calc(135px + env(safe-area-inset-top)); color: #fff; text-shadow: 0 2px 5px #201642; pointer-events: none; }
+.carnage-score small { display: block; font-size: 9px; letter-spacing: 2px; color: #ffe298; }
+.carnage-score b { display: block; font-size: 30px; line-height: 1.2; color: #ffe098; }
+.carnage-score span { font-size: 11px; }
+#btn-nova { position: absolute; right: 15px; bottom: calc(30px + env(safe-area-inset-bottom)); width: 180px; min-height: 78px; overflow: hidden; border-radius: 18px; border: 1px solid #aef5ff88; background: linear-gradient(130deg,#173a63eb,#45296aeb); color: white; padding: 12px 15px; text-align: left; pointer-events: auto; box-shadow: 0 5px 25px #06182a77; }
+#btn-nova span { font-size: 16px; font-weight: 900; position: relative; z-index: 1; }
+#btn-nova b { float: right; font-size: 20px; color: #aef5ff; position: relative; z-index: 1; }
+#btn-nova small { display: block; margin-top: 8px; font-size: 10px; position: relative; z-index: 1; }
+#btn-nova i { position: absolute; height: 5px; left: 0; bottom: 0; background: linear-gradient(90deg,#64daff,#e2a0ff); transition: width .15s; }
+#btn-nova:disabled { opacity: .78; }
+#btn-nova.ready { border-color: #fff1b0; background: linear-gradient(130deg,#a64819,#7431a9); box-shadow: 0 0 25px #eea85388; }
+.carnage-note { color: #ffe29e; }
+@media (max-height: 600px) { .carnage-score { top: 115px; } #btn-nova { bottom: 15px; min-height: 62px; } }
+
+.carnage-mode #hud .hud-wallet { display: none; }
+.carnage-mode #tip { bottom: calc(var(--safe-bottom) + 125px); font-size: 12px; }
+.carnage-mode #hud-cue { bottom: calc(var(--safe-bottom) + 185px); }
+
+.carnage-mode .banner { max-width: 96vw; padding: 10px 18px; font-size: clamp(15px, 4.5vw, 22px); letter-spacing: 1px; white-space: normal; text-align: center; }
+.carnage-mode .banner.boss { top: 30%; }
+#btn-nova { display: grid; grid-template-columns: minmax(0,1fr) auto; column-gap: 5px; }
+#btn-nova span { font-size: 14px; white-space: nowrap; }
+#btn-nova b { float: none; font-size: 18px; }
+#btn-nova small { grid-column: 1 / -1; }

@@ -83,6 +83,7 @@ export const EMBLEM = svg(
 );
 
 export const MODE_STYLE: Record<string, { icon: string; bg: string }> = {
+  carnage: { icon: ICON.bolt, bg: 'linear-gradient(145deg,#ffce55,#f05b3b 48%,#a329ef)' },
   defense: { icon: ICON.defense, bg: 'linear-gradient(160deg,#5f9bff,#2448b8)' },
   campaign: { icon: ICON.campaign, bg: 'linear-gradient(160deg,#ff8f52,#d63a1e)' },
   endless: { icon: ICON.endless, bg: 'linear-gradient(160deg,#36d6d8,#0f7f9c)' },

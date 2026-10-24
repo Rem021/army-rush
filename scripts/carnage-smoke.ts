@@ -1,0 +1,81 @@
+import assert from 'node:assert/strict';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { chromium } from 'playwright-core';
+const base = process.argv[2] ?? 'http://127.0.0.1:5178/';
+const out = 'work/shots/carnage'; mkdirSync(out, { recursive: true });
+const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const errors: string[] = [];
+const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
+const page = await ctx.newPage();
+page.on('pageerror', e => errors.push(e.message));
+page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
+const ready = async () => { await page.waitForFunction('!!window.__game && document.querySelector("#boot").classList.contains("done")', undefined, { timeout: 60000 }); await page.waitForTimeout(650); };
+try {
+  await page.goto(base + '?mode=carnage&level=99'); await ready();
+  assert.equal(await page.evaluate('window.__game.world.spec.mode'), 'defense');
+  await page.click('#mode-card');
+  assert(await page.locator('[data-mode="carnage"]').evaluate(e => e.classList.contains('locked')));
+  await page.screenshot({ path: `${out}/01-locked.png` });
+  // Seed an existing save to verify the grant and combat preserve genuine progress/resources.
+  await page.evaluate(`localStorage.setItem('army-rush.save.v1', JSON.stringify({ level: 7, best: 6, defenseLevel: 9, defenseBest: 8, coins: 321, gems: 7, kills: 42, wins: 3 }))`);
+  await page.goto(base + '?admin=carnage&mode=carnage'); await ready();
+  assert.equal(await page.evaluate('window.__game.save.carnageAdmin'), true);
+  assert(!page.url().includes('admin='));
+  const before = await page.evaluate('JSON.stringify(window.__game.save)');
+  await page.reload(); await ready();
+  assert.equal(await page.evaluate('window.__game.world.spec.mode'), 'carnage');
+  await page.screenshot({ path: `${out}/02-admin-menu.png` });
+  await page.click('#btn-start');
+  await page.waitForTimeout(8500);
+  await page.screenshot({ path: `${out}/03-opening.png` });
+  const fps = await page.evaluate(`new Promise(resolve => { let n=0;const t=performance.now();function tick(){n++;if(performance.now()-t<1500)requestAnimationFrame(tick);else resolve(n/1.5);}requestAnimationFrame(tick); })`);
+  // Finish the same real world with accelerated simulation, then let the app settle it.
+  await page.evaluate(`(() => { const g=window.__game,w=g.world; for(let i=0;i<150*60&&w.state==='run';i++){const b=w.bosses.find(b=>b.alive);w.setTarget(w.time>91&&b?b.x:2.7);w.releaseNova();w.update(1/60);w.drainEvents();} return w.state; })()`);
+  await page.waitForFunction(`window.__game.mode === 'result'`, undefined, { timeout: 10000 });
+  await page.screenshot({ path: `${out}/04-result.png` });
+  const after = await page.evaluate('JSON.stringify(window.__game.save)');
+  const a = JSON.parse(before as string), b = JSON.parse(after as string);
+  for (const key of ['level','best','defenseLevel','defenseBest','coins','gems','kills','wins','upgrades']) assert.deepEqual(b[key], a[key], key);
+  assert(b.carnageBest > 1000);
+  // Repeat and activate a charged nova through the visible button; double click cannot spend twice.
+  await page.click('#btn-next');
+  await page.evaluate('window.__game.world.carnage.charge=100');
+  await page.waitForFunction('!document.querySelector("#btn-nova").disabled');
+  await page.click('#btn-nova');
+  assert.equal(await page.evaluate('window.__game.world.carnage.clears'), 1);
+  await page.waitForTimeout(350);
+  await page.screenshot({ path: `${out}/05-nova.png` });
+  // Check small screen hit targets and reduced motion.
+  await page.setViewportSize({ width: 320, height: 568 });
+  const box = await page.locator('#btn-nova').boundingBox();
+  assert(box && box.x >= 0 && box.x+box.width <= 320 && box.y+box.height <= 568);
+  assert.equal(await page.evaluate('document.documentElement.scrollWidth > innerWidth'), false);
+  await page.click('#btn-pause');
+  await page.evaluate('window.__game.world.carnage.charge=100');
+  await page.keyboard.press('e');
+  assert.equal(await page.evaluate('window.__game.world.carnage.clears'), 1);
+  await page.click('#btn-resume');
+  await page.keyboard.press('e');
+  assert.equal(await page.evaluate('window.__game.world.carnage.clears'), 1);
+  await page.waitForTimeout(1000);
+  await page.keyboard.press('e');
+  assert.equal(await page.evaluate('window.__game.world.carnage.clears'), 2);
+  await page.click('#btn-pause'); await page.click('#btn-quit'); await page.click('#btn-home');
+  await page.click('#btn-settings'); await page.click('[data-revoke-admin]');
+  assert.equal(await page.evaluate('window.__game.save.carnageAdmin'), false);
+  assert.equal(await page.evaluate('window.__game.world.spec.mode'), 'defense');
+  // Live rendered second stage, including the first giant boss and particle-heavy plasma.
+  await page.setViewportSize({ width:390, height:844 });
+  await page.goto(base + '?admin=carnage&mode=carnage&speed=3'); await ready();
+  await page.click('#btn-start');
+  await page.waitForFunction('window.__game.world.time > 32', undefined, { timeout:30000 });
+  await page.screenshot({ path: `${out}/06-plasma-boss.png` });
+  const stageFps = await page.evaluate(`new Promise(resolve => { let n=0;const t=performance.now();function tick(){n++;if(performance.now()-t<1500)requestAnimationFrame(tick);else resolve(n/1.5);}requestAnimationFrame(tick); })`);
+  await page.click('#btn-nova');
+  await page.waitForTimeout(180);
+  await page.screenshot({ path: `${out}/07-plasma-nova.png` });
+  const stats = await page.evaluate('({ phase:window.__game.mode, kills:window.__game.world.kills, renderer: window.__game.renderer.renderer.info.render, perf:window.__game.perf })');
+  assert.deepEqual(errors, []);
+  writeFileSync(`${out}/receipt.json`, JSON.stringify({ fps, stageFps, before:a, after:b, stats, errors },null,2));
+  console.log(JSON.stringify({ fps, stageFps, stats, errors, out }));
+} finally { await browser.close(); }

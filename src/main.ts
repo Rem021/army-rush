@@ -1,5 +1,6 @@
 import './ui/style.css';
 import { Sfx, vibrate } from './audio';
+import { CARNAGE_OPTIONS, generateCarnage } from './game/carnage';
 import { Bot } from './game/bot';
 import { BOSSES, MODES, SKINS, TRACK_HALF, UPGRADES, upgradeEffects, type GameMode, type UpgradeId } from './game/config';
 import { generateCampaign, generateDefense, generateEndlessStart } from './game/level';
@@ -29,6 +30,13 @@ const debug = {
 };
 
 const save = loadSave();
+// 仅授予当前浏览器的试玩通行证，不伪造主线通关或发放资源。
+if (params.get('admin') === 'carnage') {
+  save.carnageAdmin = true;
+  writeSave(save);
+  params.delete('admin');
+  history.replaceState(null, '', `${location.pathname}${params.size ? '?' + params : ''}${location.hash}`);
+}
 if (debug.level) {
   save.level = debug.level;
   save.defenseLevel = debug.level;
@@ -37,7 +45,7 @@ if (debug.coins) save.coins = debug.coins;
 if (debug.gems) save.gems = debug.gems;
 if (debug.up) save.upgrades = { soldiers: debug.up, damage: debug.up, rate: debug.up, income: debug.up, agility: debug.up };
 if (debug.mode && MODES.some((m) => m.id === debug.mode)) save.mode = debug.mode;
-if (!modeUnlocked(save, save.mode) && !debug.mode) save.mode = 'defense';
+if (!modeUnlocked(save, save.mode) && (!debug.mode || save.mode === 'carnage')) save.mode = 'defense';
 
 const app = document.getElementById('app')!;
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -79,6 +87,18 @@ const input = {
 };
 
 const handlers: UIHandlers = {
+  nova() {
+    if (phase !== 'play' || performance.now() < resumeAt) return;
+    if (world.releaseNova()) { sfx.unlock(); sfx.weaponUp(6); haptic([30, 35, 70]); }
+  },
+  revokeAdmin() {
+    save.carnageAdmin = false;
+    if (save.mode === 'carnage' && !modeUnlocked(save, 'carnage')) save.mode = 'defense';
+    writeSave(save);
+    buildWorld();
+    ui.refreshMenu();
+    ui.toast('管理员试玩权限已关闭');
+  },
   start() {
     sfx.unlock();
     sfx.click();
@@ -200,7 +220,7 @@ const handlers: UIHandlers = {
     input.left = false;
     input.right = false;
     phase = 'paused';
-    ui.showPause(!!practice);
+    ui.showPause(!!practice, world.spec.mode === 'carnage');
   },
   resume() {
     if (phase !== 'paused') return;
@@ -270,6 +290,7 @@ function upgradeOpts(): WorldOptions {
 function hudTitle(): string {
   const mode = world.spec.mode;
   const level = world.spec.level;
+  if (mode === 'carnage') return '火力狂潮 · 90 秒释放';
   if (mode === 'endless') return '无尽';
   return `${practice ? '演练 · ' : ''}${mode === 'defense' ? '防线' : '冲锋'} · 第 ${level} 关${isBossLevel(level) ? ' · Boss 关' : ''}`;
 }
@@ -280,6 +301,9 @@ function buildWorld() {
   resumeAt = 0;
   const opts = upgradeOpts();
   switch (practice?.mode ?? save.mode) {
+    case 'carnage':
+      world = new World(generateCarnage(), CARNAGE_OPTIONS);
+      break;
     case 'defense':
       world = new World(generateDefense(practice?.level ?? save.defenseLevel), opts);
       break;
@@ -309,6 +333,7 @@ function buildWorld() {
 }
 
 function startGame() {
+  if (!modeUnlocked(save, world.spec.mode) && world.spec.mode === 'carnage') return;
   if (phase === 'play') return;
   phase = 'play';
   renderer.menu = false;
@@ -346,10 +371,10 @@ function finish(retreated = false) {
   if (resultShown) return;
   resultShown = true;
   // 钻石：这局拿到多少就存多少（输了也算）
-  if (!practice) save.gems += world.gems;
+  if (!practice && world.spec.mode !== 'carnage') save.gems += world.gems;
   const won = world.state === 'won';
   const kills = world.kills;
-  if (!practice) save.kills += kills;
+  if (!practice && world.spec.mode !== 'carnage') save.kills += kills;
   let info: ResultInfo;
   const mode = world.spec.mode;
   const lostSub = retreated ? '本局战斗收益已保留' : `打到了 ${Math.round(world.progress * 100)}%${world.bosses.some((b) => b.active && b.alive) ? ' · Boss 尚未击败' : ''}`;
@@ -360,6 +385,13 @@ function finish(retreated = false) {
     info = { mode, won, title: won ? '演练完成' : '演练结束', sub: `${hudTitle()} · 不消耗资源，不改变进度`,
       stats: [['击杀', String(kills)], ['进度', `${Math.round(world.progress * 100)}%`]],
       coins: 0, next: '再练一次', home: '返回主页', stars: null, practice: true };
+  } else if (mode === 'carnage') {
+    save.carnageBest = Math.max(save.carnageBest, kills);
+    info = { mode, won, title: won ? '狂潮平息！' : retreated ? '狂潮撤退' : '狂潮结束',
+      sub: '独立火力体验 · 不改变主线进度与资源',
+      stats: [['击杀', formatNumber(kills)], ['最高连击', String(world.carnage.bestCombo)],
+        ['超载次数', String(world.carnage.clears)], ['最佳击杀', formatNumber(save.carnageBest)]],
+      coins: 0, next: '再爽一局', home: '返回主页', stars: null };
   } else if (mode === 'endless') {
     const dist = Math.floor(world.squad.d);
     const record = dist > save.endlessBest;
@@ -422,7 +454,7 @@ function finish(retreated = false) {
   }
   const cause = world.stats.mainLoss;
   if (cause) info.stats.push(['主要损兵', `${LOSS_INFO[cause].name} · ${world.stats.losses[cause]} 人`]);
-  info.advice = retreated ? '调整战术或升级后可重试；同一关的路线保持不变。' : world.stats.advice(won, !!world.defense);
+  info.advice = mode === 'carnage' ? '打右侧大数字门扩军，切左侧清尸潮；蓄满后点超载，或按 E。' : retreated ? '调整战术或升级后可重试；同一关的路线保持不变。' : world.stats.advice(won, !!world.defense);
   info.detail = `接门 ${world.stats.gatesTaken} · 漏门 ${world.stats.gatesMissed} · 拆补给 ${world.stats.supplies} · 躲砸击 ${world.stats.dodges}`;
   if (!practice) writeSave(save);
   phase = 'result';
@@ -476,6 +508,7 @@ window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement)?.matches('input, select, textarea')) return;
   if (['ArrowLeft', 'ArrowRight', ' '].includes(e.key) && phase === 'play') e.preventDefault();
   if (phase !== 'play' && phase !== 'paused' && phase !== 'menu') return;
+  if (e.key.toLowerCase() === 'e') handlers.nova();
   if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') input.left = true;
   if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') input.right = true;
   if ((e.key === ' ' || e.key === 'Enter') && phase === 'menu' && ui.screen === 'menu' && !ui.sheetOpen) {
@@ -498,7 +531,7 @@ document.addEventListener('visibilitychange', () => {
     input.left = false;
     input.right = false;
     phase = 'paused';
-    ui.show('pause');
+    ui.showPause(!!practice, world.spec.mode === 'carnage');
   }
 });
 window.addEventListener('blur', () => {
@@ -528,6 +561,7 @@ function route(events: GameEvent[]) {
   const eventRun = runId;
   for (const e of events) {
     if (e.type === 'banner') ui.banner(e.text, e.tone);
+    if (world.spec.mode === 'carnage') continue;
     else if (e.type === 'bossDie') {
       slowmo = 0.5;
       // Boss 赏金：一大把金币从 Boss 身上飞进顶栏

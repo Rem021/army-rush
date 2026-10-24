@@ -693,6 +693,21 @@ export class GameRenderer {
           this.strikes.set(e.strike.id, new StrikeView(this.scene, e.strike));
           break;
         }
+        case 'carnageBlast': {
+          const color = e.nova ? 0x9dfaff : 0xffa340;
+          if (!e.nova) {
+            this.explosions.spawn(e.x, 0.8, -e.d, 3, false);
+            this.streaks.burst(e.x - 0.4, e.x + 0.4, -e.d + 8, -e.d + 2, 6, -25);
+          }
+          this.rings.spawn(e.x, -e.d, e.nova ? 40 : e.r * 2, color, e.nova ? 1 : 0.5);
+          this.rings.spawn(e.x, -e.d, e.nova ? 25 : e.r, 0xd59bff, 0.65);
+          this.sparks.burst(e.x, 1, -e.d, this.reducedMotion ? 12 : e.nova ? 100 : 28,
+            e.nova ? 20 : 9, 0.7, 0.16, [color, 0xd59bff, 0xffffff], 10, 0.6);
+          this.impacts.spawn(e.x, 1, -e.d, e.nova ? 10 : 4);
+          this.shake(e.nova ? 0.35 : 0.1);
+          if (e.nova) this.texts.spawn('全 域 超 载', 0, 3, -18, 'big gold', 1.2, 1);
+          break;
+        }
         case 'splash': {
           if (splashBudget-- <= 0) break;
           const col = w.ammo.color ?? 0xffa53d;
@@ -756,6 +771,7 @@ export class GameRenderer {
     const clip = !kit ? undefined : this.menu || (!firing && !sq.moving) ? 'idle' : sq.moving ? 'run' : 'shoot';
     const clipLen = kit && clip ? kit.body.clips[clip].duration : 1;
     // 画质低时人太多就均匀少画几个（模拟里一个不少）
+    const playerScale = w.spec.mode === 'carnage' ? 0.72 : 1;
     const nSoldiers = w.soldiers.length;
     const cap = this.soldierCap;
     const keep = nSoldiers > cap ? cap / nSoldiers : 1;
@@ -765,14 +781,14 @@ export class GameRenderer {
       const pop = s.spawn < 1 ? easeOutBack(s.spawn) : 1;
       if (kit) {
         const cycle = clip === 'run' ? s.phase / (Math.PI * 2) : t / clipLen + s.phase * 0.37;
-        this.players.push({ x: sq.x + s.ox, y: 0, d: sq.d + s.oz, yaw: 0, phase: s.phase, scale: Math.max(0.01, pop) * (1 + this.tierFlash * 0.12), flash: this.tierFlash * 0.7, tilt: 0, stride, clip, cycle });
+        this.players.push({ x: sq.x + s.ox, y: 0, d: sq.d + s.oz, yaw: 0, phase: s.phase, scale: Math.max(0.01, pop) * playerScale * (1 + this.tierFlash * 0.12), flash: this.tierFlash * 0.7, tilt: 0, stride, clip, cycle });
         this.blobs.push(sq.x + s.ox, -(sq.d + s.oz), 0.8 * pop);
         continue;
       }
       const phase = firing ? s.phase + t * 9 : s.phase;
       // 开火后坐：每个人错开节奏往后一顿
       const kick = firing ? Math.max(0, Math.sin(t * 24 + s.phase * 5)) * 0.07 : 0;
-      this.players.push({ x: sq.x + s.ox, y: 0, d: sq.d + s.oz - kick, yaw: 0, phase, scale: Math.max(0.01, pop), flash: 0, tilt: kick * 1.6, stride });
+      this.players.push({ x: sq.x + s.ox, y: 0, d: sq.d + s.oz - kick, yaw: 0, phase, scale: Math.max(0.01, pop) * playerScale, flash: 0, tilt: kick * 1.6, stride });
     }
     this.pushDying(this.players, this.dyingPlayers, dt);
     this.players.end();
@@ -813,7 +829,7 @@ export class GameRenderer {
       if (anim) this.blobs.push(z.x, -z.d, 0.9 * scale);
       if (z.kind === 'giant') this.giantLabel(giantIdx++, z);
       // 防线里尸潮一直显示血条（满血也显示），其他模式只显示挨过打的
-      else if (z.hp < z.maxHp || (w.defense && z.d < w.defense.spawnD)) this.zombieBars.push(z.x, scale * (anim ? 1.55 : 1.32) + 0.18, -z.d, 0.78 * scale, Math.max(0, z.hp / z.maxHp));
+      else if (w.spec.mode === 'carnage' ? z.kind === 'brute' && z.hp < z.maxHp : z.hp < z.maxHp || (w.defense && z.d < w.defense.spawnD)) this.zombieBars.push(z.x, scale * (anim ? 1.55 : 1.32) + 0.18, -z.d, 0.78 * scale, Math.max(0, z.hp / z.maxHp));
     }
     for (let i = giantIdx; i < this.giantLabels.length; i++) this.giantLabels[i].sprite.visible = false;
     for (const k of KINDS) {

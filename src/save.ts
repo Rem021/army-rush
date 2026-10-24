@@ -8,6 +8,9 @@ export interface SaveData {
   defenseLevel: number;
   defenseBest: number;
   endlessBest: number;
+  carnageBest: number;
+  /** 本浏览器的狂潮试玩通行证，不授予账号或服务器权限。 */
+  carnageAdmin: boolean;
   /** 上次选的模式 */
   mode: GameMode;
   coins: number;
@@ -34,6 +37,8 @@ function defaults(): SaveData {
     defenseLevel: 1,
     defenseBest: 0,
     endlessBest: 0,
+    carnageBest: 0,
+    carnageAdmin: false,
     mode: 'defense',
     coins: 0,
     gems: 0,
@@ -62,6 +67,8 @@ export function loadSave(): SaveData {
     return {
       ...base,
       ...data,
+      carnageAdmin: data.carnageAdmin === true,
+      carnageBest: typeof data.carnageBest === 'number' && Number.isFinite(data.carnageBest) ? Math.max(0, Math.floor(data.carnageBest)) : 0,
       tactic: TACTICS.some((t) => t.id === data.tactic) ? data.tactic! : base.tactic,
       motion: ['system', 'reduced', 'full'].includes(data.motion ?? '') ? data.motion! : base.motion,
       sensitivity: [0.75, 1, 1.3].includes(data.sensitivity ?? 0) ? data.sensitivity! : base.sensitivity,
