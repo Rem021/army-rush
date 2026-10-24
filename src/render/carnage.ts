@@ -4,8 +4,10 @@ import type { World, GameEvent, Boss } from '../game/world';
 import type { Models } from './assets';
 import { bakeSoldierBody, buildSoldier } from './characters';
 import { Crowd, type AgentPose } from './crowd';
-import { BlobShadows, BulletMesh, Explosions, Particles, Rings } from './effects';
-import { Label } from './label';
+import { BlobShadows, BulletMesh, Explosions, FloatTexts, Particles, Rings } from './effects';
+import { HpBar, Label } from './label';
+import { BossStrikeView } from './entities';
+import { configureCarnageCamera } from './carnageCamera';
 import { soldierBody, soldierLeg } from './models';
 import { VatCrowd } from './vat';
 
@@ -49,7 +51,7 @@ function place(mesh: THREE.InstancedMesh, index: number, x: number, y: number, z
   p.set(x, y, z); size.set(sx, sy, sz); q.identity(); m.compose(p, q, size); mesh.setMatrixAt(index, m);
 }
 function finish(mesh: THREE.InstancedMesh, count: number) { mesh.count = count; mesh.instanceMatrix.needsUpdate = true; }
-function numberSprite(label: Label, width: number, height: number) {
+function numberSprite(label: { texture: THREE.Texture }, width: number, height: number) {
   const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: label.texture, depthTest: false, depthWrite: false, toneMapped: false }));
   sprite.scale.set(width, height, 1); sprite.renderOrder = 8; return sprite;
 }
@@ -62,7 +64,12 @@ class RedChampion {
   private leftLeg = new THREE.Group();
   private rightLeg = new THREE.Group();
   private death = 0;
+  private readonly strike: BossStrikeView;
+  private readonly hp = new HpBar(256, 80);
+  private readonly hpSprite = numberSprite(this.hp, 3.1, .85);
   constructor(scene: THREE.Scene, readonly boss: Boss) {
+    this.strike = new BossStrikeView(scene, boss);
+    scene.add(this.hpSprite);
     const red = new THREE.MeshLambertMaterial({ color: 0xc9342c });
     const darkRed = new THREE.MeshLambertMaterial({ color: 0x7c221f });
     const skin = new THREE.MeshLambertMaterial({ color: 0xd9a17a });
@@ -102,6 +109,7 @@ class RedChampion {
     }
   }
   dispose() {
+    this.strike.dispose(); this.hp.dispose(); this.hpSprite.material.dispose(); this.hpSprite.removeFromParent();
     const materials = new Set<THREE.Material>();
     this.root.traverse(o => { if (o instanceof THREE.Mesh) { o.geometry.dispose(); materials.add(o.material as THREE.Material); } });
     for (const material of materials) material.dispose();
@@ -109,6 +117,10 @@ class RedChampion {
   }
   update(dt: number, t: number) {
     const b = this.boss;
+    this.strike.update();
+    this.hpSprite.visible = b.alive && b.active;
+    this.hp.set(b.hp / b.maxHp, `${Math.ceil(b.hp / b.maxHp * 100)}%`, '#e23d32', '红甲巨人');
+    this.hpSprite.position.set(b.x, 5.85, -b.d);
     this.root.position.set(b.x, .07 + Math.abs(Math.sin(t * 2)) * .05, -b.d);
     this.body.rotation.y = Math.sin(t * .7) * .08;
     this.swordArm.rotation.x = b.attacking ? -b.windup * 2.6 + b.slam * 2.3 : -.3;
@@ -144,12 +156,13 @@ export class ReferenceCarnageView {
   private explosions: Explosions;
   private rings: Rings;
   private shadows: BlobShadows;
+  private texts: FloatTexts;
   private time = 0;
   private width = 390;
   private height = 844;
   private trauma = 0;
 
-  constructor(models: Models) {
+  constructor(models: Models, fxLayer: HTMLElement) {
     const scene = this.scene;
     scene.background = new THREE.Color(0x0c1120);
     scene.fog = new THREE.Fog(0x0c1120, 100, 200);
@@ -205,23 +218,38 @@ export class ReferenceCarnageView {
     (this.bullets.glow.material as THREE.MeshBasicMaterial).opacity=.34;
     this.sparks = new Particles(scene, new THREE.OctahedronGeometry(1,0), new THREE.MeshBasicMaterial({ blending:THREE.AdditiveBlending, transparent:true, depthWrite:false }), 900);
     this.debris = new Particles(scene, new THREE.BoxGeometry(1,1,1), new THREE.MeshLambertMaterial(), 700);
-    this.explosions = new Explosions(scene, 180); this.rings = new Rings(scene); this.shadows = new BlobShadows(scene);
+    this.explosions = new Explosions(scene, 180); this.rings = new Rings(scene); this.shadows = new BlobShadows(scene); this.texts = new FloatTexts(fxLayer);
   }
 
   load(world: World) {
     this.world = world; this.time = 0; this.trauma = 0;
     for (const v of this.champions.values()) v.dispose(); this.champions.clear();
-    this.sparks.clear(); this.debris.clear(); this.explosions.clear(); this.rings.clear();
+    this.clearEffects();
   }
+  clearEffects() { this.sparks.clear(); this.debris.clear(); this.explosions.clear(); this.rings.clear(); this.texts.clear(); }
   resize(width:number, height:number) { this.width = width; this.height = height; this.camera.aspect = width/height; this.camera.updateProjectionMatrix(); }
   handle(events: GameEvent[], reduced: boolean) {
-    let budget = 30;
+    let hitBudget = 12, deathBudget = 14, lossBudget = 5;
     for (const e of events) {
-      if (e.type === 'hit' && budget-- > 0) this.sparks.burst(e.x,.9,-e.d,3,3,.2,.065,[0xffdf68,0xffffff],10,.4);
-      else if (e.type === 'zombieDie' && budget-- > 0) this.debris.burst(e.x,.4,-e.d,3,3,.4,.1,[0xc73032,0xec7662],12,.4);
-      else if (e.type === 'barrelBreak') {
+      if (e.type === 'hit' && hitBudget-- > 0) this.sparks.burst(e.x,.9,-e.d,3,3,.2,.065,[0xffdf68,0xffffff],10,.4);
+      else if (e.type === 'zombieDie' && deathBudget-- > 0) this.debris.burst(e.x,.4,-e.d,4,3,.4,.1,[0xc73032,0xec7662],12,.4);
+      else if (e.type === 'soldierDie' && lossBudget-- > 0) this.debris.burst(e.x,.4,-e.d,5,3,.4,.1,[0x1657f2,0x7ea9ff],12,.4);
+      else if (e.type === 'gatePass') {
+        const ammo = e.gate.carnage === 'ammo';
+        this.texts.spawn(ammo ? '+99 发' : '+1 人', this.world.squad.x, 1.8, 0, ammo ? 'gold' : 'good', .7, 1);
+        this.rings.spawn(this.world.squad.x, 0, 2.2, ammo ? 0xffcf40 : 0x57adff, .35);
+      } else if (e.type === 'barrelBreak') {
         this.explosions.spawn(e.barrel.x,1,-e.barrel.d,2.1,true);
         this.debris.burst(e.barrel.x,1,-e.barrel.d,18,7,.8,.18,[0xbda265,0x565047,0xffd55e],18,.5);
+        this.texts.spawn(`+${e.barrel.carnage === 'battery' ? 99 : 20} 发`, e.barrel.x, 2, -e.barrel.d, 'gold', .8, 1);
+      } else if (e.type === 'bossSmash') {
+        this.rings.spawn(e.x,-e.d,3,0xff5b32,.4);
+        this.debris.burst(e.x,.1,-e.d,15,4,.5,.15,[0xaaa7a2,0x6c6570],14,.3);
+        this.texts.spawn(e.killed ? `-${e.killed} 人` : '闪避', this.world.squad.x, 2, 0, e.killed ? 'bad' : 'good', .8, 1);
+        if (!reduced && e.killed) this.trauma = .18;
+      } else if (e.type === 'bossDie') {
+        this.texts.spawn('巨人击破', e.boss.x, 4, -e.boss.d, 'gold', 1, 1);
+        this.rings.spawn(e.boss.x,-e.boss.d,5,0xffcf40,.6);
       } else if (e.type === 'carnageBlast') {
         this.explosions.spawn(e.x,.7,-e.d,e.nova?5:2.4,!reduced);
         this.rings.spawn(e.x,-e.d,e.nova?24:6,0xffcf40,.5);
@@ -230,6 +258,7 @@ export class ReferenceCarnageView {
       }
     }
   }
+
   update(dt:number, reduced:boolean, menu:boolean) {
     const w = this.world, t = this.time += dt;
     this.shadows.begin(); this.blue.begin(); this.guns?.begin(); this.red.begin();
@@ -276,15 +305,10 @@ export class ReferenceCarnageView {
     this.sparks.update(dt);this.debris.update(dt);this.explosions.update(dt);this.rings.update(dt);
     this.squadLabel.set(String(w.squad.count),{fill:'#ffffff',stroke:'#153581',pill:'#1d5fe2',size:72});
     this.squadSprite.position.set(w.squad.x,1.25,-Math.max(-2,w.back*.2));
-    const wide=this.width/this.height>1.2;
-    // 固定俯视长桥：玩家约在下方 2/3，四列队列全部同时入镜。
-    this.camera.fov=wide?43:32;
-    this.camera.position.set(0,45,38);
-    this.camera.lookAt(0,0,-13.5);
+    configureCarnageCamera(this.camera, this.width, this.height, w.back);
     if(!reduced&&this.trauma>0){this.camera.position.x+=Math.sin(t*67)*this.trauma;this.trauma=Math.max(0,this.trauma-dt);}
-    this.camera.updateProjectionMatrix();
-    if (!wide) this.camera.projectionMatrix.elements[0] *= 1.22;
-    this.camera.projectionMatrixInverse.copy(this.camera.projectionMatrix).invert();
+    this.camera.updateMatrixWorld();
+    this.texts.update(dt, this.camera, this.width, this.height);
   }
   render(renderer:THREE.WebGLRenderer){renderer.render(this.scene,this.camera);}
 }

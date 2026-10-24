@@ -105,6 +105,7 @@ const handlers: UIHandlers = {
     startGame();
   },
   upgrade(id: UpgradeId) {
+    if (save.mode === 'carnage') { ui.toast('狂潮使用固定军备；切换到主线后可升级'); return; }
     const def = UPGRADES.find((u) => u.id === id)!;
     const lvl = save.upgrades[id];
     const cost = def.cost(lvl);
@@ -129,6 +130,7 @@ const handlers: UIHandlers = {
     }
   },
   skin(id: string) {
+    if (save.mode === 'carnage') { ui.toast('狂潮固定使用蓝军；其他模式可更换皮肤'); return; }
     const skin = SKINS.find((s) => s.id === id);
     if (!skin) return;
     sfx.unlock();
@@ -390,7 +392,8 @@ function finish(retreated = false) {
     info = { mode, won, title: won ? '狂潮平息！' : retreated ? '狂潮撤退' : '狂潮结束',
       sub: '独立火力体验 · 不改变主线进度与资源',
       stats: [['击杀', formatNumber(kills)], ['最高连击', String(world.carnage.bestCombo)],
-        ['超载次数', String(world.carnage.clears)], ['最佳击杀', formatNumber(save.carnageBest)]],
+        ['超载次数', String(world.carnage.clears)], ['增兵 / 装弹', `${world.carnage.recruits} / ${world.carnage.ammoPickups}`],
+        ['拆炮架', String(world.carnage.batteries)], ['最佳击杀', formatNumber(save.carnageBest)]],
       coins: 0, next: '再爽一局', home: '返回主页', stars: null };
   } else if (mode === 'endless') {
     const dist = Math.floor(world.squad.d);
@@ -454,7 +457,7 @@ function finish(retreated = false) {
   }
   const cause = world.stats.mainLoss;
   if (cause) info.stats.push(['主要损兵', `${LOSS_INFO[cause].name} · ${world.stats.losses[cause]} 人`]);
-  info.advice = mode === 'carnage' ? '打右侧大数字门扩军，切左侧清尸潮；蓄满后点超载，或按 E。' : retreated ? '调整战术或升级后可重试；同一关的路线保持不变。' : world.stats.advice(won, !!world.defense);
+  info.advice = mode === 'carnage' ? '左侧 +1 蓝门增兵，黄色 +99 牌装弹；巨人挥剑前，把整队移出红色危险带。' : retreated ? '调整战术或升级后可重试；同一关的路线保持不变。' : world.stats.advice(won, !!world.defense);
   info.detail = `接门 ${world.stats.gatesTaken} · 漏门 ${world.stats.gatesMissed} · 拆补给 ${world.stats.supplies} · 躲砸击 ${world.stats.dodges}`;
   if (!practice) writeSave(save);
   phase = 'result';

@@ -128,3 +128,5 @@ docs/          设计说明
 火力狂潮实现、来源与试玩说明：[2026-10-24 回执](reports/2026-10-24/火力狂潮试玩.md)。
 
 参考图布局重做：[四列阵列与炮架复刻回执](reports/2026-10-24/参考图阵列复刻.md) · [实际试玩画面](outputs/carnage-reference/阵列试玩.png)。
+
+狂潮实玩修复：[问题、修复与完整触屏录像记录](reports/2026-10-24/狂潮实玩修复.md)。正常速度 UI 回归命令：`npx tsx scripts/carnage-playthrough.ts`。

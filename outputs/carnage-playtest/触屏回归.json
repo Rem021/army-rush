@@ -1,0 +1,191 @@
+{
+  "onlyRealInputs": true,
+  "fastForward": false,
+  "receipts": [
+    {
+      "action": "touch-drag",
+      "target": -4.7,
+      "time": 2.760000000000001
+    },
+    {
+      "name": "01-telegraph",
+      "phase": "play",
+      "time": 10.539720000000065,
+      "state": "run",
+      "x": -3.369700526062766,
+      "n": 54,
+      "bossLoss": 0,
+      "recruits": 18,
+      "ammoPickups": 0,
+      "blueAhead": 20,
+      "clears": 0,
+      "bosses": [
+        {
+          "x": -3.439067629814536,
+          "attackX": -3.439067629814536,
+          "attacking": true
+        }
+      ]
+    },
+    {
+      "action": "touch-drag",
+      "target": 4.35,
+      "time": 11.319600000000095
+    },
+    {
+      "name": "02-dodged",
+      "phase": "play",
+      "time": 14.019480000000197,
+      "state": "run",
+      "x": 3.3696852777745394,
+      "n": 54,
+      "bossLoss": 0,
+      "recruits": 18,
+      "ammoPickups": 0,
+      "blueAhead": 20,
+      "clears": 0,
+      "bosses": [
+        {
+          "x": -2.608103629814533,
+          "attackX": -2.608103629814533,
+          "attacking": true
+        }
+      ]
+    },
+    {
+      "action": "touch-drag",
+      "target": 1.55,
+      "time": 15.019440000000234
+    },
+    {
+      "name": "03-ammo-collected",
+      "phase": "play",
+      "time": 22.559160000000343,
+      "state": "run",
+      "x": 1.5499999750401638,
+      "n": 56,
+      "bossLoss": 0,
+      "recruits": 18,
+      "ammoPickups": 1,
+      "blueAhead": 20,
+      "clears": 0,
+      "bosses": []
+    },
+    {
+      "action": "touch-drag",
+      "target": -4.7,
+      "time": 23.319120000000332
+    },
+    {
+      "name": "stage-20",
+      "phase": "play",
+      "time": 23.419200000000338,
+      "state": "run",
+      "x": -3.288175892407151,
+      "n": 57,
+      "bossLoss": 0,
+      "recruits": 19,
+      "ammoPickups": 1,
+      "blueAhead": 20,
+      "clears": 1,
+      "bosses": []
+    },
+    {
+      "name": "stage-40",
+      "phase": "play",
+      "time": 41.558639999999826,
+      "state": "run",
+      "x": -2.757462742514967,
+      "n": 100,
+      "bossLoss": 0,
+      "recruits": 60,
+      "ammoPickups": 1,
+      "blueAhead": 20,
+      "clears": 3,
+      "bosses": []
+    },
+    {
+      "action": "touch-drag",
+      "target": 1.55,
+      "time": 44.15855999999966
+    },
+    {
+      "action": "touch-drag",
+      "target": -4.7,
+      "time": 59.45783999999877
+    },
+    {
+      "name": "stage-60",
+      "phase": "play",
+      "time": 61.35779999999864,
+      "state": "run",
+      "x": -2.7091022882397824,
+      "n": 110,
+      "bossLoss": 0,
+      "recruits": 70,
+      "ammoPickups": 16,
+      "blueAhead": 20,
+      "clears": 7,
+      "bosses": [
+        {
+          "x": -2.502585696055994,
+          "attackX": -2,
+          "attacking": false
+        }
+      ]
+    },
+    {
+      "action": "touch-drag",
+      "target": 4.35,
+      "time": 78.47711999999723
+    },
+    {
+      "name": "stage-80",
+      "phase": "play",
+      "time": 80.39699999999686,
+      "state": "run",
+      "x": 2.74543063139356,
+      "n": 150,
+      "bossLoss": 0,
+      "recruits": 107,
+      "ammoPickups": 18,
+      "blueAhead": 20,
+      "clears": 11,
+      "bosses": []
+    },
+    {
+      "action": "touch-drag",
+      "target": 1.55,
+      "time": 92.1765599999946
+    },
+    {
+      "name": "04-result",
+      "phase": "result",
+      "time": 92.83318666666112,
+      "state": "won",
+      "x": 1.549999528950182,
+      "n": 150,
+      "bossLoss": 0,
+      "recruits": 107,
+      "ammoPickups": 31,
+      "blueAhead": 20,
+      "clears": 14,
+      "bosses": []
+    },
+    {
+      "name": "05-main-mode",
+      "phase": "play",
+      "time": 2.7199200000000006,
+      "state": "run",
+      "x": -2.7,
+      "n": 1,
+      "bossLoss": 0,
+      "recruits": 0,
+      "ammoPickups": 0,
+      "blueAhead": 0,
+      "clears": 0,
+      "bosses": []
+    }
+  ],
+  "errors": []
+}

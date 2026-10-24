@@ -339,7 +339,7 @@ export class World {
   private queueV = 0;
   private streamAcc = 0;
   readonly rockets: CarnageRocket[] = [];
-  readonly carnage = { shells: 120, batteries: 0, recruits: 0, charge: 0, combo: 0, bestCombo: 0, lastKill: -10, burstUntil: 0, clears: 0 };
+  readonly carnage = { shells: 120, batteries: 0, recruits: 0, ammoPickups: 0, charge: 0, combo: 0, bestCombo: 0, lastKill: -10, burstUntil: 0, clears: 0 };
   private rocketAt = 3;
   private novaActive = false;
   private carnageStage = 0;
@@ -543,7 +543,7 @@ export class World {
       hp: z.hp,
       maxHp: z.hp,
       r: def.radius,
-      active: owner > 0,
+      active: owner > 0 || this.spec.mode === 'carnage',
       alive: true,
       phase: this.rng() * Math.PI * 2,
       flash: 0,
@@ -805,6 +805,7 @@ export class World {
   private lose() {
     if (this.state === 'lost' || this.state === 'won') return;
     this.state = 'lost';
+    this.rockets.length = 0;
     this.events.push({ type: 'lost' });
   }
 
@@ -1067,6 +1068,7 @@ export class World {
   private applyGate(g: Gate) {
     const sq = this.squad;
     if (g.carnage === 'ammo') {
+      this.carnage.ammoPickups++;
       const before = this.carnage.shells;
       this.carnage.shells = Math.min(9999, before + 99);
       this.events.push({ type: 'gatePass', gate: g, before, after: this.carnage.shells });
@@ -1599,6 +1601,7 @@ export class World {
     this.state = 'won';
     for (const z of this.near) if (z.alive && z.active) this.killZombie(z, false, false);
     this.projectiles.length = 0;
+    this.rockets.length = 0;
     this.events.push({ type: 'won' });
   }
 
@@ -1682,9 +1685,9 @@ export class World {
           // 每一下起手时锁定队伍站位，红色危险带留在原地。
           b.attacking = true;
           b.windup = 0;
-          b.attackX = sq.x;
-          b.attackD = sq.d + (this.front + this.back) / 2;
-          b.attackLength = Math.max(2.4, this.front - this.back + 1.2);
+          b.attackX = this.spec.mode === 'carnage' ? b.x : sq.x;
+          b.attackD = this.spec.mode === 'carnage' ? b.d - b.r - 2.4 : sq.d + (this.front + this.back) / 2;
+          b.attackLength = this.spec.mode === 'carnage' ? 4.8 : Math.max(2.4, this.front - this.back + 1.2);
         }
         const step = BOSS_COMBO[b.comboStep];
         b.windup += (dt * rage) / step.windup;

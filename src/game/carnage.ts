@@ -16,12 +16,12 @@ export function generateCarnage(): LevelSpec {
   }
   const gates: LevelSpec['gates'] = [];
   const barrels: LevelSpec['barrels'] = [];
-  for (let i = 0; i < 180; i++) {
+  for (let i = 0; i < 320; i++) {
     gates.push({ kind: 'add', carnage: 'recruit', x0: -5.35, x1: -4.05,
       d: 10 + i * 1.5, value: 1, group: i });
-    if (i < 90) gates.push({ kind: 'add', carnage: 'ammo', x0: 0.2, x1: 2.85,
+    if (i < 160) gates.push({ kind: 'add', carnage: 'ammo', x0: 0.2, x1: 2.85,
       d: 24 + i * 3.4, value: 99, group: 1000 + i });
-    if (i < 80) barrels.push({ x: 4.35, d: 20 + i * 3, r: 0.85,
+    if (i < 160) barrels.push({ x: 4.35, d: 20 + i * 3, r: 0.85,
       hp: 20, block: true, look: 'armor', carnage: 'pod', reward: { kind: 'airstrike' } });
   }
   barrels.push({ x: 1.55, d: 20, r: 1.25, hp: 504, block: true,

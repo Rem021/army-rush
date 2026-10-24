@@ -2831,3 +2831,17 @@ span.gun-img svg {
 
 .carnage-mode #tip { bottom: calc(var(--safe-bottom) + 110px); padding: 6px 10px; font-size: 10px; max-width: 94% !important; }
 .carnage-mode .banner, .carnage-mode .banner.boss { top: 11%; font-size: 13px; padding: 6px 16px; }
+
+/* 狂潮实玩修复：固定军备不展示主线购买入口，结算标题不折行。 */
+.carnage-mode #home-ups, .carnage-mode #home-tactic { display: none; }
+.carnage-loadout { color: #c6d9f2; text-align: center; font-size: 11px; line-height: 1.5; }
+.carnage-loadout[hidden] { display: none; }
+.carnage-mode #result .dialog { display: flex; flex-direction: column; width: min(92vw, 420px); padding-top: 40px; }
+.carnage-mode #result .ribbon { left: 50%; min-width: 0; width: max-content; max-width: 90%; white-space: nowrap; padding: 8px 26px 10px; font-size: clamp(20px, 6vw, 27px); letter-spacing: 2px; }
+.carnage-mode #result #btn-next, .carnage-mode #result #btn-home { width: 100%; }
+.carnage-mode #hud-cue { display: block; top: calc(var(--safe-top) + 72px); bottom: auto; max-width: 88vw; padding: 6px 10px; font-size: 11px; }
+
+/* 长开场文案在小屏上完整显示。 */
+.banner { max-width: 94vw; white-space: normal; text-align: center; padding: 10px 18px; font-size: clamp(17px, 5vw, 30px); letter-spacing: 1px; }
+
+.banner { width: max-content !important; }

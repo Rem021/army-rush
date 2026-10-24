@@ -81,6 +81,42 @@ describe('狂潮战斗', () => {
     for(let i=0;i<42;i++){w.update(1/60);w.drainEvents();}
     expect(w.rockets).toHaveLength(0); expect(w.bosses[0].hp).toBeLessThan(hp);
   });
+  it('远处的开局红军也会持续前进，不在激活距离外停住', () => {
+    const w = new World(generateCarnage(), {...CARNAGE_OPTIONS, damageMult:0, rateMult:0});
+    w.carnage.shells=0;
+    const far = w.zombies.find(z=>z.d>40)!;
+    const start = far.d;
+    for(let i=0;i<60;i++){w.update(1/60);w.drainEvents();}
+    expect(far.active).toBe(true); expect(far.d).toBeLessThan(start-2);
+  });
+  it('远侧巨人不能锁定另一侧队伍凭空砸人，攻击中心来自巨人位置', () => {
+    const spec=generateCarnage();spec.zombies=[];spec.gates=[];spec.barrels=[];
+    spec.defense!.spawns=[{t:0,boss:{kind:'brute',x:-3,hp:1000000}}];
+    const w=new World(spec,{...CARNAGE_OPTIONS,damageMult:0,rateMult:0});w.carnage.shells=0;
+    w.update(1/60);const b=w.bosses[0];b.d=w.front+b.r+.1;
+    w.squad.x=3;w.setTarget(3);
+    let sawAttack=false;
+    for(let i=0;i<160;i++){
+      w.update(1/60);w.drainEvents();
+      if(b.attacking){sawAttack=true;expect(b.attackX).toBeCloseTo(b.x);expect(b.attackLength).toBe(4.8);}
+    }
+    expect(sawAttack).toBe(true);expect(w.stats.losses.boss).toBe(0);
+  });
+  it('留在巨人红色攻击带内仍然损兵，没有把修复做成无敌', () => {
+    const spec=generateCarnage();spec.zombies=[];spec.gates=[];spec.barrels=[];
+    spec.defense!.spawns=[{t:0,boss:{kind:'brute',x:1.55,hp:1000000}}];
+    const w=new World(spec,{...CARNAGE_OPTIONS,damageMult:0,rateMult:0});w.carnage.shells=0;
+    w.update(1/60);const b=w.bosses[0];b.d=w.front+b.r+.1;
+    for(let i=0;i<160;i++){w.setTarget(1.55);w.update(1/60);w.drainEvents();}
+    expect(w.stats.losses.boss).toBeGreaterThan(0);expect(w.squad.count).toBeLessThan(36);
+  });
+  it('最后一只巨人战斗期间仍有蓝门和黄色补给到达', () => {
+    const spec=generateCarnage();spec.zombies=[];spec.barrels=[];spec.defense!.spawns=[];
+    const w=new World(spec,CARNAGE_OPTIONS);
+    for(let i=0;i<120*60;i++){w.setTarget(-4.7);w.update(1/60);w.drainEvents();}
+    expect(w.gates.some(g=>g.carnage==='recruit'&&!g.consumed&&g.d>0&&g.d<20)).toBe(true);
+    expect(w.gates.some(g=>g.carnage==='ammo'&&!g.consumed&&g.d>0&&g.d<20)).toBe(true);
+  });
   it('完整波次可以通关，预算有界，开局巨人与后续 Boss 均可击败', () => {
     const w = new World(generateCarnage(), CARNAGE_OPTIONS);
     let maxAlive = 0, peak = 0;

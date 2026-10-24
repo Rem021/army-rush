@@ -175,7 +175,7 @@ export class GameRenderer {
   /** 打 Boss/巨尸时累积伤害，隔一会儿飘一个数字 */
   private dmgAcc = new Map<number, { dmg: number; x: number; y: number; d: number; t: number }>();
 
-  constructor(canvas: HTMLCanvasElement, fxLayer: HTMLElement, skin: SkinDef, models: Models = {}) {
+  constructor(canvas: HTMLCanvasElement, private readonly fxLayer: HTMLElement, skin: SkinDef, models: Models = {}) {
     this.models = models;
     const mobile = /iPhone|iPad|Android/i.test(navigator.userAgent);
     this.mobile = mobile;
@@ -334,13 +334,14 @@ export class GameRenderer {
   loadLevel(world: World) {
     this.world = world;
     if (world.spec.mode === 'carnage') {
-      this.referenceCarnage ??= new ReferenceCarnageView(this.models);
+      this.referenceCarnage ??= new ReferenceCarnageView(this.models, this.fxLayer);
       this.referenceCarnage.load(world);
       this.referenceCarnage.resize(this.width, this.height);
       this.badge.style.opacity = '0';
       this.texts.clear();
       return;
     }
+    this.referenceCarnage?.clearEffects();
     for (const v of this.gates.values()) this.dropView(v.group, v);
     for (const v of this.barrels.values()) this.dropView(v.group, v);
     for (const v of this.hazards.values()) this.dropView(v.group, v);

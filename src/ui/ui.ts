@@ -189,7 +189,7 @@ export class UI {
         <div class="menu-dock">
           <button class="panel mode-card" id="mode-card"></button>
           <div class="home-ups" id="home-ups"></div>
-          <div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
+          <div class="carnage-loadout" hidden>固定蓝军 · 36 人加特林 · 主线升级和皮肤不用于本模式</div><div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
           <button class="btn btn-gold start-btn" id="btn-start">开始战斗<span class="sub" id="start-sub"></span></button>
         </div>
         <div class="nav">
@@ -517,6 +517,7 @@ export class UI {
     el(this.root, '#result-balance').textContent = coins;
     el(this.root, '#menu-gems').textContent = String(s.gems);
     el(this.root, '#result-gems').textContent = String(s.gems);
+    el(this.root, '.carnage-loadout').hidden = s.mode !== 'carnage';
     const def = MODES.find((m) => m.id === s.mode)!;
     const style = MODE_STYLE[s.mode];
     const { tag, desc, start } = this.modeSummary(s.mode);
@@ -578,7 +579,7 @@ export class UI {
     switch (this.sheet) {
       case 'upgrades':
         // 军械库：每条升级线的效果和进化路线
-        body.innerHTML = `<div class="guide-note">推荐按开局直伤 / 花费比较。穿透、溅射、养门和机动各有用途，请结合关卡选择。</div>` + UPGRADES.map((u) => {
+        body.innerHTML = `${s.mode === 'carnage' ? '<div class="guide-note">狂潮使用固定军备，以下为主线升级；请切换模式后购买。</div>' : ''}<div class="guide-note">推荐按开局直伤 / 花费比较。穿透、溅射、养门和机动各有用途，请结合关卡选择。</div>` + UPGRADES.map((u) => {
           const lvl = s.upgrades[u.id];
           const look = UPGRADE_LOOK[u.id];
           const maxed = lvl >= u.max;
@@ -595,7 +596,7 @@ export class UI {
               <div class="row-title">${u.name}<span class="lv">Lv.${lvl}</span><span class="up-now">${u.value(lvl)}${maxed ? '' : ` → <b>${u.value(lvl + 1)}</b>`}</span></div>
               ${pips}${track}<div class="upgrade-gain">${maxed ? '已满级' : upgradeGain(s.upgrades, u.id).text}</div>
             </div>
-            <button class="btn btn-gold buy ${maxed || poor ? 'disabled' : ''}" data-up="${u.id}">${maxed ? '满级' : gems ? `<span class="gem-ico">${ICON.gem}</span>${cost}` : `${coin()}${formatNumber(cost)}`}</button>
+            <button class="btn btn-gold buy ${s.mode === 'carnage' || maxed || poor ? 'disabled' : ''}" data-up="${u.id}">${maxed ? '满级' : gems ? `<span class="gem-ico">${ICON.gem}</span>${cost}` : `${coin()}${formatNumber(cost)}`}</button>
           </div>`;
         }).join('');
         break;
@@ -793,7 +794,7 @@ export class UI {
     this.updateBossBars(w);
     const cue = el(this.root, '#hud-cue');
     const boss = w.bosses.find((b) => b.active && b.alive && b.attacking);
-    const released = w.defense && w.gates.some((g) => !g.consumed && g.d > w.squad.d && g.d < 16);
+    const released = w.spec.mode !== 'carnage' && w.defense && w.gates.some((g) => !g.consumed && g.d > w.squad.d && g.d < 16);
     const danger = w.projectiles.length > 0 || !!boss;
     const text = w.projectiles.length ? '油桶将落地 · 整队移出红圈' : boss ? `${boss.comboStep < 2 ? '蓄力重击' : '快速连击'} ${boss.comboStep + 1}/5 · 移出危险带`
       : released ? '补给已放行 · 回门道接门' : '';
@@ -923,7 +924,8 @@ export class UI {
     el(this.root, '#result-sub').textContent = info.sub;
     el(this.root, '#result-advice').textContent = info.advice ?? '';
     el(this.root, '#result-detail').textContent = info.detail ?? '';
-    for (const sel of ['.reward', '.result-ups-title', '#result-ups']) el(this.root, sel).style.display = info.practice ? 'none' : '';
+    for (const sel of ['.reward', '.result-ups-title', '#result-ups']) el(this.root, sel).style.display = info.practice || info.mode === 'carnage' ? 'none' : '';
+    el(this.root, '.result-tactic').style.display = info.mode === 'carnage' ? 'none' : '';
     el(this.root, '#result').classList.toggle('practice', !!info.practice);
     el(this.root, '#result-stats').innerHTML = info.stats.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
     const next = el(this.root, '#btn-next');
