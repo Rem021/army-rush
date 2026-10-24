@@ -184,6 +184,9 @@ export class Sfx {
             this.tone('sine', 90, 28, 0.5, 0.5, 0.45);
           }
           break;
+        case 'carnageBlast':
+          if (this.ready('carnage', 0.15)) this.boom(e.nova ? 1.8 : 0.7);
+          break;
         case 'explode':
           if (this.ready(`explode-${e.source}`, 0.06)) this.boom(e.source === 'exploder' ? 0.8 : 1.6);
           break;

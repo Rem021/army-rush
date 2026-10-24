@@ -75,6 +75,10 @@ const JAM_GAP = 7;
 /** 防线里丧尸的速度倍数 */
 const DEFENSE_ZOMBIE_SPEED = 1.7;
 
+export interface CarnageRocket {
+  x0: number; d0: number; x: number; d: number; t: number; T: number; damage: number;
+}
+
 export interface Soldier {
   /** 相对队伍中心的偏移，向阵位平滑移动 */
   ox: number;
@@ -225,6 +229,7 @@ export type GameEvent =
   /** Boss 半血狂暴 */
   | { type: 'bossEnrage'; boss: Boss }
   /** 爆裂弹/电磁弹溅射 */
+  | { type: 'carnageBlast'; x: number; d: number; r: number; nova: boolean }
   | { type: 'splash'; x: number; d: number; r: number }
   | { type: 'gateUp'; gate: Gate }
   | { type: 'gatePass'; gate: Gate; before: number; after: number }
@@ -333,14 +338,123 @@ export class World {
   /** 门道队列当前速度：放行后从 0 加速到 conveyor */
   private queueV = 0;
   private streamAcc = 0;
+  readonly rockets: CarnageRocket[] = [];
+  readonly carnage = { shells: 120, batteries: 0, recruits: 0, ammoPickups: 0, charge: 0, combo: 0, bestCombo: 0, lastKill: -10, burstUntil: 0, clears: 0 };
+  private rocketAt = 3;
+  private novaActive = false;
+  private carnageStage = 0;
+  private carnageBlast(x: number, d: number, r: number, damage: number, nova = false) {
+    this.events.push({ type: 'carnageBlast', x, d, r, nova });
+    for (const z of this.zombies) {
+      if (z.alive && Math.hypot(z.x - x, z.d - d) < r + z.r) this.damageZombie(z, damage);
+    }
+    for (const b of this.bosses) {
+      if (b.alive && Math.hypot(b.x - x, b.d - d) < r + b.r) this.damageBoss(b, damage * 2);
+    }
+  }
+
+  /** 蓄满后手动释放，不能在结算中刷连击或重复释放。 */
+  releaseNova(): boolean {
+    if (this.spec.mode !== 'carnage' || !['run', 'boss'].includes(this.state) || this.carnage.charge < 100) return false;
+    this.carnage.charge = 0;
+    this.carnage.clears++;
+    this.carnage.burstUntil = this.time + 6;
+    this.novaActive = true;
+    this.carnageBlast(0, 24, 50, 4500, true);
+    this.novaActive = false;
+    this.events.push({ type: 'banner', text: '超载 6 秒 · 双倍弹幕！', tone: 'info' });
+    return true;
+  }
+
+  private runCarnage(dt: number) {
+    const def = this.defense!;
+    const stage = Math.min(2, Math.floor(this.time / 30));
+    if (stage > this.carnageStage) {
+      this.carnageStage = stage;
+      this.squad.tier = 4;
+      this.events.push({ type: 'banner', text: stage === 1 ? '重炮增援 · 火箭连发' : '红潮压境 · 全弹装填', tone: 'boss' });
+    }
+    let alive = this.zombies.reduce((n, z) => n + Number(z.alive), 0);
+    const spawnWave = (count: number) => {
+      const n = Math.min(count, Math.max(0, 650 - alive));
+      for (let i = 0; i < n; i++) {
+        const kind: ZombieKind = 'walker';
+        const z = this.makeZombie({ kind, x: -3.7 + (i % 10) * 0.35,
+          d: def.spawnD + Math.floor(i / 10) * 0.54, hp: (9 + stage * 5) * ZOMBIES[kind].hp });
+        z.active = true;
+        this.zombies.push(z);
+      }
+      alive += n;
+      if (n) this.version++;
+    };
+    while (this.spawnIdx < def.spawns.length && def.spawns[this.spawnIdx].t <= this.time) {
+      const sp = def.spawns[this.spawnIdx++];
+      if (sp.wave) spawnWave(sp.wave);
+      if (sp.boss) {
+        const b = this.makeBoss(sp.boss, sp.t === 0 ? 28 : 30);
+        b.final = sp.t >= def.duration;
+        b.active = true;
+        this.bosses.push(b);
+        this.events.push({ type: 'bossStart', bosses: [b] });
+        this.version++;
+      }
+    }
+    if (this.time < def.duration) {
+      this.streamAcc += dt * (10 + stage * 4);
+      if (this.streamAcc >= 8) { spawnWave(8); this.streamAcc -= 8; }
+    }
+    if (this.time > this.carnage.lastKill + 2.5) this.carnage.combo = 0;
+    // 弹药来自黄色 +99 牌和多管炮架；实体火箭飞行后才结算爆炸。
+    for (let i = this.rockets.length - 1; i >= 0; i--) {
+      const rocket = this.rockets[i];
+      rocket.t += dt;
+      if (rocket.t >= rocket.T) {
+        this.carnageBlast(rocket.x, rocket.d, 4, rocket.damage);
+        this.rockets.splice(i, 1);
+      }
+    }
+    if (this.time >= this.rocketAt && this.carnage.shells > 0) {
+      this.rocketAt = this.time + (this.time < this.carnage.burstUntil ? 0.32 : 1.5);
+      const boss = this.bosses.find((b) => b.alive);
+      const targets = this.zombies.filter((z) => z.alive && z.d < 43);
+      const count = Math.min(3 + Math.min(3, this.carnage.batteries), this.carnage.shells);
+      if (targets.length || boss) for (let i = 0; i < count; i++) {
+        const target = i === 0 && boss ? boss : targets[Math.floor(this.rng() * targets.length)] ?? boss!;
+        this.rockets.push({ x0: this.squad.x + (i - count / 2) * 0.18, d0: this.squad.d + this.front,
+          x: target.x, d: target.d, t: 0, T: 0.55 + i * 0.04, damage: 280 + stage * 140 });
+        this.carnage.shells--;
+      }
+    }
+    this.moveCarnageQueue(dt);
+  }
+
+  private moveCarnageQueue(dt: number) {
+    // 蓝色增兵门独立流动；黄色弹药牌由中央 504 炮组挡住。
+    const battery = this.barrels.find((b) => b.alive && b.carnage === 'battery');
+    const gold = this.gates.filter((g) => !g.consumed && g.carnage === 'ammo');
+    let floor = battery ? battery.d + 3.4 : -Infinity;
+    for (const g of gold) {
+      g.d = Math.max(floor, g.d - dt * 3.4);
+      floor = g.d + 3.4;
+    }
+    for (const g of this.gates) if (g.carnage === 'recruit') g.d -= dt * 3.4;
+    // 右列炮架在桥头排队，前一个打碎后下一个补位。
+    let podFloor = 18;
+    for (const b of this.barrels) {
+      if (!b.alive) continue;
+      b.d = Math.max(b.carnage === 'battery' ? 18 : podFloor, b.d - dt * 3.4);
+      if (b.carnage === 'pod') podFloor = b.d + 3;
+    }
+
+  }
   constructor(spec: LevelSpec, opts: WorldOptions) {
     this.spec = spec;
     this.opts = opts;
     this.rng = mulberry32(opts.seed ?? spec.level * 31 + 7);
     // 防线里丧尸跑得快得多，直接冲到脸上
-    this.zombieSpeed = spec.defense ? DEFENSE_ZOMBIE_SPEED : 1;
+    this.zombieSpeed = spec.mode === 'carnage' ? 0.72 : spec.defense ? DEFENSE_ZOMBIE_SPEED : 1;
     this.damage = opts.damageMult;
-    this.ammo = AMMO[Math.max(0, Math.min(AMMO.length - 1, opts.ammo ?? 0))];
+    this.ammo = spec.mode === 'carnage' ? { name: '黄金穿透弹', pierce: 4, splash: 1.6, splashDmg: 0.8, color: 0xffcd3e } : AMMO[Math.max(0, Math.min(AMMO.length - 1, opts.ammo ?? 0))];
     this.endless = opts.endless ?? null;
     this.defense = spec.defense;
     this.gates = [];
@@ -352,7 +466,7 @@ export class World {
     for (const b of spec.bosses) this.bosses.push(this.makeBoss(b, spec.length + 6));
     if (this.bosses.length > 1) for (const b of this.bosses) b.pair = true;
     // 防线开局站在门道上，第一组门直接吃到
-    if (spec.defense) this.squad.x = this.squad.targetX = spec.defense.gateSide * (TRACK_HALF / 2);
+    if (spec.defense) this.squad.x = this.squad.targetX = spec.mode === 'carnage' ? 1.55 : spec.defense.gateSide * (TRACK_HALF / 2);
     this.squad.count = Math.max(1, Math.min(this.countCap, Math.round(opts.startSoldiers)));
     this.squad.tier = opts.startTier ?? 0;
     this.squad.rate = opts.rateBonus ?? 1;
@@ -429,7 +543,7 @@ export class World {
       hp: z.hp,
       maxHp: z.hp,
       r: def.radius,
-      active: owner > 0,
+      active: owner > 0 || this.spec.mode === 'carnage',
       alive: true,
       phase: this.rng() * Math.PI * 2,
       flash: 0,
@@ -453,11 +567,11 @@ export class World {
   }
 
   private get countCap(): number {
-    return this.defense ? MAX_DEFENSE_COUNT : MAX_COUNT;
+    return this.spec.mode === 'carnage' ? 240 : this.defense ? MAX_DEFENSE_COUNT : MAX_COUNT;
   }
 
   get fireRate(): number {
-    return this.weapon.rate * this.opts.rateMult * this.squad.rate;
+    return this.weapon.rate * this.opts.rateMult * this.squad.rate * (this.spec.mode === 'carnage' && this.time < this.carnage.burstUntil ? 2 : 1);
   }
 
   setTarget(x: number) {
@@ -492,7 +606,8 @@ export class World {
     const prevD = sq.d;
     if (this.defense) {
       sq.moving = false;
-      this.runDefense(dt);
+      if (this.spec.mode === 'carnage') this.runCarnage(dt);
+      else this.runDefense(dt);
     } else if (this.state === 'run') {
       sq.d += SQUAD_SPEED * dt;
       const stop = this.spec.length - BOSS_STOP;
@@ -690,6 +805,7 @@ export class World {
   private lose() {
     if (this.state === 'lost' || this.state === 'won') return;
     this.state = 'lost';
+    this.rockets.length = 0;
     this.events.push({ type: 'lost' });
   }
 
@@ -719,7 +835,7 @@ export class World {
     const n = this.gates.length + this.barrels.length + this.zombies.length + this.hazards.length + this.walls.length;
     this.gates = this.gates.filter((g) => g.d > cut);
     this.barrels = this.barrels.filter((b) => b.d > cut);
-    this.zombies = this.zombies.filter((z) => z.alive || z.d > cut);
+    this.zombies = this.zombies.filter((z) => z.alive || (this.spec.mode !== 'carnage' && z.d > cut));
     this.zombies = this.zombies.filter((z) => z.d > cut - 20);
     this.hazards = this.hazards.filter((h) => h.d1 > cut);
     this.walls = this.walls.filter((w) => w.d1 > cut);
@@ -773,13 +889,13 @@ export class World {
   /** 阵型参数：n 个人时的横向压缩、纵向拉长和整体后移 */
   private formation(n: number): { sx: number; sz: number; shift: number; gap: number } {
     // 防线里人多时站得更密，不然一条道上的纵队会拉到几十米长
-    const gap = FORMATION_SPACING * (this.defense ? Math.max(0.78, 1 - n / 900) : 1);
+    const gap = this.spec.mode === 'carnage' ? 0.25 : FORMATION_SPACING * (this.defense ? Math.max(0.78, 1 - n / 900) : 1);
     const R = gap * Math.sqrt(Math.max(1, n));
     // 防线里阵型最宽只占一条道：人再多也是往后排，站哪条道就只打哪条道
     const laneCap = this.defense ? TRACK_HALF / 2 - 0.25 : 2.0;
     const maxR = Math.max(0.6, Math.min(laneCap, (this.hi - this.lo) / 2 - 0.35));
     const sx = R > maxR ? maxR / R : 1;
-    const sz = 1 / sx;
+    const sz = this.spec.mode === 'carnage' ? Math.min(1.15, 1 / sx) : 1 / sx;
     // 防线里队伍往后排，最前排始终在桥头
     return { sx, sz, shift: this.defense ? -R * sz + 0.6 : 0, gap };
   }
@@ -951,6 +1067,15 @@ export class World {
 
   private applyGate(g: Gate) {
     const sq = this.squad;
+    if (g.carnage === 'ammo') {
+      this.carnage.ammoPickups++;
+      const before = this.carnage.shells;
+      this.carnage.shells = Math.min(9999, before + 99);
+      this.events.push({ type: 'gatePass', gate: g, before, after: this.carnage.shells });
+      return;
+    }
+    if (g.carnage === 'recruit') this.carnage.recruits++;
+
     if (g.kind === 'add' || g.kind === 'mul') {
       const before = sq.count;
       sq.count = g.kind === 'add' ? before + g.value : Math.round(before * g.value);
@@ -970,6 +1095,7 @@ export class World {
   }
 
   private gateHit(g: Gate, hits = 1) {
+    if (g.carnage) { g.bump = 1; return; }
     g.hits += hits;
     g.bump = 1;
     const L = this.spec.level;
@@ -1165,7 +1291,7 @@ export class World {
       this.events.push({ type: 'hit', x: hx, d: hd, y: 1.2, target: 'gate', color, dmg: 0, id: (target as Gate).id });
     } else if (kind === 2) {
       const br = target as Barrel;
-      const damage = b.dmg * (this.opts.armorMult ?? 1);
+      const damage = br.carnage ? (b.gateHits ?? 1) * 0.2 : b.dmg * (this.opts.armorMult ?? 1);
       br.hp -= damage;
       br.bump = 1;
       this.events.push({ type: 'hit', x: hx, d: hd, y: 0.9, target: 'barrel', color, dmg: damage, id: br.id });
@@ -1220,7 +1346,10 @@ export class World {
     // 卡住的大障碍被打掉：队列重新起步
     if (br.block && br.armed) this.queueV = 0;
     this.events.push({ type: 'barrelBreak', barrel: br });
-    this.applyReward(br.reward, br.x, br.d);
+    if (br.carnage) {
+      this.carnage.shells = Math.min(9999, this.carnage.shells + (br.carnage === 'battery' ? 99 : 20));
+      this.carnage.batteries++;
+    } else this.applyReward(br.reward, br.x, br.d);
   }
 
   private applyReward(reward: Reward, x: number, d: number) {
@@ -1277,9 +1406,15 @@ export class World {
   private killZombie(z: Zombie, byPlayer = true, chain = true) {
     if (!z.alive) return;
     z.alive = false;
-    const coins = byPlayer ? killCoins(z.kind, this.spec.level) * (this.opts.coinMult ?? 1) : 0;
+    const coins = byPlayer && this.spec.mode !== 'carnage' ? killCoins(z.kind, this.spec.level) * (this.opts.coinMult ?? 1) : 0;
     if (byPlayer) {
       this.kills += 1;
+      if (this.spec.mode === 'carnage') {
+        this.carnage.combo = this.time - this.carnage.lastKill < 2.5 ? this.carnage.combo + 1 : 1;
+        this.carnage.lastKill = this.time;
+        this.carnage.bestCombo = Math.max(this.carnage.bestCombo, this.carnage.combo);
+        if (!this.novaActive) this.carnage.charge = Math.min(100, this.carnage.charge + 0.85);
+      }
       this.coins += coins;
       if (this.rng() < GEMS.drop[z.kind]) this.addGems(1, z.x, z.d);
     }
@@ -1443,7 +1578,7 @@ export class World {
     if (b.hp <= 0) {
       b.hp = 0;
       b.alive = false;
-      const bounty = bossBounty(this.spec.level, b.final, b.pair) * (this.opts.coinMult ?? 1);
+      const bounty = this.spec.mode === 'carnage' ? 0 : bossBounty(this.spec.level, b.final, b.pair) * (this.opts.coinMult ?? 1);
       this.coins += bounty;
       this.addGems(bossGems(b.final, this.rng()), b.x, b.d);
       this.events.push({ type: 'bossDie', boss: b, bounty });
@@ -1456,7 +1591,7 @@ export class World {
   }
 
   private addGems(n: number, x: number, d: number) {
-    if (n <= 0) return;
+    if (n <= 0 || this.spec.mode === 'carnage') return;
     this.gems += n;
     this.events.push({ type: 'gem', x, d, amount: n });
   }
@@ -1466,6 +1601,7 @@ export class World {
     this.state = 'won';
     for (const z of this.near) if (z.alive && z.active) this.killZombie(z, false, false);
     this.projectiles.length = 0;
+    this.rockets.length = 0;
     this.events.push({ type: 'won' });
   }
 
@@ -1549,9 +1685,9 @@ export class World {
           // 每一下起手时锁定队伍站位，红色危险带留在原地。
           b.attacking = true;
           b.windup = 0;
-          b.attackX = sq.x;
-          b.attackD = sq.d + (this.front + this.back) / 2;
-          b.attackLength = Math.max(2.4, this.front - this.back + 1.2);
+          b.attackX = this.spec.mode === 'carnage' ? b.x : sq.x;
+          b.attackD = this.spec.mode === 'carnage' ? b.d - b.r - 2.4 : sq.d + (this.front + this.back) / 2;
+          b.attackLength = this.spec.mode === 'carnage' ? 4.8 : Math.max(2.4, this.front - this.back + 1.2);
         }
         const step = BOSS_COMBO[b.comboStep];
         b.windup += (dt * rage) / step.windup;

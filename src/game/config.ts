@@ -155,7 +155,7 @@ export const DEFENSE_VIEW_D = DEFENSE_SPAWN_D + 14;
 /** 防线模式：两条道之间的隔离墙从这里开始，下面是交战区，丧尸会拐过来 */
 export const DEFENSE_WALL_D = 13;
 
-export type GameMode = 'defense' | 'campaign' | 'endless';
+export type GameMode = 'defense' | 'campaign' | 'endless' | 'carnage';
 
 export interface ModeDef {
   id: GameMode;
@@ -166,6 +166,7 @@ export interface ModeDef {
 }
 
 export const MODES: ModeDef[] = [
+  { id: 'carnage', name: '火力狂潮', desc: '图中同款阵列：左侧 +1 蓝门、红军巨人、+99 弹药与多管火箭炮', unlock: 30 },
   { id: 'defense', name: '防线', desc: '原地死守：一边数字门和重甲补给滑过来，一边尸潮和 Boss 涌过来', unlock: 1 },
   { id: 'campaign', name: '冲锋', desc: '一路冲到底，终点有 Boss，第 5 关起双 Boss', unlock: 1 },
   { id: 'endless', name: '无尽', desc: '一直跑下去，越来越难，看能跑多远', unlock: 2 },

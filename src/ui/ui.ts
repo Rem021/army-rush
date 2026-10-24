@@ -1,4 +1,6 @@
 import { AMMO, BOSSES, MODES, SKINS, UPGRADES, WEAPONS, soldierDps, type GameMode, type UpgradeId } from '../game/config';
+import { modeUnlocked, progressLevel } from '../game/access';
+export { modeUnlocked, progressLevel } from '../game/access';
 import { isBossLevel, recommendUpgrade, upgradeGain } from '../game/economy';
 import { TACTICS, type TacticId } from '../game/tactics';
 import type { World } from '../game/world';
@@ -8,6 +10,8 @@ import { EMBLEM, ICON, MODE_STYLE, RANK_SHIELD, SVG_DEFS } from './icons';
 
 export interface UIHandlers {
   start(): void;
+  nova(): void;
+  revokeAdmin(): void;
   upgrade(id: UpgradeId): void;
   skin(id: string): void;
   mode(id: GameMode): void;
@@ -85,6 +89,7 @@ function nextEvolution(u: (typeof UPGRADES)[number], lvl: number) {
 const MODE_TIPS: Partial<Record<GameMode, string>> = {
   defense: '左右拖动换道：门道打门、拆补给变强，另一边的尸潮别让它冲到脚下',
   campaign: '左右拖动选道，子弹只打正前方',
+  carnage: '左侧 +1 增兵 · 黄色 +99 装弹 · 右侧拆炮架 · 中路清红军',
   endless: '越往后越难，看你能撑多远',
 };
 
@@ -92,16 +97,6 @@ function el<T extends HTMLElement = HTMLElement>(root: ParentNode, sel: string):
   const e = root.querySelector(sel);
   if (!e) throw new Error(`missing ${sel}`);
   return e as T;
-}
-
-/** 解锁看玩家在两条主线（防线、冲锋）里走到的最远关卡 */
-export function progressLevel(save: SaveData): number {
-  return Math.max(save.level, save.defenseLevel);
-}
-
-export function modeUnlocked(save: SaveData, mode: GameMode): boolean {
-  const def = MODES.find((m) => m.id === mode)!;
-  return progressLevel(save) >= def.unlock;
 }
 
 function hex(c: number): string {
@@ -163,6 +158,10 @@ export class UI {
           <div class="chip" id="hud-rate">${ICON.bolt}<span>射速 100%</span></div>
           <div class="chip ammo" id="hud-ammo">${ICON.ammo}<span></span></div>
         </div>
+        <div id="carnage-hud" hidden>
+          <div class="carnage-score"><small>RAMPAGE / 火力狂潮</small><b id="carnage-combo">0 连击</b><span id="carnage-count">击杀 0</span><span id="carnage-shells">火箭弹 120</span></div>
+          <button id="btn-nova" disabled><span id="nova-title">超载蓄能</span><b id="nova-charge">0%</b><i id="nova-fill"></i><small>清屏 + 6 秒双倍弹幕 · E</small></button>
+        </div>
         <div class="boss-bars" id="boss-bars"></div>
         <div id="hud-cue" class="hud-cue"></div>
         <div id="resume-count" class="resume-count" hidden>准备 · 1</div>
@@ -190,7 +189,7 @@ export class UI {
         <div class="menu-dock">
           <button class="panel mode-card" id="mode-card"></button>
           <div class="home-ups" id="home-ups"></div>
-          <div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
+          <div class="carnage-loadout" hidden>固定蓝军 · 36 人加特林 · 主线升级和皮肤不用于本模式</div><div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
           <button class="btn btn-gold start-btn" id="btn-start">开始战斗<span class="sub" id="start-sub"></span></button>
         </div>
         <div class="nav">
@@ -258,6 +257,7 @@ export class UI {
     on('#btn-restart', () => h.restart());
     on('#btn-quit', () => h.retreat());
     on('#btn-start', () => h.start());
+    on('#btn-nova', () => h.nova());
     on('#btn-settings', () => this.openSheet('settings'));
     on('#mode-card', () => this.openSheet('modes'));
     on('#sheet-close', () => this.closeSheet());
@@ -299,6 +299,7 @@ export class UI {
         if (field.checkValidity()) h.practice(id, Number(field.value));
         else field.reportValidity();
       }
+      if (t.closest('[data-revoke-admin]')) h.revokeAdmin();
       const reset = t.closest<HTMLElement>('[data-reset]');
       if (reset) {
         // 第一次点变红提示，3 秒内再点一次才真的重置
@@ -516,6 +517,7 @@ export class UI {
     el(this.root, '#result-balance').textContent = coins;
     el(this.root, '#menu-gems').textContent = String(s.gems);
     el(this.root, '#result-gems').textContent = String(s.gems);
+    el(this.root, '.carnage-loadout').hidden = s.mode !== 'carnage';
     const def = MODES.find((m) => m.id === s.mode)!;
     const style = MODE_STYLE[s.mode];
     const { tag, desc, start } = this.modeSummary(s.mode);
@@ -558,6 +560,8 @@ export class UI {
     const s = this.save;
     const def = MODES.find((m) => m.id === mode)!;
     switch (mode) {
+      case 'carnage':
+        return { tag: s.carnageAdmin ? '管理员已解锁' : '已通关解锁', desc: def.desc, start: '火力狂潮 · 90 秒释放' };
       case 'defense': {
         const boss = isBossLevel(s.defenseLevel);
         return { tag: `第 ${s.defenseLevel} 关${boss ? ' · Boss 关' : ''}`, desc: boss ? '双 Boss 守关：更难打，赏金和通关奖励翻倍' : def.desc, start: `防线 · 第 ${s.defenseLevel} 关${boss ? ' · Boss 关' : ''}` };
@@ -575,7 +579,7 @@ export class UI {
     switch (this.sheet) {
       case 'upgrades':
         // 军械库：每条升级线的效果和进化路线
-        body.innerHTML = `<div class="guide-note">推荐按开局直伤 / 花费比较。穿透、溅射、养门和机动各有用途，请结合关卡选择。</div>` + UPGRADES.map((u) => {
+        body.innerHTML = `${s.mode === 'carnage' ? '<div class="guide-note">狂潮使用固定军备，以下为主线升级；请切换模式后购买。</div>' : ''}<div class="guide-note">推荐按开局直伤 / 花费比较。穿透、溅射、养门和机动各有用途，请结合关卡选择。</div>` + UPGRADES.map((u) => {
           const lvl = s.upgrades[u.id];
           const look = UPGRADE_LOOK[u.id];
           const maxed = lvl >= u.max;
@@ -592,7 +596,7 @@ export class UI {
               <div class="row-title">${u.name}<span class="lv">Lv.${lvl}</span><span class="up-now">${u.value(lvl)}${maxed ? '' : ` → <b>${u.value(lvl + 1)}</b>`}</span></div>
               ${pips}${track}<div class="upgrade-gain">${maxed ? '已满级' : upgradeGain(s.upgrades, u.id).text}</div>
             </div>
-            <button class="btn btn-gold buy ${maxed || poor ? 'disabled' : ''}" data-up="${u.id}">${maxed ? '满级' : gems ? `<span class="gem-ico">${ICON.gem}</span>${cost}` : `${coin()}${formatNumber(cost)}`}</button>
+            <button class="btn btn-gold buy ${s.mode === 'carnage' || maxed || poor ? 'disabled' : ''}" data-up="${u.id}">${maxed ? '满级' : gems ? `<span class="gem-ico">${ICON.gem}</span>${cost}` : `${coin()}${formatNumber(cost)}`}</button>
           </div>`;
         }).join('');
         break;
@@ -620,11 +624,12 @@ export class UI {
           return `<button class="row ${s.mode === m.id ? 'active' : ''} ${locked ? 'locked' : ''}" data-mode="${m.id}" style="text-align:left">
             <div class="mode-tile" style="background:${style.bg}">${locked ? ICON.lock : style.icon}</div>
             <div class="row-main">
-              <div class="row-title">${m.name}<span class="lv">${locked ? `第 ${m.unlock} 关解锁` : tag}</span></div>
+              <div class="row-title">${m.name}<span class="lv">${locked ? (m.id === 'carnage' ? '通关第 30 关解锁' : `第 ${m.unlock} 关解锁`) : tag}</span></div>
               <div class="row-sub">${desc}</div>
             </div>
           </button>`;
         }).join('');
+        body.innerHTML += `<div class="guide-note carnage-note">火力狂潮：${s.carnageAdmin ? '管理员试玩已开启，可直接进入。' : '防线或冲锋通关第 30 关解锁。'}独立火力与击杀纪录，不发主线金币或钻石。</div>`;
         body.innerHTML += `<div class="guide-note">已通关关卡可随时演练：使用当前升级和战术，不消耗资源，也不结算金币、钻石和战绩。</div>${(['defense', 'campaign'] as const).map((id) => {
           const best = id === 'defense' ? s.defenseBest : s.best;
           return best < 1 ? '' : `<div class="practice-row"><label for="practice-${id}">${id === 'defense' ? '防线' : '冲锋'}演练 · 1–${best} 关</label><input id="practice-${id}" type="number" inputmode="numeric" min="1" max="${best}" step="1" value="${best}" /><button class="btn btn-blue" data-practice="${id}">开始演练</button></div>`;
@@ -636,6 +641,7 @@ export class UI {
         body.innerHTML = `<div class="stat-grid">
           ${stat(ICON.defense, MODE_STYLE.defense.bg, '防线最高', `第 ${s.defenseBest} 关`)}
           ${stat(ICON.campaign, MODE_STYLE.campaign.bg, '冲锋最高', `第 ${s.best} 关`)}
+          ${stat(ICON.bolt, MODE_STYLE.carnage.bg, '狂潮最佳击杀', formatNumber(s.carnageBest))}
           ${stat(ICON.endless, MODE_STYLE.endless.bg, '无尽最远', `${formatNumber(s.endlessBest)} 米`)}
           ${stat(ICON.trophy, 'linear-gradient(160deg,#4a5a80,#25304d)', '胜利场次', String(s.wins))}
           ${stat(ICON.zombie, 'linear-gradient(160deg,#4a5a80,#25304d)', '累计击杀', formatNumber(s.kills))}
@@ -656,6 +662,7 @@ export class UI {
           <button class="row" data-toggle="motion" style="text-align:left"><div class="row-main"><div class="row-title">动态效果：${s.motion === 'system' ? '跟随系统' : s.motion === 'reduced' ? '减少' : '完整'}</div><div class="row-sub">减少时关闭镜头震动、推近和全屏闪光</div></div></button>
           <button class="row" data-toggle="sensitivity" style="text-align:left"><div class="row-main"><div class="row-title">拖动灵敏度：${s.sensitivity === 1 ? '标准' : s.sensitivity < 1 ? '精细' : '灵敏'}</div><div class="row-sub">切换精细 / 标准 / 灵敏，移动速度由机动升级决定</div></div></button>
           <button class="row danger-row" data-reset style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#ff6b6b,#b5121f)">${ICON.close}</div><div class="row-main"><div class="row-title" id="reset-title">重置全部进度</div><div class="row-sub">关卡、金币、钻石、升级、皮肤、战绩全部清零，从头开始</div></div></button>
+          ${s.carnageAdmin ? '<button class="row" data-revoke-admin><div class="row-main"><div class="row-title">管理员试玩 · 已开启</div><div class="row-sub">点击关闭狂潮直通权限，正常通关解锁仍保留</div></div></button>' : ''}
           <div class="credits">人物、丧尸、Boss 和道具模型：Quaternius（CC0 公共领域）</div>`;
         break;
       default:
@@ -679,6 +686,8 @@ export class UI {
     }
     this.flying = 0;
     el(this.root, '#hud-title').textContent = title;
+    el(this.root, '#carnage-hud').hidden = !title.startsWith('火力狂潮');
+    this.root.classList.toggle('carnage-mode', title.startsWith('火力狂潮'));
     const box = el(this.root, '#hud-marks');
     box.innerHTML = marks.map((f) => `<i class="hud-mark" style="left:${(f * 100).toFixed(1)}%">${ICON.skull}</i>`).join('');
     this.marks = [...box.querySelectorAll<HTMLElement>('.hud-mark')].map((e, i) => ({ el: e, at: marks[i] * 100 }));
@@ -709,6 +718,18 @@ export class UI {
   }
 
   updateHud(w: World, best: number) {
+    if (w.spec.mode === 'carnage') {
+      const c = w.carnage;
+      el(this.root, '#carnage-combo').textContent = `${c.combo} 连击`;
+      el(this.root, '#carnage-count').textContent = `击杀 ${formatNumber(w.kills)} · 军团 ${w.squad.count}`;
+      el(this.root, '#carnage-shells').textContent = `火箭弹 ${c.shells} · 炮架 ${c.batteries}`;
+      const nova = el<HTMLButtonElement>(this.root, '#btn-nova');
+      nova.disabled = c.charge < 100 || !['run', 'boss'].includes(w.state);
+      nova.classList.toggle('ready', c.charge >= 100);
+      el(this.root, '#nova-title').textContent = w.time < c.burstUntil ? `超载 ${(c.burstUntil - w.time).toFixed(1)}s` : c.charge >= 100 ? '释放超载' : '超载蓄能';
+      el(this.root, '#nova-charge').textContent = `${Math.floor(c.charge)}%`;
+      el(this.root, '#nova-fill').style.width = `${c.charge}%`;
+    }
     const endless = w.spec.mode === 'endless';
     const pct = endless ? Math.floor(w.squad.d) : Math.round(w.progress * 100);
     if (pct !== this.lastPct) {
@@ -773,7 +794,7 @@ export class UI {
     this.updateBossBars(w);
     const cue = el(this.root, '#hud-cue');
     const boss = w.bosses.find((b) => b.active && b.alive && b.attacking);
-    const released = w.defense && w.gates.some((g) => !g.consumed && g.d > w.squad.d && g.d < 16);
+    const released = w.spec.mode !== 'carnage' && w.defense && w.gates.some((g) => !g.consumed && g.d > w.squad.d && g.d < 16);
     const danger = w.projectiles.length > 0 || !!boss;
     const text = w.projectiles.length ? '油桶将落地 · 整队移出红圈' : boss ? `${boss.comboStep < 2 ? '蓄力重击' : '快速连击'} ${boss.comboStep + 1}/5 · 移出危险带`
       : released ? '补给已放行 · 回门道接门' : '';
@@ -786,9 +807,9 @@ export class UI {
     el(this.root, '#resume-count').hidden = !show;
   }
 
-  showPause(practice: boolean) {
-    el(this.root, '#btn-restart').textContent = practice ? '重新演练（无奖励）' : '保留战利品并重试';
-    el(this.root, '#btn-quit').textContent = practice ? '结束演练（无奖励）' : '撤退并结算';
+  showPause(practice: boolean, carnage = false) {
+    el(this.root, '#btn-restart').textContent = carnage ? '重新挑战狂潮' : practice ? '重新演练（无奖励）' : '保留战利品并重试';
+    el(this.root, '#btn-quit').textContent = carnage ? '结束狂潮并记录击杀' : practice ? '结束演练（无奖励）' : '撤退并结算';
     this.show('pause');
   }
 
@@ -903,7 +924,8 @@ export class UI {
     el(this.root, '#result-sub').textContent = info.sub;
     el(this.root, '#result-advice').textContent = info.advice ?? '';
     el(this.root, '#result-detail').textContent = info.detail ?? '';
-    for (const sel of ['.reward', '.result-ups-title', '#result-ups']) el(this.root, sel).style.display = info.practice ? 'none' : '';
+    for (const sel of ['.reward', '.result-ups-title', '#result-ups']) el(this.root, sel).style.display = info.practice || info.mode === 'carnage' ? 'none' : '';
+    el(this.root, '.result-tactic').style.display = info.mode === 'carnage' ? 'none' : '';
     el(this.root, '#result').classList.toggle('practice', !!info.practice);
     el(this.root, '#result-stats').innerHTML = info.stats.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
     const next = el(this.root, '#btn-next');

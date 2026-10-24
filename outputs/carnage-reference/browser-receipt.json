@@ -1,0 +1,80 @@
+{
+  "fps": 60.666666666666664,
+  "stageFps": 60.666666666666664,
+  "before": {
+    "level": 7,
+    "defenseLevel": 9,
+    "defenseBest": 8,
+    "endlessBest": 0,
+    "carnageBest": 0,
+    "carnageAdmin": true,
+    "mode": "carnage",
+    "coins": 321,
+    "gems": 7,
+    "upgrades": {
+      "soldiers": 0,
+      "damage": 0,
+      "rate": 0,
+      "income": 0,
+      "agility": 0
+    },
+    "skin": "green",
+    "owned": [
+      "green"
+    ],
+    "best": 6,
+    "kills": 42,
+    "wins": 3,
+    "sound": true,
+    "haptics": true,
+    "tactic": "balanced",
+    "motion": "system",
+    "sensitivity": 1
+  },
+  "after": {
+    "level": 7,
+    "defenseLevel": 9,
+    "defenseBest": 8,
+    "endlessBest": 0,
+    "carnageBest": 4682,
+    "carnageAdmin": true,
+    "mode": "carnage",
+    "coins": 321,
+    "gems": 7,
+    "upgrades": {
+      "soldiers": 0,
+      "damage": 0,
+      "rate": 0,
+      "income": 0,
+      "agility": 0
+    },
+    "skin": "green",
+    "owned": [
+      "green"
+    ],
+    "best": 6,
+    "kills": 42,
+    "wins": 3,
+    "sound": true,
+    "haptics": true,
+    "tactic": "balanced",
+    "motion": "system",
+    "sensitivity": 1
+  },
+  "stats": {
+    "phase": "play",
+    "kills": 1782,
+    "renderer": {
+      "frame": 691,
+      "calls": 57,
+      "triangles": 104985,
+      "points": 0,
+      "lines": 0
+    },
+    "perf": {
+      "sim": 0.31628087855825143,
+      "frame": 0.2207552038625823
+    }
+  },
+  "errors": []
+}

@@ -1,0 +1,6 @@
+{
+  "fixture": "isolated funded save; separate from real-input playthrough",
+  "carnagePurchasesDisabled": true,
+  "skinDidNotSpend": true,
+  "mainUpgradeWorks": true
+}

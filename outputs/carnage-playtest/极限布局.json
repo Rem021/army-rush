@@ -1,0 +1,32 @@
+{
+  "purpose": "240 soldier layout stress fixture, not the recorded playthrough",
+  "layoutReceipts": [
+    {
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "count": 240,
+      "rearScreenY": 694.0000000000001,
+      "overflows": false
+    },
+    {
+      "viewport": {
+        "width": 320,
+        "height": 568
+      },
+      "count": 240,
+      "rearScreenY": 418,
+      "overflows": false
+    },
+    {
+      "viewport": {
+        "width": 844,
+        "height": 390
+      },
+      "count": 240,
+      "rearScreenY": 260,
+      "overflows": false
+    }
+  ]
+}
