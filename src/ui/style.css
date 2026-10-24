@@ -2816,3 +2816,18 @@ span.gun-img svg {
 #btn-nova span { font-size: 14px; white-space: nowrap; }
 #btn-nova b { float: none; font-size: 18px; }
 #btn-nova small { grid-column: 1 / -1; }
+
+/* 参考图复刻：收起通用武器/Boss 面板，把空间留给四列阵列。 */
+.carnage-mode #hud .hud-row, .carnage-mode #hud .boss-bars { display: none !important; }
+.carnage-mode .carnage-score { top: auto; bottom: calc(32px + env(safe-area-inset-bottom)); padding: 8px 10px; border-radius: 10px; background: #11192cba; }
+.carnage-mode .carnage-score small { font-size: 8px; letter-spacing: 1px; }
+.carnage-mode .carnage-score b { font-size: 19px; }
+.carnage-mode .carnage-score span { display: block; font-size: 10px; }
+.carnage-mode #hud-cue { display: none; }
+.carnage-mode #btn-nova { width: 164px; min-height: 68px; }
+.carnage-mode #btn-nova small { font-size: 9px; }
+.carnage-mode .hud-bar { padding: 6px 8px; }
+.carnage-mode .hud-title { font-size: 11px; }
+
+.carnage-mode #tip { bottom: calc(var(--safe-bottom) + 110px); padding: 6px 10px; font-size: 10px; max-width: 94% !important; }
+.carnage-mode .banner, .carnage-mode .banner.boss { top: 11%; font-size: 13px; padding: 6px 16px; }

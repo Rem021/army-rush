@@ -166,7 +166,7 @@ export interface ModeDef {
 }
 
 export const MODES: ModeDef[] = [
-  { id: 'carnage', name: '火力狂潮', desc: '重火力开局 · 百人军团 · 连锁爆破 · 蓄能清屏，90 秒尽情释放', unlock: 30 },
+  { id: 'carnage', name: '火力狂潮', desc: '图中同款阵列：左侧 +1 蓝门、红军巨人、+99 弹药与多管火箭炮', unlock: 30 },
   { id: 'defense', name: '防线', desc: '原地死守：一边数字门和重甲补给滑过来，一边尸潮和 Boss 涌过来', unlock: 1 },
   { id: 'campaign', name: '冲锋', desc: '一路冲到底，终点有 Boss，第 5 关起双 Boss', unlock: 1 },
   { id: 'endless', name: '无尽', desc: '一直跑下去，越来越难，看能跑多远', unlock: 2 },

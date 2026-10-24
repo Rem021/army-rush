@@ -89,7 +89,7 @@ function nextEvolution(u: (typeof UPGRADES)[number], lvl: number) {
 const MODE_TIPS: Partial<Record<GameMode, string>> = {
   defense: '左右拖动换道：门道打门、拆补给变强，另一边的尸潮别让它冲到脚下',
   campaign: '左右拖动选道，子弹只打正前方',
-  carnage: '右侧接大数字门，左侧扫尸潮；能量满后点超载清屏，键盘按 E',
+  carnage: '左侧 +1 增兵 · 黄色 +99 装弹 · 右侧拆炮架 · 中路清红军',
   endless: '越往后越难，看你能撑多远',
 };
 
@@ -159,7 +159,7 @@ export class UI {
           <div class="chip ammo" id="hud-ammo">${ICON.ammo}<span></span></div>
         </div>
         <div id="carnage-hud" hidden>
-          <div class="carnage-score"><small>RAMPAGE / 火力狂潮</small><b id="carnage-combo">0 连击</b><span id="carnage-count">击杀 0</span></div>
+          <div class="carnage-score"><small>RAMPAGE / 火力狂潮</small><b id="carnage-combo">0 连击</b><span id="carnage-count">击杀 0</span><span id="carnage-shells">火箭弹 120</span></div>
           <button id="btn-nova" disabled><span id="nova-title">超载蓄能</span><b id="nova-charge">0%</b><i id="nova-fill"></i><small>清屏 + 6 秒双倍弹幕 · E</small></button>
         </div>
         <div class="boss-bars" id="boss-bars"></div>
@@ -721,6 +721,7 @@ export class UI {
       const c = w.carnage;
       el(this.root, '#carnage-combo').textContent = `${c.combo} 连击`;
       el(this.root, '#carnage-count').textContent = `击杀 ${formatNumber(w.kills)} · 军团 ${w.squad.count}`;
+      el(this.root, '#carnage-shells').textContent = `火箭弹 ${c.shells} · 炮架 ${c.batteries}`;
       const nova = el<HTMLButtonElement>(this.root, '#btn-nova');
       nova.disabled = c.charge < 100 || !['run', 'boss'].includes(w.state);
       nova.classList.toggle('ready', c.charge >= 100);

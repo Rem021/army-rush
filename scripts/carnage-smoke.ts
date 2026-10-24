@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { chromium } from 'playwright-core';
 const base = process.argv[2] ?? 'http://127.0.0.1:5178/';
-const out = 'work/shots/carnage'; mkdirSync(out, { recursive: true });
+const out = 'work/shots/carnage-reference'; mkdirSync(out, { recursive: true });
 const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
 const errors: string[] = [];
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
@@ -26,7 +26,9 @@ try {
   assert.equal(await page.evaluate('window.__game.world.spec.mode'), 'carnage');
   await page.screenshot({ path: `${out}/02-admin-menu.png` });
   await page.click('#btn-start');
-  await page.waitForTimeout(8500);
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: `${out}/03-reference-layout.png` });
+  await page.waitForTimeout(6500);
   await page.screenshot({ path: `${out}/03-opening.png` });
   const fps = await page.evaluate(`new Promise(resolve => { let n=0;const t=performance.now();function tick(){n++;if(performance.now()-t<1500)requestAnimationFrame(tick);else resolve(n/1.5);}requestAnimationFrame(tick); })`);
   // Finish the same real world with accelerated simulation, then let the app settle it.
@@ -69,11 +71,11 @@ try {
   await page.goto(base + '?admin=carnage&mode=carnage&speed=3'); await ready();
   await page.click('#btn-start');
   await page.waitForFunction('window.__game.world.time > 32', undefined, { timeout:30000 });
-  await page.screenshot({ path: `${out}/06-plasma-boss.png` });
+  await page.screenshot({ path: `${out}/06-rocket-boss.png` });
   const stageFps = await page.evaluate(`new Promise(resolve => { let n=0;const t=performance.now();function tick(){n++;if(performance.now()-t<1500)requestAnimationFrame(tick);else resolve(n/1.5);}requestAnimationFrame(tick); })`);
   await page.click('#btn-nova');
   await page.waitForTimeout(180);
-  await page.screenshot({ path: `${out}/07-plasma-nova.png` });
+  await page.screenshot({ path: `${out}/07-rocket-salvo.png` });
   const stats = await page.evaluate('({ phase:window.__game.mode, kills:window.__game.world.kills, renderer: window.__game.renderer.renderer.info.render, perf:window.__game.perf })');
   assert.deepEqual(errors, []);
   writeFileSync(`${out}/receipt.json`, JSON.stringify({ fps, stageFps, before:a, after:b, stats, errors },null,2));

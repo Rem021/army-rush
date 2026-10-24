@@ -30,6 +30,8 @@ export type Reward =
   | { kind: 'rate'; amount: number };
 
 export interface GateSpec {
+  /** 狂潮复刻：固定蓝色 +1 / 黄色 +99 弹药牌。 */
+  carnage?: 'recruit' | 'ammo';
   kind: GateKind;
   x0: number;
   x1: number;
@@ -41,6 +43,8 @@ export interface GateSpec {
 }
 
 export interface BarrelSpec {
+  /** 狂潮专用多管火箭架；数字为剩余耐久。 */
+  carnage?: 'battery' | 'pod';
   x: number;
   d: number;
   r: number;

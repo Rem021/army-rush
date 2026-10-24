@@ -3,6 +3,7 @@ import { BOSSES, DEFENSE_VIEW_D, MAX_SOLDIERS_SIM, THROW_RADIUS, TRACK_HALF, WEA
 import type { GameEvent, World, Zombie } from '../game/world';
 import type { Models } from './assets';
 import { ModelBossView, bakeSoldierBody, bossModel, buildSoldier, buildZombies, gunStatic, propGeometry, type SoldierKit } from './characters';
+import { ReferenceCarnageView } from './carnage';
 import { Crowd, type AgentPose } from './crowd';
 import { BlobShadows, BulletMesh, Explosions, Flashes, FloatTexts, Particles, Pillar, Rings, Splats, Streaks, ZombieBars } from './effects';
 import { BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, stripeTexture } from './entities';
@@ -169,6 +170,7 @@ export class GameRenderer {
   private width = 1;
   private height = 1;
   private world: World | null = null;
+  private referenceCarnage: ReferenceCarnageView | null = null;
   private version = -1;
   /** 打 Boss/巨尸时累积伤害，隔一会儿飘一个数字 */
   private dmgAcc = new Map<number, { dmg: number; x: number; y: number; d: number; t: number }>();
@@ -331,6 +333,14 @@ export class GameRenderer {
 
   loadLevel(world: World) {
     this.world = world;
+    if (world.spec.mode === 'carnage') {
+      this.referenceCarnage ??= new ReferenceCarnageView(this.models);
+      this.referenceCarnage.load(world);
+      this.referenceCarnage.resize(this.width, this.height);
+      this.badge.style.opacity = '0';
+      this.texts.clear();
+      return;
+    }
     for (const v of this.gates.values()) this.dropView(v.group, v);
     for (const v of this.barrels.values()) this.dropView(v.group, v);
     for (const v of this.hazards.values()) this.dropView(v.group, v);
@@ -483,6 +493,7 @@ export class GameRenderer {
   }
 
   handleEvents(events: GameEvent[]) {
+    if (this.world?.spec.mode === 'carnage') { this.referenceCarnage!.handle(events, this.reducedMotion); return; }
     const w = this.world;
     if (!w) return;
     let sparkBudget = 26;
@@ -752,6 +763,11 @@ export class GameRenderer {
 
   /** 菜单待机或游戏中每帧调用 */
   update(dt: number, realDt = dt) {
+    if (this.world?.spec.mode === 'carnage') {
+      this.referenceCarnage!.resize(this.width, this.height);
+      this.referenceCarnage!.update(dt, this.reducedMotion, this.menu);
+      return;
+    }
     const w = this.world;
     if (!w) return;
     this.time += dt;
@@ -1110,7 +1126,8 @@ export class GameRenderer {
 
   render() {
     const tRender = performance.now();
-    this.renderer.render(this.scene, this.camera);
+    if (this.world?.spec.mode === 'carnage') this.referenceCarnage!.render(this.renderer);
+    else this.renderer.render(this.scene, this.camera);
     this.perf.render = this.perf.render * 0.95 + (performance.now() - tRender) * 0.05;
     this.perf.calls = this.renderer.info.render.calls;
     this.perf.tris = this.renderer.info.render.triangles;

@@ -290,7 +290,7 @@ function upgradeOpts(): WorldOptions {
 function hudTitle(): string {
   const mode = world.spec.mode;
   const level = world.spec.level;
-  if (mode === 'carnage') return '火力狂潮 · 90 秒释放';
+  if (mode === 'carnage') return '火力狂潮 · 重炮阵列';
   if (mode === 'endless') return '无尽';
   return `${practice ? '演练 · ' : ''}${mode === 'defense' ? '防线' : '冲锋'} · 第 ${level} 关${isBossLevel(level) ? ' · Boss 关' : ''}`;
 }
@@ -344,7 +344,7 @@ function startGame() {
   const bosses = world.spec.defense ? world.spec.defense.spawns.filter((sp) => sp.boss).length : world.bosses.length;
   const startedRun = runId;
   window.setTimeout(() => {
-    if (phase === 'play' && runId === startedRun) ui.banner(world.defense ? `${hudTitle()} · ${bosses} 只 Boss` : `${hudTitle()} · 开战！`, 'info');
+    if (phase === 'play' && runId === startedRun) ui.banner(world.spec.mode === 'carnage' ? '左 +1 · 右重炮 · 开火！' : world.defense ? `${hudTitle()} · ${bosses} 只 Boss` : `${hudTitle()} · 开战！`, 'info');
   }, 650);
 }
 

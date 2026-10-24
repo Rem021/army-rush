@@ -1,32 +1,37 @@
-import { TRACK_HALF } from './config';
 import type { LevelSpec, SpawnSpec } from './level';
 import type { WorldOptions } from './world';
 
-/** 独立固定预算；主线升级和试玩权限均不改变敌人血量。 */
+/** 参考图的四列布局和独立预算，不改变主线升级。 */
 export const CARNAGE_OPTIONS: WorldOptions = {
-  startSoldiers: 48, startTier: 4, damageMult: 2.4, rateMult: 1.5,
-  ammo: 3, steerMult: 1.3, seed: 3686,
+  startSoldiers: 36, startTier: 4, damageMult: 2.4, rateMult: 1.5,
+  ammo: 1, steerMult: 1.3, seed: 3686,
 };
+export const CARNAGE_LANES = { recruit: -4.7, horde: -2, ammo: 1.55, rockets: 4.35 };
 
 export function generateCarnage(): LevelSpec {
   const spawns: SpawnSpec[] = [];
-  for (let t = 1; t < 90; t += 4) spawns.push({ t, wave: 90 + Math.floor(t / 15) * 18 });
-  for (const [t, kind, hp] of [[30, 'brute', 18000], [60, 'thrower', 24000], [90, 'hive', 42000]] as const) {
-    spawns.push({ t, boss: { kind, x: -2.7, hp } });
+  for (let t = 4; t < 90; t += 4) spawns.push({ t, wave: 90 + Math.floor(t / 15) * 18 });
+  for (const [t, hp] of [[0, 20000], [30, 26000], [60, 32000], [90, 42000]] as const) {
+    spawns.push({ t, boss: { kind: 'brute', x: -2, hp } });
   }
   const gates: LevelSpec['gates'] = [];
   const barrels: LevelSpec['barrels'] = [];
-  // 右侧连续的大数字门，重甲火力箱卡住队列；左侧密集尸潮。
-  for (let i = 0; i < 48; i++) {
-    const d = 14 + i * 7;
-    gates.push({ kind: i % 6 === 5 ? 'mul' : 'add', x0: 0.3, x1: TRACK_HALF,
-      d, value: i % 6 === 5 ? 1.5 : [12, 24, 36, 48, 99][i % 6], group: i });
-    if (i % 8 === 7) barrels.push({ x: 2.7, d: d + 3.5, r: 1.25,
-      hp: 1500 + i * 70, block: true, look: 'armor', reward: { kind: 'airstrike' } });
+  for (let i = 0; i < 180; i++) {
+    gates.push({ kind: 'add', carnage: 'recruit', x0: -5.35, x1: -4.05,
+      d: 10 + i * 1.5, value: 1, group: i });
+    if (i < 90) gates.push({ kind: 'add', carnage: 'ammo', x0: 0.2, x1: 2.85,
+      d: 24 + i * 3.4, value: 99, group: 1000 + i });
+    if (i < 80) barrels.push({ x: 4.35, d: 20 + i * 3, r: 0.85,
+      hp: 20, block: true, look: 'armor', carnage: 'pod', reward: { kind: 'airstrike' } });
   }
+  barrels.push({ x: 1.55, d: 20, r: 1.25, hp: 504, block: true,
+    look: 'armor', carnage: 'battery', reward: { kind: 'airstrike' } });
+  const zombies: LevelSpec['zombies'] = [];
+  for (let i = 0; i < 420; i++) zombies.push({ kind: 'walker',
+    x: -3.7 + (i % 10) * 0.35, d: 19 + Math.floor(i / 10) * 0.54, hp: 9 });
   spawns.sort((a, b) => a.t - b.t);
-  return { mode: 'carnage', level: 30, theme: 1, length: Infinity, gates, barrels,
-    zombies: [], walls: [{ d0: 12, d1: 100 }], hazards: [], banners: [], bosses: [],
-    defense: { conveyor: 6.5, spawnD: 48, stopD: 22, gateSide: 1, duration: 90, spawns },
+  return { mode: 'carnage', level: 30, theme: 0, length: Infinity, gates, barrels,
+    zombies, walls: [], hazards: [], banners: [], bosses: [],
+    defense: { conveyor: 3.4, spawnD: 48, stopD: 18, gateSide: 1, duration: 90, spawns },
     expected: 240, estimates: [] };
 }
