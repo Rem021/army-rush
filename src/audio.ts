@@ -67,44 +67,50 @@ export class Sfx {
     src.stop(t + dur + 0.02);
   }
 
-  /** 每把枪一种枪声：换枪以后耳朵也听得出来 */
+  /** 每把枪一种枪声：换枪以后耳朵也听得出来，带低频胸腔震感 */
   shot(tier: number) {
     switch (tier) {
-      case 0: // 手枪：清脆的单发
+      case 0: // 手枪：清脆的单发 + 低频底鼓脉冲
+        if (!this.ready('shot', 0.072)) return;
+        this.hiss(0.055, 0.14, 'highpass', 2200, 820);
+        this.tone('square', 320, 105, 0.045, 0.028);
+        this.tone('sine', 135, 52, 0.05, 0.045);
+        break;
+      case 1: // 冲锋枪：又密又脆的连发脉冲
+        if (!this.ready('shot', 0.042)) return;
+        this.hiss(0.038, 0.11, 'highpass', 2800, 1250);
+        this.tone('square', 380, 145, 0.028, 0.022);
+        this.tone('sine', 150, 62, 0.036, 0.035);
+        break;
+      case 2: // 突击步枪：更沉、更有劲的膛压感
+        if (!this.ready('shot', 0.056)) return;
+        this.hiss(0.075, 0.17, 'bandpass', 1750, 460);
+        this.tone('sawtooth', 210, 58, 0.065, 0.04);
+        this.tone('sine', 120, 45, 0.065, 0.055);
+        break;
+      case 3: // 战术步枪：尖锐高穿透“啪”声 + 重击尾音
+        if (!this.ready('shot', 0.066)) return;
+        this.hiss(0.05, 0.16, 'highpass', 3600, 1400);
+        this.tone('square', 640, 195, 0.052, 0.03);
+        this.tone('sine', 140, 48, 0.06, 0.05);
+        break;
+      case 4: // 加特林：密集金属撕裂连射
+        if (!this.ready('shot', 0.036)) return;
+        this.hiss(0.034, 0.1, 'bandpass', 2300, 1100);
+        this.tone('sawtooth', 165, 85, 0.038, 0.034);
+        this.tone('sine', 110, 46, 0.04, 0.042);
+        break;
+      case 5: // 黄金步枪：厚重轰鸣 + 金属泛音回响
         if (!this.ready('shot', 0.075)) return;
-        this.hiss(0.05, 0.12, 'highpass', 2400, 900);
-        this.tone('square', 300, 110, 0.04, 0.02);
+        this.hiss(0.085, 0.18, 'lowpass', 3200, 380);
+        this.tone('sine', 135, 42, 0.11, 0.07);
+        this.tone('triangle', 1320, 960, 0.09, 0.018);
         break;
-      case 1: // 冲锋枪：又轻又密的哒哒声
-        if (!this.ready('shot', 0.045)) return;
-        this.hiss(0.035, 0.09, 'highpass', 3000, 1400);
-        this.tone('square', 360, 160, 0.025, 0.015);
-        break;
-      case 2: // 突击步枪：更沉、更有劲
-        if (!this.ready('shot', 0.06)) return;
-        this.hiss(0.07, 0.15, 'bandpass', 1800, 500);
-        this.tone('sawtooth', 190, 60, 0.06, 0.03);
-        break;
-      case 3: // 战术步枪：尖利的“啪”
-        if (!this.ready('shot', 0.07)) return;
-        this.hiss(0.045, 0.14, 'highpass', 3800, 1600);
-        this.tone('square', 620, 220, 0.05, 0.022);
-        break;
-      case 4: // 加特林：嗡嗡的连射
-        if (!this.ready('shot', 0.04)) return;
-        this.hiss(0.03, 0.08, 'bandpass', 2200, 1200);
-        this.tone('sawtooth', 150, 95, 0.035, 0.025);
-        break;
-      case 5: // 黄金步枪：厚重的一枪，带一点金属回响
-        if (!this.ready('shot', 0.08)) return;
-        this.hiss(0.08, 0.16, 'lowpass', 3200, 400);
-        this.tone('sine', 130, 50, 0.1, 0.05);
-        this.tone('triangle', 1320, 990, 0.09, 0.012);
-        break;
-      default: // 等离子炮：电流“咻”
-        if (!this.ready('shot', 0.08)) return;
-        this.tone('sine', 1500, 220, 0.1, 0.035);
-        this.tone('square', 760, 120, 0.08, 0.012);
+      default: // 等离子炮：高频电弧爆裂 + 重低音冲击
+        if (!this.ready('shot', 0.075)) return;
+        this.tone('sine', 1550, 195, 0.1, 0.045);
+        this.tone('square', 780, 110, 0.085, 0.02);
+        this.tone('sine', 115, 38, 0.09, 0.06);
         break;
     }
   }
@@ -142,9 +148,17 @@ export class Sfx {
     for (const e of events) {
       switch (e.type) {
         case 'hit':
-          // 打中的声音：障碍“咚”、Boss“噗”，限流免得糊成一片
-          if (e.target === 'barrel' && this.ready('hitBarrel', 0.075)) this.tone('square', 140 + Math.random() * 30, 70, 0.05, 0.035);
-          else if ((e.target === 'boss' || e.target === 'giant') && this.ready('hitBoss', 0.09)) this.hiss(0.06, 0.08, 'lowpass', 900, 200);
+          // 命中反馈音（Hitmarker）：杂兵清脆噗嗤/骨裂感、铁桶金属闷响、Boss/巨怪厚重受击，带限流防糊
+          if (e.target === 'zombie' && this.ready('hitZombie', 0.048)) {
+            this.tone('triangle', 520 + Math.random() * 180, 150, 0.032, 0.032);
+            this.hiss(0.026, 0.055, 'bandpass', 2100, 900);
+          } else if (e.target === 'barrel' && this.ready('hitBarrel', 0.068)) {
+            this.tone('square', 165 + Math.random() * 35, 72, 0.055, 0.048);
+            this.tone('triangle', 680 + Math.random() * 90, 320, 0.035, 0.025);
+          } else if ((e.target === 'boss' || e.target === 'giant') && this.ready('hitBoss', 0.075)) {
+            this.hiss(0.065, 0.11, 'lowpass', 1100, 220);
+            this.tone('sine', 125 + Math.random() * 25, 48, 0.065, 0.065);
+          }
           break;
         case 'gateUp':
           if (this.ready('gateUp', 0.07)) this.tone('triangle', 700 + Math.min(600, Math.abs(e.gate.value) * 18), 900, 0.06, 0.07);
@@ -162,7 +176,10 @@ export class Sfx {
           break;
         case 'zombieDie':
           if (e.kind === 'giant') this.boom(2);
-          else if (this.ready('pop', 0.035)) this.tone('sine', 420 + Math.random() * 200, 110, 0.09, 0.12);
+          else if (this.ready('pop', 0.032)) {
+            this.tone('sine', 460 + Math.random() * 220, 95, 0.095, 0.14);
+            this.hiss(0.045, 0.075, 'bandpass', 1800, 520);
+          }
           break;
         case 'soldierDie':
           if (this.ready('ouch', 0.06)) this.tone('square', 220, 90, 0.08, 0.05);

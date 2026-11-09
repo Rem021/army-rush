@@ -407,12 +407,15 @@ export class ModelBossView {
         this.landed = true;
       } else drop = 16 * (1 - k * k);
     }
-    this.root.position.set(b.x, drop, -b.d);
-    // 挨打只是微微泛红（一直被打时 flash 一直是满的，太亮会整只变色）；狂暴后整只发红光、呼吸闪
+    const hitPulse = b.alive ? b.flash * (0.55 + 0.45 * Math.max(0, Math.sin(time * 52))) : 0;
+    this.root.position.set(b.x + Math.sin(time * 61) * b.flash * 0.045, drop, -b.d - hitPulse * 0.08);
+    this.root.scale.set(1 + hitPulse * 0.035, 1 - hitPulse * 0.025, 1 + hitPulse * 0.035);
+    // 挨打时高频脉冲泛红发亮，展现出弹雨倾泻在巨兽身上的受击反馈；狂暴后整只发红光、呼吸闪
     const rage = b.enraged ? 0.18 + 0.1 * Math.sin(time * 8) : 0;
-    for (const m of this.materials) m.emissive.setRGB(b.flash * 0.1 + rage, b.flash * 0.025 + rage * 0.1, b.flash * 0.02);
+    for (const m of this.materials) m.emissive.setRGB(hitPulse * 0.28 + rage, hitPulse * 0.11 + rage * 0.1, hitPulse * 0.06);
 
     if (!b.alive) {
+      this.root.scale.setScalar(1);
       this.deathT += dt;
       for (const attack of this.attackVariants) if (attack) attack.paused = false;
       this.play(this.actions.death, 0.1);

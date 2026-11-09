@@ -440,18 +440,22 @@ export const DEFENSE_TUNING = {
  */
 function pacing(L: number): number {
   if (L === 1) return 0.30;
-  // 第 2 关单独压低：刚过第 1 关时升级还很少，不能一下子难七成
+  // 第 2、3 关平滑过渡：刚过第 1 关时升级还较少，逐步拉起压迫感
   if (L === 2) return 0.64;
-  return 0.62 + 0.7 * (1 - Math.exp(-(L - 1) / 3)) - 0.4 * Math.max(0, Math.min(1, (L - 10) / 6));
+  if (L === 3) return 0.85;
+  return 0.62 + 0.7 * (1 - Math.exp(-(L - 1) / 3)) - 0.36 * Math.max(0, Math.min(1, (L - 10) / 7));
 }
 
 /**
  * 锯齿形难度：每 5 关一个 Boss 关，下一关放松 12%。
- * Boss 关的加成看是哪对 Boss：带投弹手的两对（炸弹圈一炸一片）本身就难，加成小一点
+ * Boss 关的加成看是哪对 Boss：带投弹手的两对（炸弹圈一炸一片）本身就难，加成小一点；20 关以后双 Boss 本身压力足，增幅收窄
  */
 const BOSS_LEVEL_HARD = [1.22, 1.1, 1.12];
 function sawtooth(L: number): number {
-  if (isBossLevel(L)) return BOSS_LEVEL_HARD[(L / 5 - 1) % 3];
+  if (isBossLevel(L)) {
+    const hard = BOSS_LEVEL_HARD[(L / 5 - 1) % 3];
+    return L >= 20 ? Math.min(1.08, hard) : hard;
+  }
   return isRestLevel(L) ? 0.88 : 1;
 }
 

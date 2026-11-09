@@ -833,10 +833,26 @@ export class World {
     this.pruneT = 0;
     const cut = this.squad.d - 40;
     const n = this.gates.length + this.barrels.length + this.zombies.length + this.hazards.length + this.walls.length;
-    this.gates = this.gates.filter((g) => g.d > cut);
-    this.barrels = this.barrels.filter((b) => b.d > cut);
-    this.zombies = this.zombies.filter((z) => z.alive || (this.spec.mode !== 'carnage' && z.d > cut));
-    this.zombies = this.zombies.filter((z) => z.d > cut - 20);
+    const stationary = !!this.defense || this.spec.mode === 'carnage';
+    let deadGates = 0;
+    for (let i = this.gates.length - 1; i >= 0; i--) {
+      const g = this.gates[i];
+      if (g.d <= cut || (stationary && g.consumed && ++deadGates > 6)) this.gates.splice(i, 1);
+    }
+    let deadBarrels = 0;
+    for (let i = this.barrels.length - 1; i >= 0; i--) {
+      const b = this.barrels[i];
+      if (b.d <= cut || (stationary && !b.alive && ++deadBarrels > 6)) this.barrels.splice(i, 1);
+    }
+    if (this.defense) {
+      let deadZombies = 0;
+      for (let i = this.zombies.length - 1; i >= 0; i--) {
+        if (!this.zombies[i].alive && ++deadZombies > 24) this.zombies.splice(i, 1);
+      }
+    } else {
+      this.zombies = this.zombies.filter((z) => z.alive || (this.spec.mode !== 'carnage' && z.d > cut));
+      this.zombies = this.zombies.filter((z) => z.d > cut - 20);
+    }
     this.hazards = this.hazards.filter((h) => h.d1 > cut);
     this.walls = this.walls.filter((w) => w.d1 > cut);
     if (n !== this.gates.length + this.barrels.length + this.zombies.length + this.hazards.length + this.walls.length) this.version++;
@@ -1419,12 +1435,12 @@ export class World {
       if (this.rng() < GEMS.drop[z.kind]) this.addGems(1, z.x, z.d);
     }
     this.events.push({ type: 'zombieDie', x: z.x, d: z.d, kind: z.kind, coins, look: z.look });
-    if (z.kind === 'exploder' && chain) this.explode(z.x, z.d, EXPLODE_RADIUS, 'exploder');
+    if (z.kind === 'exploder' && chain) this.explode(z.x, z.d, EXPLODE_RADIUS, 'exploder', byPlayer);
     if (z.kind === 'giant' && byPlayer && z.reward) this.applyReward(z.reward, z.x, z.d);
   }
 
-  /** 爆炸：自爆尸、投弹、空袭。连锁引爆用队列，避免递归太深 */
-  private explode(x: number, d: number, radius: number, source: 'exploder' | 'impact' | 'strike') {
+  /** 爆炸：自爆尸、投弹、空袭。远程点爆自爆尸可清周围丧尸且大幅减小对己方士兵的波及半径 */
+  private explode(x: number, d: number, radius: number, source: 'exploder' | 'impact' | 'strike', byPlayer = false) {
     const event: GameEvent = { type: 'explode', x, d, r: radius, source, killed: 0 };
     this.events.push(event);
     const rr = radius * radius;
@@ -1456,8 +1472,10 @@ export class World {
       }
       event.killed = bodies + extra;
     } else if (source === 'exploder') {
-      // 自爆：至少带走 3 人，大部队每只最多 6%
-      this.killNear(x, d, radius, Math.max(3, Math.ceil(this.squad.count * 0.06)), 'explosion');
+      // 自爆：贴脸引爆至少带走 3 人（最多 6%）；被玩家远程点爆时波及半径缩至 55%、伤亡减半
+      const friendRadius = byPlayer ? radius * 0.55 : radius;
+      const maxKill = byPlayer ? Math.max(1, Math.ceil(this.squad.count * 0.03)) : Math.max(3, Math.ceil(this.squad.count * 0.06));
+      this.killNear(x, d, friendRadius, maxKill, 'explosion');
     }
   }
 

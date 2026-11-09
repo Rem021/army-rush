@@ -420,12 +420,21 @@ export class VatCrowd {
     this.material.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       injectVertex(shader);
-      shader.fragmentShader = 'varying float vTex;\n' + shader.fragmentShader.replace(
+      shader.vertexShader = 'varying float vFlash;\n' + shader.vertexShader.replace(
+        '#include <color_vertex>',
+        `#include <color_vertex>
+  vFlash = 0.0;
+#ifdef USE_INSTANCING_COLOR
+  vFlash = clamp((max(instanceColor.r, max(instanceColor.g, instanceColor.b)) - 1.12) * 0.45, 0.0, 0.78);
+#endif`,
+      );
+      shader.fragmentShader = 'varying float vTex;\nvarying float vFlash;\n' + shader.fragmentShader.replace(
         '#include <map_fragment>',
         `#ifdef USE_MAP
   vec4 sampledDiffuseColor = texture2D( map, vMapUv );
   diffuseColor *= mix( vec4( 1.0 ), sampledDiffuseColor, vTex );
-#endif`,
+#endif
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.94, 0.8), vFlash);`,
       );
     };
     this.material.customProgramCacheKey = () => `vat-${model.map ? 1 : 0}`;
@@ -496,7 +505,7 @@ export class VatCrowd {
     const t = (((cycle % 1) + 1) % 1) * clip.frames;
     const f0 = Math.floor(t);
     this.anim.setXYZ(i, clip.start + f0, clip.start + ((f0 + 1) % clip.frames), t - f0);
-    const f = 1 + a.flash * 1.6;
+    const f = 1 + a.flash * 2.2;
     if (a.tint) this.mesh.setColorAt(i, _col.setRGB(a.tint[0] * f, a.tint[1] * f, a.tint[2] * f));
     else this.mesh.setColorAt(i, _col.setRGB(f, f, f));
   }

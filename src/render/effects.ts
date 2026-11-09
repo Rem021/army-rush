@@ -467,13 +467,13 @@ export class Pillar {
 /** 子弹：拉长的发光方块 */
 /** 每种枪的弹道样子：芯粗细、光晕粗细、长度倍数、光晕亮度 */
 const BULLET_STYLE: { core: number; glow: number; len: number; alpha: number }[] = [
-  { core: 0.9, glow: 0.8, len: 0.5, alpha: 0.45 }, // 手枪：短小的子弹
-  { core: 0.75, glow: 0.8, len: 0.7, alpha: 0.5 }, // 冲锋枪：又小又密，泼得开
-  { core: 1, glow: 1.1, len: 1.2, alpha: 0.6 }, // 突击步枪：橙色曳光弹
-  { core: 0.55, glow: 1.3, len: 2.6, alpha: 0.65 }, // 战术步枪：细长的蓝色光线，又快又准
-  { core: 0.65, glow: 0.9, len: 1.8, alpha: 0.55 }, // 加特林：细长的光线，一大片扇面
-  { core: 1.5, glow: 1.9, len: 1.4, alpha: 0.8 }, // 黄金步枪：粗金光（带闪粉拖尾）
-  { core: 2.6, glow: 3.6, len: 0.45, alpha: 0.9 }, // 等离子炮：慢而大的发光弹团（带拖尾）
+  { core: 1.15, glow: 1.1, len: 0.65, alpha: 0.58 }, // 手枪：清晰明亮的单发弹头
+  { core: 0.95, glow: 1.05, len: 0.85, alpha: 0.62 }, // 冲锋枪：密集火线
+  { core: 1.25, glow: 1.35, len: 1.45, alpha: 0.72 }, // 突击步枪：橙色曳光弹
+  { core: 0.75, glow: 1.55, len: 2.9, alpha: 0.78 }, // 战术步枪：细长凌厉的蓝色激光束
+  { core: 0.9, glow: 1.2, len: 2.1, alpha: 0.68 }, // 加特林：密集金属火舌
+  { core: 1.75, glow: 2.25, len: 1.65, alpha: 0.88 }, // 黄金步枪：粗壮金光曳光弹
+  { core: 2.8, glow: 3.9, len: 0.55, alpha: 0.95 }, // 等离子炮：高能发光电浆团
 ];
 
 export class BulletMesh {
@@ -485,9 +485,9 @@ export class BulletMesh {
   constructor(scene: THREE.Scene, cap = 1400) {
     this.cap = cap;
     const core = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
-    this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.045, 0.045, 1), core, cap);
-    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
-    this.glow = new THREE.InstancedMesh(new THREE.BoxGeometry(0.13, 0.13, 1.15), glowMat, cap);
+    this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.062, 0.062, 1), core, cap);
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.65, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    this.glow = new THREE.InstancedMesh(new THREE.BoxGeometry(0.17, 0.17, 1.22), glowMat, cap);
     for (const m of [this.mesh, this.glow]) {
       m.frustumCulled = false;
       m.count = 0;
@@ -501,7 +501,7 @@ export class BulletMesh {
     this.style = BULLET_STYLE[Math.min(BULLET_STYLE.length - 1, tier)];
     (this.glow.material as THREE.MeshBasicMaterial).opacity = this.style.alpha;
     (this.glow.material as THREE.MeshBasicMaterial).color.set(glow);
-    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(new THREE.Color(0xffffff), 0.45);
+    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(new THREE.Color(0xffffff), 0.55);
   }
 
   update(bullets: readonly Bullet[]) {
@@ -509,10 +509,10 @@ export class BulletMesh {
     for (let i = 0; i < n; i++) {
       const b = bullets[i];
       const st = this.style;
-      const len = (0.55 + Math.min(0.45, b.travel * 0.05)) * st.len;
+      const len = (0.65 + Math.min(0.55, b.travel * 0.06)) * st.len;
       _e.set(0, Math.atan2(-b.vx, b.vd), 0);
       _q.setFromEuler(_e);
-      _p.set(b.x, 0.72, -b.d);
+      _p.set(b.x, 0.74, -b.d);
       _s.set(st.core, st.core, len);
       _m.compose(_p, _q, _s);
       this.mesh.setMatrixAt(i, _m);
@@ -545,7 +545,7 @@ export class FloatTexts {
     el.textContent = text;
     this.layer.appendChild(el);
     this.items.push({ el, pos: new THREE.Vector3(x, y, z), t: 0, life, rise });
-    if (this.items.length > 40) this.remove(0);
+    if (this.items.length > 45) this.remove(0);
   }
 
   update(dt: number, camera: THREE.Camera, w: number, h: number) {
@@ -558,14 +558,14 @@ export class FloatTexts {
       }
       const k = it.t / it.life;
       _v.copy(it.pos);
-      _v.y += it.rise * (1 - Math.pow(1 - k, 2));
+      _v.y += it.rise * (1 - Math.pow(1 - k, 2.2));
       _v.project(camera);
       const sx = (_v.x * 0.5 + 0.5) * w;
       const sy = (-_v.y * 0.5 + 0.5) * h;
-      const pop = k < 0.15 ? 0.6 + (k / 0.15) * 0.6 : 1.2 - Math.min(0.2, (k - 0.15) * 0.5);
+      const pop = k < 0.12 ? 0.55 + (k / 0.12) * 0.78 : 1.33 - Math.min(0.33, (k - 0.12) * 0.85);
       it.el.style.transform = `translate(-50%, -50%) translate(${sx}px, ${sy}px) scale(${pop})`;
       // 跑到镜头背后的不画（投影会翻到屏幕另一边）
-      it.el.style.opacity = _v.z > 1 ? '0' : String(k > 0.7 ? (1 - k) / 0.3 : 1);
+      it.el.style.opacity = _v.z > 1 ? '0' : String(k > 0.68 ? (1 - k) / 0.32 : 1);
     }
   }
 

@@ -80,6 +80,8 @@ const input = {
   active: false,
   pointerId: -1,
   startX: 0,
+  startY: 0,
+  moved: false,
   startTarget: 0,
   target: 0,
   left: false,
@@ -111,7 +113,15 @@ const handlers: UIHandlers = {
     const cost = def.cost(lvl);
     // 兵力用钻石买，其他用金币
     const wallet = def.currency === 'gems' ? 'gems' : 'coins';
-    if (lvl >= def.max || save[wallet] < cost) return;
+    if (lvl >= def.max) {
+      ui.toast(`${def.name}已升至满级`);
+      return;
+    }
+    if (save[wallet] < cost) {
+      haptic([20, 30, 20]);
+      ui.toast(wallet === 'gems' ? `钻石不足（需 ${cost} 钻石，通关 Boss 关或击败精英可获得）` : `金币不足（还差 ${formatNumber(cost - save.coins)} 金币）`);
+      return;
+    }
     save[wallet] -= cost;
     save.upgrades[id] = lvl + 1;
     writeSave(save);
@@ -141,6 +151,7 @@ const handlers: UIHandlers = {
     if (!save.owned.includes(id)) {
       if (save.coins < skin.price) {
         haptic([20, 30, 20]);
+        ui.toast(`金币不足（解锁${skin.name}需 ${formatNumber(skin.price)} 金币）`);
         return;
       }
       save.coins -= skin.price;
@@ -222,7 +233,7 @@ const handlers: UIHandlers = {
     input.left = false;
     input.right = false;
     phase = 'paused';
-    ui.showPause(!!practice, world.spec.mode === 'carnage');
+    ui.showPause(!!practice, world.spec.mode === 'carnage', hudTitle());
   },
   resume() {
     if (phase !== 'paused') return;
@@ -466,13 +477,24 @@ function finish(retreated = false) {
 
 // ---------- 输入 ----------
 
-/** 拖动灵敏度：手指划过整个屏幕宽度 ≈ 队伍横跨 1.3 倍桥宽 */
-const DRAG_GAIN = 1.3;
+/** 拖动灵敏度：按桥面在屏幕上的可视宽度换算，竖屏与横屏桌面都能 1:1 丝滑跟手 */
+const DRAG_GAIN = 1.35;
 
 function steerLimits(): [number, number] {
   const lo = world.lo + world.halfWidth;
   const hi = world.hi - world.halfWidth;
   return lo <= hi ? [lo, hi] : [(world.lo + world.hi) / 2, (world.lo + world.hi) / 2];
+}
+
+function controlSpanPx(): { left: number; width: number } {
+  const d = world ? world.squad.d : 0;
+  const l = renderer.toScreen(-TRACK_HALF, 0.5, d);
+  const r = renderer.toScreen(TRACK_HALF, 0.5, d);
+  if (l && r && r.x - l.x > 120) {
+    return { left: l.x, width: r.x - l.x };
+  }
+  const width = Math.min(window.innerWidth, Math.max(320, window.innerHeight * 0.56));
+  return { left: (window.innerWidth - width) * 0.5, width };
 }
 
 app.addEventListener('pointerdown', (e) => {
@@ -483,13 +505,17 @@ app.addEventListener('pointerdown', (e) => {
   input.active = true;
   input.pointerId = e.pointerId;
   input.startX = e.clientX;
+  input.startY = e.clientY;
+  input.moved = false;
   input.startTarget = input.target;
 });
 
 window.addEventListener('pointermove', (e) => {
   if (!input.active || e.pointerId !== input.pointerId) return;
+  if (Math.hypot(e.clientX - input.startX, e.clientY - input.startY) > 6) input.moved = true;
+  const { width } = controlSpanPx();
   const span = TRACK_HALF * 2 * DRAG_GAIN * save.sensitivity;
-  const dx = ((e.clientX - input.startX) / Math.max(1, window.innerWidth)) * span;
+  const dx = ((e.clientX - input.startX) / Math.max(180, width)) * span;
   const [lo, hi] = steerLimits();
   const raw = input.startTarget + dx;
   input.target = Math.max(lo, Math.min(hi, raw));
@@ -501,7 +527,14 @@ window.addEventListener('pointermove', (e) => {
 for (const type of ['touchend', 'click'] as const) window.addEventListener(type, () => sfx.unlock(), { passive: true });
 
 const endPointer = (e: PointerEvent) => {
-  if (e.pointerId === input.pointerId) input.active = false;
+  if (e.pointerId !== input.pointerId) return;
+  if (input.active && e.type === 'pointerup' && !input.moved && phase === 'play') {
+    const { left, width } = controlSpanPx();
+    const u = ((e.clientX - left) / Math.max(180, width)) * 2 - 1;
+    const [lo, hi] = steerLimits();
+    input.target = Math.max(lo, Math.min(hi, u * TRACK_HALF));
+  }
+  input.active = false;
 };
 window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', endPointer);
@@ -509,6 +542,16 @@ app.addEventListener('lostpointercapture', endPointer);
 
 window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement)?.matches('input, select, textarea')) return;
+  if (e.key === 'Escape') {
+    if (ui.evolveOpen) {
+      ui.closeEvolve();
+      return;
+    }
+    if (ui.sheetOpen) {
+      ui.closeSheet();
+      return;
+    }
+  }
   if (['ArrowLeft', 'ArrowRight', ' '].includes(e.key) && phase === 'play') e.preventDefault();
   if (phase !== 'play' && phase !== 'paused' && phase !== 'menu') return;
   if (e.key.toLowerCase() === 'e') handlers.nova();
@@ -534,7 +577,7 @@ document.addEventListener('visibilitychange', () => {
     input.left = false;
     input.right = false;
     phase = 'paused';
-    ui.showPause(!!practice, world.spec.mode === 'carnage');
+    ui.showPause(!!practice, world.spec.mode === 'carnage', hudTitle());
   }
 });
 window.addEventListener('blur', () => {
@@ -612,8 +655,9 @@ function frame(now: number) {
   const slow = slowmo > 0 ? 0.3 : 1;
   slowmo = Math.max(0, slowmo - dt);
   const gdt = dt * GAME_SPEED * slow;
-  ui.resumeCountdown(phase === 'play' && now < resumeAt);
-  if (phase === 'play' && now >= resumeAt) {
+  const resuming = phase === 'play' && now < resumeAt;
+  ui.resumeCountdown(resuming ? resumeAt - now : 0);
+  if (phase === 'play' && !resuming) {
     for (let k = 0; k < debug.speed; k++) {
       if (debug.autoplay) {
         input.target = bot.target(world);
@@ -643,7 +687,8 @@ function frame(now: number) {
 
   perf.sim = perf.sim * 0.95 + (performance.now() - ts) * 0.05;
   const tr = performance.now();
-  renderer.update(phase === 'paused' ? 0 : phase === 'menu' ? dt : gdt, phase === 'paused' ? 0 : dt);
+  const freeze = phase === 'paused' || resuming;
+  renderer.update(freeze ? 0 : phase === 'menu' ? dt : gdt, freeze ? 0 : dt);
   perf.frame = perf.frame * 0.95 + (performance.now() - tr) * 0.05;
   renderer.render();
 }

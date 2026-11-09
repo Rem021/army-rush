@@ -833,18 +833,34 @@ span.gun-img svg {
   left: 50%;
   top: 30%;
   z-index: 40;
-  padding: 12px 26px;
+  max-width: min(92vw, 420px);
+  width: max-content;
+  padding: 10px 20px;
   border-radius: 16px;
-  font-size: 20px;
+  font-size: clamp(14px, 4.2vw, 18px);
   font-weight: 900;
-  letter-spacing: 1px;
-  white-space: nowrap;
+  line-height: 1.35;
+  letter-spacing: 0.5px;
+  white-space: normal;
+  text-align: center;
   color: #3a1d00;
   background: linear-gradient(180deg, #ffe58a, var(--gold) 50%, var(--gold-2));
   box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.4) inset, 0 10px 30px rgba(255, 150, 0, 0.45);
   opacity: 0;
   pointer-events: none;
   transform: translateX(-50%);
+}
+.upgrade-row.recommend {
+  border-color: rgba(255, 200, 58, 0.55);
+  background: rgba(255, 200, 58, 0.06);
+}
+.rec-tag {
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 900;
+  color: #3a1d00;
+  background: var(--gold);
 }
 .toast.show {
   animation: toast 2.2s ease-out forwards;
@@ -2748,9 +2764,12 @@ span.gun-img svg {
 .tactic-row { text-align:left; width:100%; min-height:76px; }
 .tactic-row .row-sub { white-space:normal; line-height:1.6; }
 .tactic-row.active { border-color:#ffd34d; background:#ffd34d12; }
-.practice-row { display:grid; grid-template-columns:minmax(0,1fr) 64px; gap:10px; padding:14px; background:#ffffff08; border-radius:14px; margin-top:8px; }
+.practice-row { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:10px; padding:14px; background:#ffffff08; border-radius:14px; margin-top:8px; }
 .practice-row label { align-self:center; font-size:13px; color:#d7e2f0; }
-.practice-row input { width:100%; min-width:0; min-height:44px; border:1px solid #ffffff40; border-radius:8px; background:#0d182b; color:white; padding:6px; font-size:16px; }
+.practice-stepper { display:inline-flex; align-items:center; gap:4px; }
+.practice-stepper .step-btn { width:36px; min-height:44px; border:1px solid #ffffff30; border-radius:8px; background:#182a43; color:#fff; font:900 18px var(--num); cursor:pointer; }
+.practice-stepper .step-btn:active { transform:scale(0.95); }
+.practice-row input { width:58px; min-width:0; min-height:44px; text-align:center; border:1px solid #ffffff40; border-radius:8px; background:#0d182b; color:white; padding:6px; font:800 16px var(--num); }
 .practice-row .btn { grid-column:1/-1; min-height:44px; font-size:14px; }
 .upgrade-gain { color:#8fe1bd; font-size:12px; line-height:1.55; margin-top:6px; white-space:normal; }
 .result-advice { width:100%; padding:10px 12px; border:1px solid #8bbdff40; border-radius:12px; color:#cce1ff; background:#21395688; font-size:12px; line-height:1.65; }

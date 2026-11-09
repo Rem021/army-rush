@@ -12,13 +12,14 @@
 | zombie-arm.glb | 巨尸、Boss 巨尸王 | Zombie Apocalypse Kit — `Zombie_Arm.gltf` | Quaternius | CC0 1.0 |
 | orc.glb | Boss 投弹屠夫 | Ultimate Monsters — `Big/glTF/Orc.gltf` | Quaternius | CC0 1.0 |
 | blob.glb | Boss 尸巢母体 | Ultimate Monsters — `Blob/glTF/GreenSpikyBlob.gltf` | Quaternius | CC0 1.0 |
-| props.glb | 木箱、油桶、轮胎堆、沙袋、军用箱、路障 | Toon Shooter Game Kit（Crate、ExplodingBarrel、Debris_Tires、SackTrench）；Zombie Apocalypse Kit（Chest、TrafficBarrier_1） | Quaternius | CC0 1.0 |
+| props.glb | 木箱、油桶、轮胎堆、沙袋、军用箱、路障、骑士长剑、防卫机炮 | Toon Shooter Game Kit（Crate、ExplodingBarrel、Debris_Tires、SackTrench）；Zombie Apocalypse Kit（Chest、TrafficBarrier_1）；Single Knight Pack（Sword）；Cyberpunk Game Kit（Turret_Cannon） | Quaternius | CC0 1.0 |
 
 素材页面（2026-10-21 下载时都标注 CC0，页面存档在 `docs/licenses/`）：
 
 - Toon Shooter Game Kit：https://quaternius.com/packs/toonshootergamekit.html
 - Zombie Apocalypse Kit：https://quaternius.com/packs/zombieapocalypsekit.html
 - Ultimate Monsters：https://quaternius.com/packs/ultimatemonsters.html
+- Single Knight Pack / Cyberpunk Game Kit（CC0 开源仓库镜像）：https://github.com/trebeljahr/quaternius-showcase
 - 许可原文：https://creativecommons.org/publicdomain/zero/1.0/
 
 注意：quaternius.com 从 2026-08 起给新发布的素材用 “Quaternius Asset License”（允许商用，但不允许把素材本身再分发）。上面三个包发布时就是 CC0，下载时页面也标 CC0，CC0 不可撤回；以后如果换用新包，要重新看许可。

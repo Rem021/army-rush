@@ -297,6 +297,7 @@ export class Environment {
       bag.rotation.z = Math.PI / 2;
       bag.position.set(-TRACK_HALF + 0.3 + (i % 9) * 1.3 + (i >= 9 ? 0.65 : 0), 0.3 + (i >= 9 ? 0.5 : 0), -16);
       bag.castShadow = true;
+      bag.userData.fallbackBag = true;
       this.arena.add(bag);
     }
     const carMat = new THREE.MeshLambertMaterial({ color: 0x4a4a52 });
@@ -314,6 +315,62 @@ export class Environment {
     }
     this.arena.visible = false;
     this.group.add(this.arena);
+
+    // 防线桥头阵地（死守防线模式下在队伍两侧布置沙袋掩体与机炮台）
+    this.bunkers = new THREE.Group();
+    this.bunkers.visible = false;
+    this.group.add(this.bunkers);
+  }
+
+  private readonly bunkers: THREE.Group;
+  private propsApplied = false;
+
+  /** 用 props.glb 中的 CC0 模型（沙袋、路障、防卫机炮）升级 Boss 决战区与防线阵地 */
+  setProps(prop: (name: string, fit: number) => THREE.BufferGeometry | null) {
+    if (this.propsApplied) return;
+    const sandbags = prop('Sandbags', 2.3);
+    const barrier = prop('Barrier', 1.8);
+    const turret = prop('Turret', 1.6);
+    if (!sandbags && !barrier && !turret) return;
+    this.propsApplied = true;
+    const propMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+
+    if (sandbags) {
+      for (const c of [...this.arena.children]) {
+        if (c.userData.fallbackBag) this.arena.remove(c);
+      }
+      for (const x of [-4.4, -2.2, 0, 2.2, 4.4]) {
+        const m = new THREE.Mesh(sandbags, propMat);
+        m.position.set(x, 0, -16);
+        m.castShadow = true;
+        this.arena.add(m);
+      }
+    }
+    if (barrier) {
+      for (const x of [-3.3, 3.3]) {
+        const m = new THREE.Mesh(barrier, propMat);
+        m.position.set(x, 0, -14.8);
+        m.rotation.y = x < 0 ? 0.18 : -0.18;
+        m.castShadow = true;
+        this.arena.add(m);
+      }
+    }
+    for (const side of [-1, 1]) {
+      if (sandbags) {
+        const bag = new THREE.Mesh(sandbags, propMat);
+        bag.position.set(side * (TRACK_HALF - 0.75), 0, 2.6);
+        bag.rotation.y = side * -0.28;
+        bag.castShadow = true;
+        this.bunkers.add(bag);
+      }
+      if (turret) {
+        const gun = new THREE.Mesh(turret, propMat);
+        gun.position.set(side * (TRACK_HALF - 0.55), 0, 3.5);
+        gun.rotation.y = Math.PI + side * 0.15;
+        gun.castShadow = true;
+        this.bunkers.add(gun);
+      }
+    }
   }
 
   build(theme: number, arenaD: number) {
@@ -329,6 +386,7 @@ export class Environment {
     scene.background = new THREE.Color(th.fog);
     this.arena.visible = Number.isFinite(arenaD);
     if (this.arena.visible) this.arena.position.z = -arenaD;
+    this.bunkers.visible = !Number.isFinite(arenaD);
   }
 
   /** focusD：镜头对着的世界 d 坐标 */

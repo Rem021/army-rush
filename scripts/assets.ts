@@ -16,6 +16,8 @@ mkdirSync(out, { recursive: true });
 const TOON = join(raw, 'quaternius-toon-shooter-kit');
 const ZOMBIE = join(raw, 'quaternius-zombie-apocalypse-kit');
 const MONSTERS = join(raw, 'quaternius-ultimate-monsters');
+const KNIGHT = join(raw, 'quaternius-single-knight-pack');
+const CYBERPUNK = join(raw, 'quaternius-cyberpunk-game-kit');
 
 interface Job {
   file: string;
@@ -60,6 +62,8 @@ const props: { name: string; src: string; ratio: number }[] = [
   { name: 'Sandbags', src: join(TOON, 'Environment/glTF/SackTrench.gltf'), ratio: 1 },
   { name: 'Chest', src: join(ZOMBIE, 'Environment/glTF/Chest.gltf'), ratio: 0.35 },
   { name: 'Barrier', src: join(ZOMBIE, 'Environment/glTF/TrafficBarrier_1.gltf'), ratio: 0.6 },
+  { name: 'Sword', src: join(KNIGHT, 'glTF/Sword.glb'), ratio: 0.7 },
+  { name: 'Turret', src: join(CYBERPUNK, 'glTF/Turret_Cannon.glb'), ratio: 0.5 },
 ];
 
 async function main() {

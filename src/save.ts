@@ -64,15 +64,35 @@ export function loadSave(): SaveData {
     const data = JSON.parse(raw) as Partial<SaveData>;
     // 护送、Boss 连战、每日挑战已经合并掉了，老存档停在那些模式的回到防线
     if (!MODES.some((m) => m.id === data.mode)) delete data.mode;
+    const cleanInt = (val: unknown, fallback: number, min = 0) =>
+      typeof val === 'number' && Number.isFinite(val) ? Math.max(min, Math.floor(val)) : fallback;
+    const rawUp = (data.upgrades ?? {}) as Partial<Record<UpgradeId, number>>;
+    const upgrades: Record<UpgradeId, number> = {
+      soldiers: cleanInt(rawUp.soldiers, 0),
+      damage: cleanInt(rawUp.damage, 0),
+      rate: cleanInt(rawUp.rate, 0),
+      income: cleanInt(rawUp.income, 0),
+      agility: cleanInt(rawUp.agility, 0),
+    };
     return {
       ...base,
       ...data,
+      level: cleanInt(data.level, base.level, 1),
+      defenseLevel: cleanInt(data.defenseLevel, base.defenseLevel, 1),
+      defenseBest: cleanInt(data.defenseBest, base.defenseBest, 0),
+      endlessBest: cleanInt(data.endlessBest, base.endlessBest, 0),
+      carnageBest: cleanInt(data.carnageBest, base.carnageBest, 0),
+      coins: cleanInt(data.coins, base.coins, 0),
+      gems: cleanInt(data.gems, base.gems, 0),
+      best: cleanInt(data.best, base.best, 0),
+      kills: cleanInt(data.kills, base.kills, 0),
+      wins: cleanInt(data.wins, base.wins, 0),
       carnageAdmin: data.carnageAdmin === true,
-      carnageBest: typeof data.carnageBest === 'number' && Number.isFinite(data.carnageBest) ? Math.max(0, Math.floor(data.carnageBest)) : 0,
       tactic: TACTICS.some((t) => t.id === data.tactic) ? data.tactic! : base.tactic,
       motion: ['system', 'reduced', 'full'].includes(data.motion ?? '') ? data.motion! : base.motion,
       sensitivity: [0.75, 1, 1.3].includes(data.sensitivity ?? 0) ? data.sensitivity! : base.sensitivity,
-      upgrades: { ...base.upgrades, ...(data.upgrades ?? {}) },
+      upgrades,
+      skin: typeof data.skin === 'string' && data.skin ? data.skin : base.skin,
       owned: Array.isArray(data.owned) && data.owned.length ? data.owned : base.owned,
     };
   } catch {

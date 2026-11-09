@@ -217,6 +217,7 @@ export class UI {
         <div class="sheet">
           <div class="sheet-head">
             <h2 id="sheet-title"></h2>
+            <div class="pill gem-pill"><span class="gem-ico">${ICON.gem}</span><span id="sheet-gems">0</span></div>
             <div class="pill">${coin()}<span id="sheet-coins">0</span></div>
             <button class="icon-btn" id="sheet-close" aria-label="关闭">${ICON.close}</button>
           </div>
@@ -244,6 +245,7 @@ export class UI {
       <div id="pause" class="screen modal">
         <div class="dialog panel">
           <div class="ribbon">暂停</div>
+          <div class="result-sub" id="pause-sub"></div>
           <button class="btn btn-gold" id="btn-resume">继续战斗</button>
           <button class="btn btn-blue" id="btn-restart">保留战利品并重试</button>
           <button class="btn btn-ghost" id="btn-quit">撤退并结算</button>
@@ -276,22 +278,37 @@ export class UI {
     for (const box of ['#home-ups', '#result-ups']) {
       el(root, box).addEventListener('click', (ev) => {
         const up = (ev.target as HTMLElement).closest<HTMLElement>('[data-up]');
-        if (up && !up.classList.contains('disabled')) h.upgrade(up.dataset.up as UpgradeId);
+        if (up) h.upgrade(up.dataset.up as UpgradeId);
       });
     }
     el(root, '#sheet-body').addEventListener('click', (ev) => {
       const t = ev.target as HTMLElement;
       const up = t.closest<HTMLElement>('[data-up]');
-      if (up && !up.classList.contains('disabled')) h.upgrade(up.dataset.up as UpgradeId);
+      if (up) h.upgrade(up.dataset.up as UpgradeId);
       const skin = t.closest<HTMLElement>('[data-skin]');
       if (skin) h.skin(skin.dataset.skin!);
       const mode = t.closest<HTMLElement>('[data-mode]');
-      if (mode && !mode.classList.contains('locked')) {
-        h.mode(mode.dataset.mode as GameMode);
-        this.closeSheet();
+      if (mode) {
+        if (mode.classList.contains('locked')) {
+          const id = mode.dataset.mode as GameMode;
+          const m = MODES.find((x) => x.id === id);
+          this.toast(id === 'carnage' ? '防线或冲锋通关第 30 关解锁火力狂潮' : `防线或冲锋通关第 ${m?.unlock ?? 3} 关解锁该模式`);
+        } else {
+          h.mode(mode.dataset.mode as GameMode);
+          this.closeSheet();
+        }
       }
       const tactic = t.closest<HTMLElement>('[data-tactic]');
       if (tactic) h.tactic(tactic.dataset.tactic as TacticId);
+      const stepBtn = t.closest<HTMLElement>('[data-step-target]');
+      if (stepBtn) {
+        const field = el<HTMLInputElement>(root, `#${stepBtn.dataset.stepTarget}`);
+        const delta = Number(stepBtn.dataset.stepDelta) || 0;
+        const min = Number(field.min) || 1;
+        const max = Number(field.max) || 1;
+        const cur = Number(field.value) || max;
+        field.value = String(Math.max(min, Math.min(max, cur + delta)));
+      }
       const practice = t.closest<HTMLElement>('[data-practice]');
       if (practice) {
         const id = practice.dataset.practice as 'defense' | 'campaign';
@@ -478,12 +495,18 @@ export class UI {
     return this.sheet !== null;
   }
 
+  get evolveOpen(): boolean {
+    return el(this.root, '#evolve').classList.contains('show');
+  }
+
   show(screen: Screen) {
     this.current = screen;
     for (const id of ['hud', 'menu', 'result', 'pause'] as const) {
       const visible = id === screen || (id === 'hud' && (screen === 'pause' || screen === 'result'));
       el(this.root, `#${id}`).classList.toggle('visible', visible);
     }
+    if (screen !== 'result') window.clearInterval(this.countTimer);
+    if (screen === 'hud' || screen === 'pause') this.closeEvolve();
     if (screen !== 'menu') this.closeSheet();
     if (screen === 'menu') this.refreshMenu();
   }
@@ -507,6 +530,7 @@ export class UI {
     const coins = formatNumber(s.coins);
     el(this.root, '#menu-coins').textContent = coins;
     el(this.root, '#sheet-coins').textContent = coins;
+    el(this.root, '#sheet-gems').textContent = String(s.gems);
     el(this.root, '#rank-num').textContent = String(progressLevel(s));
     el(this.root, '#player-sub').textContent = `防线 ${s.defenseLevel} · 冲锋 ${s.level}`;
     const skin = SKINS.find((k) => k.id === s.skin) ?? SKINS[0];
@@ -577,8 +601,9 @@ export class UI {
     const body = el(this.root, '#sheet-body');
     const s = this.save;
     switch (this.sheet) {
-      case 'upgrades':
+      case 'upgrades': {
         // 军械库：每条升级线的效果和进化路线
+        const rec = recommendUpgrade(s, s.upgrades);
         body.innerHTML = `${s.mode === 'carnage' ? '<div class="guide-note">狂潮使用固定军备，以下为主线升级；请切换模式后购买。</div>' : ''}<div class="guide-note">推荐按开局直伤 / 花费比较。穿透、溅射、养门和机动各有用途，请结合关卡选择。</div>` + UPGRADES.map((u) => {
           const lvl = s.upgrades[u.id];
           const look = UPGRADE_LOOK[u.id];
@@ -586,20 +611,22 @@ export class UI {
           const cost = u.cost(lvl);
           const gems = u.currency === 'gems';
           const poor = (gems ? s.gems : s.coins) < cost;
+          const isRec = rec === u.id && !maxed;
           const pips = nextEvolution(u, lvl) ? `<div class="evo-progress">${evoPips(u, lvl)}<span>再升 ${nextEvolution(u, lvl)!.at - lvl} 级：${nextEvolution(u, lvl)!.name}</span></div>` : '';
           const track = u.evolutions.length
             ? `<div class="evo-track">${u.evolutions.map((e, i) => `<span class="evo ${lvl >= e.at ? 'done' : nextEvolution(u, lvl) === e ? 'next' : ''}"><b>Lv${e.at}</b>${u.id === 'damage' ? this.gunImg(i + 1, 'tiny') : ''}${e.name}</span>`).join('')}</div>`
             : '';
-          return `<div class="row upgrade-row">
+          return `<div class="row upgrade-row ${isRec ? 'recommend' : ''}">
             <div class="mode-tile" style="background:${look.bg};color:#fff">${look.icon}</div>
             <div class="row-main">
-              <div class="row-title">${u.name}<span class="lv">Lv.${lvl}</span><span class="up-now">${u.value(lvl)}${maxed ? '' : ` → <b>${u.value(lvl + 1)}</b>`}</span></div>
+              <div class="row-title">${u.name}<span class="lv">Lv.${lvl}</span>${isRec ? '<span class="rec-tag">推荐</span>' : ''}<span class="up-now">${u.value(lvl)}${maxed ? '' : ` → <b>${u.value(lvl + 1)}</b>`}</span></div>
               ${pips}${track}<div class="upgrade-gain">${maxed ? '已满级' : upgradeGain(s.upgrades, u.id).text}</div>
             </div>
             <button class="btn btn-gold buy ${s.mode === 'carnage' || maxed || poor ? 'disabled' : ''}" data-up="${u.id}">${maxed ? '满级' : gems ? `<span class="gem-ico">${ICON.gem}</span>${cost}` : `${coin()}${formatNumber(cost)}`}</button>
           </div>`;
         }).join('');
         break;
+      }
       case 'skins':
         body.innerHTML = `<div class="skin-grid">${SKINS.map((k) => {
           const owned = s.owned.includes(k.id);
@@ -632,7 +659,7 @@ export class UI {
         body.innerHTML += `<div class="guide-note carnage-note">火力狂潮：${s.carnageAdmin ? '管理员试玩已开启，可直接进入。' : '防线或冲锋通关第 30 关解锁。'}独立火力与击杀纪录，不发主线金币或钻石。</div>`;
         body.innerHTML += `<div class="guide-note">已通关关卡可随时演练：使用当前升级和战术，不消耗资源，也不结算金币、钻石和战绩。</div>${(['defense', 'campaign'] as const).map((id) => {
           const best = id === 'defense' ? s.defenseBest : s.best;
-          return best < 1 ? '' : `<div class="practice-row"><label for="practice-${id}">${id === 'defense' ? '防线' : '冲锋'}演练 · 1–${best} 关</label><input id="practice-${id}" type="number" inputmode="numeric" min="1" max="${best}" step="1" value="${best}" /><button class="btn btn-blue" data-practice="${id}">开始演练</button></div>`;
+          return best < 1 ? '' : `<div class="practice-row"><label for="practice-${id}">${id === 'defense' ? '防线' : '冲锋'}演练 · 1–${best} 关</label><div class="practice-stepper"><button type="button" class="step-btn" data-step-target="practice-${id}" data-step-delta="-1" aria-label="上一关">−</button><input id="practice-${id}" type="number" inputmode="numeric" min="1" max="${best}" step="1" value="${best}" /><button type="button" class="step-btn" data-step-target="practice-${id}" data-step-delta="1" aria-label="下一关">+</button></div><button class="btn btn-blue" data-practice="${id}">开始演练</button></div>`;
         }).join('')}`;
         break;
       case 'records': {
@@ -646,6 +673,7 @@ export class UI {
           ${stat(ICON.trophy, 'linear-gradient(160deg,#4a5a80,#25304d)', '胜利场次', String(s.wins))}
           ${stat(ICON.zombie, 'linear-gradient(160deg,#4a5a80,#25304d)', '累计击杀', formatNumber(s.kills))}
           ${stat(ICON.coin, 'linear-gradient(160deg,#4a5a80,#25304d)', '当前金币', formatNumber(s.coins))}
+          ${stat(ICON.gem, 'linear-gradient(160deg,#3a8fd9,#1b4d8a)', '当前钻石', formatNumber(s.gems))}
         </div>`;
         break;
       }
@@ -803,11 +831,19 @@ export class UI {
     cue.classList.toggle('visible', !!text);
   }
 
-  resumeCountdown(show: boolean) {
-    el(this.root, '#resume-count').hidden = !show;
+  resumeCountdown(remainingMs: number | boolean) {
+    const node = el(this.root, '#resume-count');
+    const ms = typeof remainingMs === 'boolean' ? (remainingMs ? 300 : 0) : remainingMs;
+    node.hidden = ms <= 0;
+    if (ms > 0) {
+      const sec = Math.max(1, Math.min(3, Math.ceil(ms / 300)));
+      const label = `准备 · ${sec}`;
+      if (node.textContent !== label) node.textContent = label;
+    }
   }
 
-  showPause(practice: boolean, carnage = false) {
+  showPause(practice: boolean, carnage = false, sub = '') {
+    el(this.root, '#pause-sub').textContent = sub;
     el(this.root, '#btn-restart').textContent = carnage ? '重新挑战狂潮' : practice ? '重新演练（无奖励）' : '保留战利品并重试';
     el(this.root, '#btn-quit').textContent = carnage ? '结束狂潮并记录击杀' : practice ? '结束演练（无奖励）' : '撤退并结算';
     this.show('pause');

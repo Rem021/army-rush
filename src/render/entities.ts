@@ -336,14 +336,16 @@ export class BarrelView {
     if (b.alive) {
       this.group.position.z = -b.d;
       const base = b.block && (b.look === 'crate' || b.look === 'cage') ? b.r / 1.2 : 1;
-      const s = (1 + b.bump * 0.07) * base;
-      this.body.scale.set(s, (1 - b.bump * 0.05) * base, s);
-      // 挨打：闪白、左右抖；血越少抖得越厉害
+      const pulse = b.bump * (0.65 + 0.35 * Math.max(0, Math.sin(time * 58)));
+      const s = (1 + pulse * 0.11) * base;
+      this.body.scale.set(s, (1 - pulse * 0.08) * base, s);
+      // 挨打：闪白、左右剧烈震颤；血越少抖得越厉害
       const ratio = b.maxHp > 0 ? b.hp / b.maxHp : 1;
-      this.mat.emissive.setScalar(b.bump * 0.35);
-      const shake = b.bump * (0.05 + (1 - ratio) * 0.06);
-      this.body.position.x = Math.sin(time * 53) * shake;
-      this.body.rotation.z = Math.sin(time * 41) * shake * 0.4;
+      this.mat.emissive.setRGB(pulse * 0.52, pulse * 0.42, pulse * 0.28);
+      const shake = b.bump * (0.075 + (1 - ratio) * 0.085);
+      this.body.position.x = Math.sin(time * 59) * shake;
+      this.body.position.z = -pulse * 0.09;
+      this.body.rotation.z = Math.sin(time * 47) * shake * 0.55;
       const stage = ratio < 0.25 ? 3 : ratio < 0.5 ? 2 : ratio < 0.75 ? 1 : 0;
       if (stage > this.stage) {
         this.stage = stage;
@@ -508,9 +510,10 @@ export class BossView {
         drop = 16 * (1 - k * k);
       }
     }
-    rig.root.position.set(boss.x, drop, -boss.d);
-    // 持续被打时只是轻微泛红，不要一直发白
-    for (const m of rig.materials) m.emissive.setRGB(boss.flash * 0.22, boss.flash * 0.06, boss.flash * 0.04);
+    const hitPulse = boss.alive ? boss.flash * (0.55 + 0.45 * Math.max(0, Math.sin(time * 52))) : 0;
+    rig.root.position.set(boss.x + Math.sin(time * 61) * boss.flash * 0.045, drop, -boss.d - hitPulse * 0.08);
+    // 持续被打时高频脉冲泛红，增强受击肉感
+    for (const m of rig.materials) m.emissive.setRGB(hitPulse * 0.32, hitPulse * 0.12, hitPulse * 0.06);
     this.throwT += dt;
 
     if (!boss.alive) {
@@ -680,7 +683,7 @@ function skullMark(): THREE.CanvasTexture {
 
 export class ProjectileView {
   readonly group = new THREE.Group();
-  private readonly drum: THREE.Group;
+  private readonly drum: THREE.Object3D;
   private readonly fill: THREE.Mesh;
   private readonly ring: THREE.Mesh;
   private readonly skull: THREE.Mesh;
@@ -689,9 +692,16 @@ export class ProjectileView {
     scene: THREE.Scene,
     readonly proj: Projectile,
     radius: number,
+    barrelGeom?: THREE.BufferGeometry | null,
   ) {
-    this.drum = drumMesh();
-    this.drum.scale.setScalar(1.4);
+    if (barrelGeom) {
+      const mesh = new THREE.Mesh(barrelGeom, vertexMat);
+      mesh.castShadow = true;
+      this.drum = mesh;
+    } else {
+      this.drum = drumMesh();
+      this.drum.scale.setScalar(1.4);
+    }
     // 红圈画在士兵上面，不然大部队会把它挡住
     const mat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
     this.fill = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), mat);
@@ -737,7 +747,7 @@ export class ProjectileView {
   dispose() {
     this.group.removeFromParent();
     this.group.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.geometry.dispose();
+      if (o instanceof THREE.Mesh && !o.geometry.userData.shared) o.geometry.dispose();
     });
   }
 }

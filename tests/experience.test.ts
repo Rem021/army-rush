@@ -187,15 +187,67 @@ describe('升级信息与存档兼容', () => {
     expect(loadSave()).toEqual(save);
   });
 
-  it('无效新字段回退，重置保留操作与动态偏好', () => {
+  it('无效新字段与异常数值回退，重置保留操作与动态偏好', () => {
     const data = storage();
-    data.set('army-rush.save.v1', JSON.stringify({ tactic: 'missing', motion: 'invalid', sensitivity: 99 }));
+    data.set('army-rush.save.v1', JSON.stringify({ tactic: 'missing', motion: 'invalid', sensitivity: 99, level: -4, coins: -99, gems: null, upgrades: { damage: -3, rate: 4.8 } }));
     const save = loadSave();
     expect(save.tactic).toBe('balanced');
     expect(save.motion).toBe('system');
     expect(save.sensitivity).toBe(1);
+    expect(save.level).toBe(1);
+    expect(save.coins).toBe(0);
+    expect(save.gems).toBe(0);
+    expect(save.upgrades.damage).toBe(0);
+    expect(save.upgrades.rate).toBe(4);
     Object.assign(save, { motion: 'reduced', sensitivity: 0.75, coins: 500, tactic: 'volley' });
     resetSave(save);
     expect(save).toMatchObject({ motion: 'reduced', sensitivity: 0.75, coins: 0, tactic: 'balanced' });
+  });
+
+  it('防线模式定期回收过多已死亡丧尸、已吃门与已破障碍，避免长局内存堆积', () => {
+    const world = new World(generateDefense(3), { ...opts, startSoldiers: 30 });
+    for (let i = 0; i < 45; i++) {
+      world.zombies.push({
+        id: 9000 + i,
+        kind: 'walker',
+        x: 2,
+        d: 18,
+        hp: 0,
+        maxHp: 20,
+        r: 0.4,
+        weight: 1,
+        active: true,
+        alive: false,
+        phase: 0,
+        flash: 0,
+        grind: 0,
+        atk: 0,
+        look: 0,
+        owner: 0,
+      });
+    }
+    for (let i = 0; i < 12; i++) {
+      if (world.gates[i]) world.gates[i].consumed = true;
+      if (world.barrels[i]) world.barrels[i].alive = false;
+    }
+    run(world, 2.2);
+    const deadZombies = world.zombies.filter((z) => !z.alive).length;
+    const deadGates = world.gates.filter((g) => g.consumed).length;
+    const deadBarrels = world.barrels.filter((b) => !b.alive).length;
+    expect(deadZombies).toBeLessThanOrEqual(24);
+    expect(deadGates).toBeLessThanOrEqual(6);
+    expect(deadBarrels).toBeLessThanOrEqual(6);
+  });
+
+  it('远程点爆自爆丧尸对己方波及半径显著小于贴脸引爆', () => {
+    const rangedWorld = new World(empty({ zombies: [{ kind: 'exploder', x: 0, d: 3.4, hp: 1 }] }), { ...opts, startSoldiers: 20, rateMult: 10 });
+    rangedWorld.squad.moving = false;
+    run(rangedWorld, 0.25);
+
+    const contactWorld = new World(empty({ zombies: [{ kind: 'exploder', x: 0, d: 3.4, hp: 99999 }] }), { ...opts, startSoldiers: 20, rateMult: 0 });
+    run(contactWorld, 1);
+
+    expect(contactWorld.stats.losses.explosion).toBeGreaterThanOrEqual(3);
+    expect(rangedWorld.stats.losses.explosion).toBeLessThan(contactWorld.stats.losses.explosion);
   });
 });

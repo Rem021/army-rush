@@ -13,7 +13,7 @@ export const WALL_HALF = 0.3;
 /** 队伍前进速度（单位/秒） */
 export const SQUAD_SPEED = 9;
 /** 队伍横向跟手速度（越大越跟手） */
-export const SQUAD_STEER = 14;
+export const SQUAD_STEER = 17;
 /** 阵型间距系数：第 i 个士兵离中心 SPACING * sqrt(i) */
 export const FORMATION_SPACING = 0.36;
 /** 最多真正渲染和模拟的士兵数，超出部分只计数 */
