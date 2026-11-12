@@ -1,5 +1,11 @@
 import type { GameEvent } from './game/world';
 
+const CHORD_UP = [1, 1.26, 1.5, 2] as const;
+const CHORD_GEM = [1568, 2093, 2637] as const;
+const CHORD_DANGER = [660, 520, 660, 520] as const;
+const CHORD_WON = [523, 659, 784, 1047, 1319] as const;
+const CHORD_LOST = [392, 330, 262, 196] as const;
+
 /** 全部音效用 WebAudio 现场合成，不需要音频文件 */
 export class Sfx {
   private ctx: AudioContext | null = null;
@@ -8,21 +14,42 @@ export class Sfx {
   private last = new Map<string, number>();
   enabled = true;
 
-  /** iOS 必须在用户手势里创建/恢复 AudioContext */
+  /** iOS 必须在用户手势里创建/恢复 AudioContext；同时处理切后台后的 'interrupted' 状态 */
   unlock() {
+    if (!this.enabled) return;
     if (!this.ctx) {
-      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+      const Ctor = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
       if (!Ctor) return;
       this.ctx = new Ctor();
       this.master = this.ctx.createGain();
       this.master.gain.value = 0.55;
-      this.master.connect(this.ctx.destination);
-      const len = this.ctx.sampleRate * 0.5;
+      // 动态压缩限幅器：防止狂潮火箭 + Boss 连环爆炸叠加削波破音
+      if (typeof this.ctx.createDynamicsCompressor === 'function') {
+        const comp = this.ctx.createDynamicsCompressor();
+        comp.threshold.value = -10;
+        comp.knee.value = 12;
+        comp.ratio.value = 8;
+        comp.attack.value = 0.003;
+        comp.release.value = 0.15;
+        this.master.connect(comp).connect(this.ctx.destination);
+      } else {
+        this.master.connect(this.ctx.destination);
+      }
+      const len = Math.floor(this.ctx.sampleRate * 0.5);
       this.noise = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
       const data = this.noise.getChannelData(0);
       for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
     }
-    if (this.ctx.state === 'suspended') void this.ctx.resume();
+    if ((this.ctx.state as string) !== 'running' && (this.ctx.state as string) !== 'closed') {
+      void this.ctx.resume().catch(() => {});
+    }
+  }
+
+  /** 切后台或静音时挂起音频硬件，省电并避免后台累积调度 */
+  suspend() {
+    if (this.ctx && this.ctx.state === 'running') {
+      void this.ctx.suspend().catch(() => {});
+    }
   }
 
   private ready(name: string, minGap: number): AudioContext | null {
@@ -35,34 +62,47 @@ export class Sfx {
   }
 
   private tone(type: OscillatorType, f0: number, f1: number, dur: number, vol: number, delay = 0) {
-    const ctx = this.ctx!;
+    if (!this.ctx || !this.master || this.ctx.state !== 'running') return;
+    const ctx = this.ctx;
     const t = ctx.currentTime + delay;
+    const peak = Math.max(0.0002, vol);
     const osc = ctx.createOscillator();
     const g = ctx.createGain();
     osc.type = type;
-    osc.frequency.setValueAtTime(f0, t);
+    osc.frequency.setValueAtTime(Math.max(20, f0), t);
     osc.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
     g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(vol, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(peak, t + 0.008);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(g).connect(this.master!);
+    osc.connect(g).connect(this.master);
+    osc.onended = () => {
+      osc.disconnect();
+      g.disconnect();
+    };
     osc.start(t);
     osc.stop(t + dur + 0.02);
   }
 
   private hiss(dur: number, vol: number, filter: BiquadFilterType, f0: number, f1: number, delay = 0) {
-    const ctx = this.ctx!;
+    if (!this.ctx || !this.master || !this.noise || this.ctx.state !== 'running') return;
+    const ctx = this.ctx;
     const t = ctx.currentTime + delay;
+    const peak = Math.max(0.0002, vol);
     const src = ctx.createBufferSource();
     src.buffer = this.noise;
     const biq = ctx.createBiquadFilter();
     biq.type = filter;
-    biq.frequency.setValueAtTime(f0, t);
+    biq.frequency.setValueAtTime(Math.max(40, f0), t);
     biq.frequency.exponentialRampToValueAtTime(Math.max(40, f1), t + dur);
     const g = ctx.createGain();
-    g.gain.setValueAtTime(vol, t);
+    g.gain.setValueAtTime(peak, t);
     g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    src.connect(biq).connect(g).connect(this.master!);
+    src.connect(biq).connect(g).connect(this.master);
+    src.onended = () => {
+      src.disconnect();
+      biq.disconnect();
+      g.disconnect();
+    };
     src.start(t, Math.random() * 0.3);
     src.stop(t + dur + 0.02);
   }
@@ -122,7 +162,10 @@ export class Sfx {
     this.hiss(0.05, 0.3, 'bandpass', 1600, 900, 0.09);
     this.tone('sine', 90, 40, 0.35, 0.3, 0.05);
     const base = 392 * Math.pow(2, Math.min(6, tier) / 12);
-    [1, 1.26, 1.5, 2].forEach((m, i) => this.tone('square', base * m, base * m, i === 3 ? 0.35 : 0.11, 0.07, 0.14 + i * 0.07));
+    for (let i = 0; i < CHORD_UP.length; i++) {
+      const m = CHORD_UP[i];
+      this.tone('square', base * m, base * m, i === 3 ? 0.35 : 0.11, 0.07, 0.14 + i * 0.07);
+    }
     this.tone('triangle', base * 4, base * 4, 0.4, 0.05, 0.42);
   }
 
@@ -143,9 +186,10 @@ export class Sfx {
   }
 
   handle(events: GameEvent[], tier: number, firing: boolean) {
-    if (!this.ctx || !this.enabled) return;
+    if (!this.ctx || !this.enabled || this.ctx.state !== 'running') return;
     if (firing) this.shot(tier);
-    for (const e of events) {
+    for (let k = 0; k < events.length; k++) {
+      const e = events[k];
       switch (e.type) {
         case 'hit':
           // 命中反馈音（Hitmarker）：杂兵清脆噗嗤/骨裂感、铁桶金属闷响、Boss/巨怪厚重受击，带限流防糊
@@ -175,8 +219,9 @@ export class Sfx {
           }
           break;
         case 'zombieDie':
-          if (e.kind === 'giant') this.boom(2);
-          else if (this.ready('pop', 0.032)) {
+          if (e.kind === 'giant') {
+            if (this.ready('giantDie', 0.12)) this.boom(2);
+          } else if (this.ready('pop', 0.032)) {
             this.tone('sine', 460 + Math.random() * 220, 95, 0.095, 0.14);
             this.hiss(0.045, 0.075, 'bandpass', 1800, 520);
           }
@@ -187,7 +232,7 @@ export class Sfx {
         case 'barrelBreak':
           if (this.ready('boom', 0.05)) this.boom(1);
           // 门道放行：一声往上扬的呼啸
-          if (e.barrel.block) {
+          if (e.barrel.block && this.ready('unblock', 0.15)) {
             this.hiss(0.55, 0.22, 'bandpass', 300, 2600, 0.08);
             this.tone('sawtooth', 180, 520, 0.4, 0.05, 0.08);
           }
@@ -228,32 +273,45 @@ export class Sfx {
           if (this.ready('strike', 0.15)) this.tone('sine', 1800, 500, 0.7, 0.08);
           break;
         case 'hiveSpawn':
-          this.hiss(0.3, 0.2, 'bandpass', 300, 900);
-          this.tone('sawtooth', 90, 140, 0.3, 0.08);
+          if (this.ready('hiveSpawn', 0.2)) {
+            this.hiss(0.3, 0.2, 'bandpass', 300, 900);
+            this.tone('sawtooth', 90, 140, 0.3, 0.08);
+          }
           break;
         case 'gem':
           // 钻石：一串清脆的高音
-          [1568, 2093, 2637].forEach((f, i) => this.tone('triangle', f, f, 0.12, 0.08, i * 0.06));
+          if (this.ready('gem', 0.08)) {
+            for (let i = 0; i < CHORD_GEM.length; i++) {
+              this.tone('triangle', CHORD_GEM[i], CHORD_GEM[i], 0.12, 0.08, i * 0.06);
+            }
+          }
           break;
         case 'bossEnrage':
           // 狂暴：一声更高更长的怒吼
-          this.tone('sawtooth', 120, 60, 1.1, 0.18);
-          this.tone('sawtooth', 180, 90, 1.0, 0.1, 0.05);
-          this.hiss(0.9, 0.22, 'bandpass', 400, 1600);
+          if (this.ready('bossEnrage', 0.25)) {
+            this.tone('sawtooth', 120, 60, 1.1, 0.18);
+            this.tone('sawtooth', 180, 90, 1.0, 0.1, 0.05);
+            this.hiss(0.9, 0.22, 'bandpass', 400, 1600);
+          }
           break;
         case 'bossDie':
-          this.boom(3);
-          this.tone('sawtooth', 160, 40, 1.0, 0.18);
+          if (this.ready('bossDie', 0.2)) {
+            this.boom(3);
+            this.tone('sawtooth', 160, 40, 1.0, 0.18);
+          }
           break;
         case 'trap':
           if (this.ready('trap', 0.08)) this.tone('square', 900, 300, 0.06, 0.05);
           break;
         case 'banner':
+          if (!this.ready('banner', 0.12)) break;
           if (e.tone === 'boss') {
             this.tone('sawtooth', 98, 92, 0.9, 0.16);
             this.tone('sawtooth', 147, 139, 0.9, 0.1);
           } else if (e.tone === 'danger') {
-            [660, 520, 660, 520].forEach((f, i) => this.tone('square', f, f, 0.1, 0.06, i * 0.12));
+            for (let i = 0; i < CHORD_DANGER.length; i++) {
+              this.tone('square', CHORD_DANGER[i], CHORD_DANGER[i], 0.1, 0.06, i * 0.12);
+            }
           } else {
             this.tone('triangle', 660, 880, 0.15, 0.1);
           }
@@ -270,11 +328,19 @@ export class Sfx {
           }
           break;
         case 'won':
-          this.hiss(0.8, 0.4, 'lowpass', 3000, 100);
-          [523, 659, 784, 1047, 1319].forEach((f, i) => this.tone('triangle', f, f, i === 4 ? 0.5 : 0.14, 0.18, 0.25 + i * 0.11));
+          if (this.ready('won', 0.5)) {
+            this.hiss(0.8, 0.4, 'lowpass', 3000, 100);
+            for (let i = 0; i < CHORD_WON.length; i++) {
+              this.tone('triangle', CHORD_WON[i], CHORD_WON[i], i === 4 ? 0.5 : 0.14, 0.18, 0.25 + i * 0.11);
+            }
+          }
           break;
         case 'lost':
-          [392, 330, 262, 196].forEach((f, i) => this.tone('triangle', f, f * 0.98, 0.25, 0.16, i * 0.16));
+          if (this.ready('lost', 0.5)) {
+            for (let i = 0; i < CHORD_LOST.length; i++) {
+              this.tone('triangle', CHORD_LOST[i], CHORD_LOST[i] * 0.98, 0.25, 0.16, i * 0.16);
+            }
+          }
           break;
         default:
           break;

@@ -6,7 +6,7 @@ import { BOSSES, MODES, SKINS, TRACK_HALF, UPGRADES, upgradeEffects, type GameMo
 import { generateCampaign, generateDefense, generateEndlessStart } from './game/level';
 import { LOSS_INFO } from './game/feedback';
 import { applyTactic, type TacticId } from './game/tactics';
-import { clearGems, isBossLevel, levelReward } from './game/economy';
+import { isBossLevel, settleRun } from './game/economy';
 import { formatNumber } from './render/label';
 import { mulberry32 } from './game/rng';
 import { World, type GameEvent, type WorldOptions } from './game/world';
@@ -17,34 +17,54 @@ import { loadSave, resetSave, writeSave } from './save';
 import { ICON } from './ui/icons';
 import { UI, modeUnlocked, type ResultInfo, type UIHandlers } from './ui/ui';
 
-// 调试参数：?mode=campaign 指定模式（defense / campaign / endless），?level=5 指定关卡，?autoplay 自动驾驶，?speed=3 加速，?coins=999 给钱，?up=3 全部升级到 3 级
+function clampInt(raw: string | null, min: number, max: number): number {
+  if (raw === null) return 0;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(min, Math.min(max, Math.floor(n)));
+}
+
+// 调试参数：?mode=campaign 指定模式（defense / campaign / endless / carnage），?level=5 指定关卡，?autoplay 自动驾驶，?speed=3 加速，?coins=999 给钱，?up=3 全部升级到 3 级
 const params = new URLSearchParams(location.search);
 const debug = {
   autoplay: params.has('autoplay'),
-  level: Number(params.get('level')) || 0,
-  speed: Math.max(1, Math.min(8, Number(params.get('speed')) || 1)),
-  coins: Number(params.get('coins')) || 0,
-  gems: Number(params.get('gems')) || 0,
+  level: clampInt(params.get('level'), 0, 999),
+  speed: Math.max(1, Math.min(8, clampInt(params.get('speed'), 1, 8) || 1)),
+  coins: clampInt(params.get('coins'), 0, 1_000_000_000),
+  gems: clampInt(params.get('gems'), 0, 1_000_000),
   mode: params.get('mode') as GameMode | null,
-  up: Number(params.get('up')) || 0,
+  up: clampInt(params.get('up'), 0, 99),
 };
+/** 临时调试资源/跳关参数仅作用于当前会话内存，不覆盖玩家真实存档。 */
+const transientDebug = Boolean(debug.level || debug.coins || debug.gems || debug.up);
 
 const save = loadSave();
+function persistSave() {
+  if (!transientDebug) writeSave(save);
+}
+
 // 仅授予当前浏览器的试玩通行证，不伪造主线通关或发放资源。
 if (params.get('admin') === 'carnage') {
   save.carnageAdmin = true;
-  writeSave(save);
+  persistSave();
   params.delete('admin');
   history.replaceState(null, '', `${location.pathname}${params.size ? '?' + params : ''}${location.hash}`);
 }
-if (debug.level) {
+if (debug.level > 0) {
   save.level = debug.level;
   save.defenseLevel = debug.level;
 }
-if (debug.coins) save.coins = debug.coins;
-if (debug.gems) save.gems = debug.gems;
-if (debug.up) save.upgrades = { soldiers: debug.up, damage: debug.up, rate: debug.up, income: debug.up, agility: debug.up };
-if (debug.mode && MODES.some((m) => m.id === debug.mode)) save.mode = debug.mode;
+if (debug.coins > 0) save.coins = debug.coins;
+if (debug.gems > 0) save.gems = debug.gems;
+if (debug.up > 0) {
+  for (const u of UPGRADES) {
+    save.upgrades[u.id] = Math.min(u.max, debug.up);
+  }
+}
+if (debug.mode && MODES.some((m) => m.id === debug.mode)) {
+  save.mode = debug.mode;
+  if (modeUnlocked(save, save.mode)) persistSave();
+}
 if (!modeUnlocked(save, save.mode) && (!debug.mode || save.mode === 'carnage')) save.mode = 'defense';
 
 const app = document.getElementById('app')!;
@@ -56,7 +76,7 @@ const currentSkin = () => SKINS.find((s) => s.id === save.skin) ?? SKINS[0];
 // 先加载外部模型（几 MB，带进度条），再建渲染器；加载失败的模型会退回代码生成的
 const bootBar = document.querySelector<HTMLElement>('#boot i');
 const models = await loadModels((done, total) => {
-  if (bootBar) bootBar.style.width = `${Math.round((done / total) * 100)}%`;
+  if (bootBar) bootBar.style.width = `${Math.round((done / Math.max(1, total)) * 100)}%`;
 });
 const renderer = new GameRenderer(canvas, fx, currentSkin(), models);
 const sfx = new Sfx();
@@ -76,6 +96,8 @@ let shownTier = 0;
 /** 每次重建关卡递增，过期的开场与奖励动画不能进入下一局。 */
 let runId = 0;
 
+const leftKeys = new Set<string>();
+const rightKeys = new Set<string>();
 const input = {
   active: false,
   pointerId: -1,
@@ -88,15 +110,37 @@ const input = {
   right: false,
 };
 
+function cancelInput() {
+  if (input.active && input.pointerId >= 0) {
+    try {
+      if (app.hasPointerCapture(input.pointerId)) app.releasePointerCapture(input.pointerId);
+    } catch {
+      // Ignore already released pointer capture
+    }
+  }
+  input.active = false;
+  input.pointerId = -1;
+  leftKeys.clear();
+  rightKeys.clear();
+  input.left = false;
+  input.right = false;
+}
+
+const activeMode = (): GameMode => practice?.mode ?? save.mode;
+
 const handlers: UIHandlers = {
   nova() {
     if (phase !== 'play' || performance.now() < resumeAt) return;
-    if (world.releaseNova()) { sfx.unlock(); sfx.weaponUp(6); haptic([30, 35, 70]); }
+    if (world.releaseNova()) {
+      sfx.unlock();
+      sfx.weaponUp(6);
+      haptic([30, 35, 70]);
+    }
   },
   revokeAdmin() {
     save.carnageAdmin = false;
     if (save.mode === 'carnage' && !modeUnlocked(save, 'carnage')) save.mode = 'defense';
-    writeSave(save);
+    persistSave();
     buildWorld();
     ui.refreshMenu();
     ui.toast('管理员试玩权限已关闭');
@@ -107,11 +151,13 @@ const handlers: UIHandlers = {
     startGame();
   },
   upgrade(id: UpgradeId) {
-    if (save.mode === 'carnage') { ui.toast('狂潮使用固定军备；切换到主线后可升级'); return; }
+    if (activeMode() === 'carnage') {
+      ui.toast('狂潮使用固定军备；切换到主线后可升级');
+      return;
+    }
     const def = UPGRADES.find((u) => u.id === id)!;
     const lvl = save.upgrades[id];
     const cost = def.cost(lvl);
-    // 兵力用钻石买，其他用金币
     const wallet = def.currency === 'gems' ? 'gems' : 'coins';
     if (lvl >= def.max) {
       ui.toast(`${def.name}已升至满级`);
@@ -119,20 +165,22 @@ const handlers: UIHandlers = {
     }
     if (save[wallet] < cost) {
       haptic([20, 30, 20]);
-      ui.toast(wallet === 'gems' ? `钻石不足（需 ${cost} 钻石，通关 Boss 关或击败精英可获得）` : `金币不足（还差 ${formatNumber(cost - save.coins)} 金币）`);
+      ui.toast(
+        wallet === 'gems'
+          ? `钻石不足（需 ${cost} 钻石，通关 Boss 关或击败精英可获得）`
+          : `金币不足（还差 ${formatNumber(cost - save.coins)} 金币）`,
+      );
       return;
     }
     save[wallet] -= cost;
     save.upgrades[id] = lvl + 1;
-    writeSave(save);
+    persistSave();
     sfx.unlock();
     sfx.coin();
     haptic(15);
-    // 主页上换了升级就重建一下背景里的队伍；结算弹窗里升级等点“再来一次”时再建
     if (phase === 'menu') buildWorld();
     ui.refreshMenu();
     ui.upgradeBought(id);
-    // 买到进化那一级：弹全屏进化卡（前后对比），音效换成升级武器的
     if (def.evolutions.some((e) => e.at === lvl + 1)) {
       ui.evolve(id, lvl + 1);
       sfx.weaponUp(id === 'damage' ? def.evolutions.findIndex((e) => e.at === lvl + 1) + 1 : 3);
@@ -140,7 +188,10 @@ const handlers: UIHandlers = {
     }
   },
   skin(id: string) {
-    if (save.mode === 'carnage') { ui.toast('狂潮固定使用蓝军；其他模式可更换皮肤'); return; }
+    if (activeMode() === 'carnage') {
+      ui.toast('狂潮固定使用蓝军；其他模式可更换皮肤');
+      return;
+    }
     const skin = SKINS.find((s) => s.id === id);
     if (!skin) return;
     sfx.unlock();
@@ -161,24 +212,25 @@ const handlers: UIHandlers = {
       sfx.click();
     }
     save.skin = id;
-    writeSave(save);
+    persistSave();
     renderer.setSkin(skin);
     buildWorld();
     ui.refreshMenu();
   },
   mode(id: GameMode) {
-    if (!modeUnlocked(save, id) || save.mode === id) return;
+    if (!modeUnlocked(save, id) || (save.mode === id && !practice)) return;
     sfx.unlock();
     sfx.click();
+    practice = null;
     save.mode = id;
-    writeSave(save);
+    persistSave();
     buildWorld();
     ui.refreshMenu();
   },
   tactic(id: TacticId) {
     if (phase !== 'menu' && phase !== 'result') return;
     save.tactic = id;
-    writeSave(save);
+    persistSave();
     if (phase === 'menu') buildWorld();
     ui.refreshMenu();
   },
@@ -193,12 +245,12 @@ const handlers: UIHandlers = {
   cycleMotion() {
     save.motion = save.motion === 'system' ? 'reduced' : save.motion === 'reduced' ? 'full' : 'system';
     syncMotion();
-    writeSave(save);
+    persistSave();
     ui.refreshMenu();
   },
   cycleSensitivity() {
     save.sensitivity = save.sensitivity === 1 ? 1.3 : save.sensitivity === 1.3 ? 0.75 : 1;
-    writeSave(save);
+    persistSave();
     ui.refreshMenu();
   },
   retreat() {
@@ -229,9 +281,7 @@ const handlers: UIHandlers = {
   pause() {
     if (phase !== 'play') return;
     sfx.click();
-    input.active = false;
-    input.left = false;
-    input.right = false;
+    cancelInput();
     phase = 'paused';
     ui.showPause(!!practice, world.spec.mode === 'carnage', hudTitle());
   },
@@ -245,9 +295,20 @@ const handlers: UIHandlers = {
   restart() {
     if (phase !== 'paused') return;
     sfx.click();
-    if (phase === 'paused' && !practice) {
-      world.state = 'lost';
-      finish(true);
+    if (!practice) {
+      settleRun(save, {
+        mode: world.spec.mode,
+        level: world.spec.level,
+        won: false,
+        retreated: true,
+        practice: false,
+        runCoins: world.coins,
+        runGems: world.gems,
+        kills: world.kills,
+        progress: world.progress,
+        distance: world.squad.d,
+      });
+      persistSave();
     }
     buildWorld();
     startGame();
@@ -255,9 +316,13 @@ const handlers: UIHandlers = {
   toggleSound() {
     save.sound = !save.sound;
     sfx.enabled = save.sound;
-    sfx.unlock();
-    sfx.click();
-    writeSave(save);
+    if (save.sound) {
+      sfx.unlock();
+      sfx.click();
+    } else {
+      sfx.suspend();
+    }
+    persistSave();
     ui.refreshMenu();
   },
   resetProgress() {
@@ -274,7 +339,7 @@ const handlers: UIHandlers = {
   },
   toggleHaptics() {
     save.haptics = !save.haptics;
-    writeSave(save);
+    persistSave();
     haptic(30);
     ui.refreshMenu();
   },
@@ -288,10 +353,10 @@ function syncMotion() {
 }
 motionQuery.addEventListener('change', syncMotion);
 syncMotion();
-// 皮肤页的头像、各档枪的图都用真模型拍
+// 复用主渲染器离屏目标拍皮肤立绘与各档武器图标，避免启动时额外新建两个 WebGL 上下文
 if (models.soldier) {
-  ui.setPortraits(renderPortraits(models.soldier, SKINS));
-  ui.setGunIcons(renderGunIcons(models.soldier));
+  ui.setPortraits(renderPortraits(models.soldier, SKINS, undefined, renderer.renderer));
+  ui.setGunIcons(renderGunIcons(models.soldier, undefined, renderer.renderer));
 }
 
 /** 局外升级折算成开局参数 */
@@ -312,8 +377,9 @@ function buildWorld() {
   runId++;
   slowmo = 0;
   resumeAt = 0;
+  cancelInput();
   const opts = upgradeOpts();
-  switch (practice?.mode ?? save.mode) {
+  switch (activeMode()) {
     case 'carnage':
       world = new World(generateCarnage(), CARNAGE_OPTIONS);
       break;
@@ -335,9 +401,6 @@ function buildWorld() {
   const marks = def ? [...new Set(def.spawns.filter((sp) => sp.boss && sp.t < def.duration - 0.01).map((sp) => sp.t / def.duration))] : [];
   ui.resetHud(hudTitle(), marks);
   input.target = world.squad.x;
-  input.active = false;
-  input.left = false;
-  input.right = false;
   resultShown = false;
   peak = world.squad.count;
   shownTier = world.squad.tier;
@@ -353,11 +416,19 @@ function startGame() {
   world.squad.moving = !world.defense;
   ui.show('hud');
   ui.tip(world.spec.mode);
-  // 镜头甩到位以后打出开场横幅
   const bosses = world.spec.defense ? world.spec.defense.spawns.filter((sp) => sp.boss).length : world.bosses.length;
   const startedRun = runId;
   window.setTimeout(() => {
-    if (phase === 'play' && runId === startedRun) ui.banner(world.spec.mode === 'carnage' ? '左 +1 · 右重炮 · 开火！' : world.defense ? `${hudTitle()} · ${bosses} 只 Boss` : `${hudTitle()} · 开战！`, 'info');
+    if (phase === 'play' && runId === startedRun) {
+      ui.banner(
+        world.spec.mode === 'carnage'
+          ? '左 +1 · 右重炮 · 开火！'
+          : world.defense
+            ? `${hudTitle()} · ${bosses} 只 Boss`
+            : `${hudTitle()} · 开战！`,
+        'info',
+      );
+    }
   }, 650);
 }
 
@@ -383,39 +454,77 @@ function hapticsFor(events: GameEvent[]) {
 function finish(retreated = false) {
   if (resultShown) return;
   resultShown = true;
-  // 钻石：这局拿到多少就存多少（输了也算）
-  if (!practice && world.spec.mode !== 'carnage') save.gems += world.gems;
+  cancelInput();
   const won = world.state === 'won';
   const kills = world.kills;
-  if (!practice && world.spec.mode !== 'carnage') save.kills += kills;
-  let info: ResultInfo;
   const mode = world.spec.mode;
-  const lostSub = retreated ? '本局战斗收益已保留' : `打到了 ${Math.round(world.progress * 100)}%${world.bosses.some((b) => b.active && b.alive) ? ' · Boss 尚未击败' : ''}`;
-  const bossLeft = world.bosses.filter((b) => b.active && b.alive).reduce((s, b) => s + Math.max(0, b.hp), 0);
-  const bossMax = world.bosses.filter((b) => b.active && b.alive).reduce((s, b) => s + b.maxHp, 0);
+  const settled = settleRun(save, {
+    mode,
+    level: world.spec.level,
+    won,
+    retreated,
+    practice: !!practice,
+    runCoins: world.coins,
+    runGems: world.gems,
+    kills,
+    progress: world.progress,
+    distance: world.squad.d,
+  });
+
+  let info: ResultInfo;
+  const lostSub = retreated
+    ? '本局战斗收益已保留'
+    : `打到了 ${Math.round(world.progress * 100)}%${world.bosses.some((b) => b.active && b.alive) ? ' · Boss 尚未击败' : ''}`;
+  let bossLeft = 0;
+  let bossMax = 0;
+  for (const b of world.bosses) {
+    if (b.active && b.alive) {
+      bossLeft += Math.max(0, b.hp);
+      bossMax += b.maxHp;
+    }
+  }
 
   if (practice) {
-    info = { mode, won, title: won ? '演练完成' : '演练结束', sub: `${hudTitle()} · 不消耗资源，不改变进度`,
-      stats: [['击杀', String(kills)], ['进度', `${Math.round(world.progress * 100)}%`]],
-      coins: 0, next: '再练一次', home: '返回主页', stars: null, practice: true };
+    info = {
+      mode,
+      won,
+      title: won ? '演练完成' : '演练结束',
+      sub: `${hudTitle()} · 不消耗资源，不改变进度`,
+      stats: [
+        ['击杀', String(kills)],
+        ['进度', `${Math.round(world.progress * 100)}%`],
+      ],
+      coins: 0,
+      next: '再练一次',
+      home: '返回主页',
+      stars: null,
+      practice: true,
+    };
   } else if (mode === 'carnage') {
-    save.carnageBest = Math.max(save.carnageBest, kills);
-    info = { mode, won, title: won ? '狂潮平息！' : retreated ? '狂潮撤退' : '狂潮结束',
+    info = {
+      mode,
+      won,
+      title: won ? '狂潮平息！' : retreated ? '狂潮撤退' : '狂潮结束',
       sub: '独立火力体验 · 不改变主线进度与资源',
-      stats: [['击杀', formatNumber(kills)], ['最高连击', String(world.carnage.bestCombo)],
-        ['超载次数', String(world.carnage.clears)], ['增兵 / 装弹', `${world.carnage.recruits} / ${world.carnage.ammoPickups}`],
-        ['拆炮架', String(world.carnage.batteries)], ['最佳击杀', formatNumber(save.carnageBest)]],
-      coins: 0, next: '再爽一局', home: '返回主页', stars: null };
+      stats: [
+        ['击杀', formatNumber(kills)],
+        ['最高连击', String(world.carnage.bestCombo)],
+        ['超载次数', String(world.carnage.clears)],
+        ['增兵 / 装弹', `${world.carnage.recruits} / ${world.carnage.ammoPickups}`],
+        ['拆炮架', String(world.carnage.batteries)],
+        ['最佳击杀', formatNumber(save.carnageBest)],
+      ],
+      coins: 0,
+      next: '再爽一局',
+      home: '返回主页',
+      stars: null,
+    };
   } else if (mode === 'endless') {
-    const dist = Math.floor(world.squad.d);
-    const record = dist > save.endlessBest;
-    save.endlessBest = Math.max(save.endlessBest, dist);
-    const coins = Math.floor(world.coins) + Math.floor(dist / 20);
-    save.coins += coins;
+    const { dist, record, coins } = settled;
     info = {
       mode,
       won: record,
-      title: record ? '新纪录' : '倒下了',
+      title: record ? '新纪录' : retreated ? '撤退结算' : '倒下了',
       sub: `跑了 ${dist} 米`,
       stats: [
         ['击杀', String(kills)],
@@ -428,31 +537,19 @@ function finish(retreated = false) {
     };
   } else {
     const level = world.spec.level;
-    const reward = retreated ? { total: Math.floor(world.coins), bonus: 0 } : levelReward(level, won, world.coins, upgradeEffects(save.upgrades).coinMult, world.progress);
-    const coins = reward.total;
-    // Boss 关通关再给 1 颗钻石
-    const bonusGems = won ? clearGems(level) : 0;
-    save.gems += bonusGems;
+    const { coins, bonusCoins, bonusGems } = settled;
     const sub = won ? `第 ${level} 关 完成` : lostSub;
-    if (won) {
-      save.wins += 1;
-      if (mode === 'campaign') {
-        save.best = Math.max(save.best, level);
-        save.level = level + 1;
-      } else if (mode === 'defense') {
-        save.defenseBest = Math.max(save.defenseBest, level);
-        save.defenseLevel = level + 1;
-      }
-    }
-    save.coins += coins;
-    // 金币明细：战斗里拿到的（击杀 + Boss 赏金）和通关/新手奖励
     const stats: [string, string][] = [['击杀', `${kills} · ${formatNumber(Math.floor(world.coins))} 金币`]];
-    if (reward.bonus > 0) stats.push([won ? (isBossLevel(level) ? 'Boss 关通关奖励' : '通关奖励') : (level <= 3 ? '新手 / 推进补给' : '推进补给'), `+${formatNumber(reward.bonus)}`]);
+    if (bonusCoins > 0) {
+      stats.push([
+        won ? (isBossLevel(level) ? 'Boss 关通关奖励' : '通关奖励') : level <= 3 ? '新手 / 推进补给' : '推进补给',
+        `+${formatNumber(bonusCoins)}`,
+      ]);
+    }
     if (world.gems + bonusGems > 0) stats.push(['钻石', `+${world.gems + bonusGems}`]);
     if (won) stats.push(['剩余兵力', String(world.squad.count)]);
     else if (world.bosses.some((b) => b.active)) stats.push(['Boss 剩余', `${Math.max(1, Math.round((bossLeft / Math.max(1, bossMax)) * 100))}%`]);
     else stats.push(['进度', `${Math.round(world.progress * 100)}%`]);
-    // 星级：剩下的兵力占巅峰的比例
     const keep = world.squad.count / Math.max(1, peak);
     info = {
       mode,
@@ -468,9 +565,14 @@ function finish(retreated = false) {
   }
   const cause = world.stats.mainLoss;
   if (cause) info.stats.push(['主要损兵', `${LOSS_INFO[cause].name} · ${world.stats.losses[cause]} 人`]);
-  info.advice = mode === 'carnage' ? '左侧 +1 蓝门增兵，黄色 +99 牌装弹；巨人挥剑前，把整队移出红色危险带。' : retreated ? '调整战术或升级后可重试；同一关的路线保持不变。' : world.stats.advice(won, !!world.defense);
+  info.advice =
+    mode === 'carnage'
+      ? '左侧 +1 蓝门增兵，黄色 +99 牌装弹；巨人挥剑前，把整队移出红色危险带。'
+      : retreated
+        ? '调整战术或升级后可重试；同一关的路线保持不变。'
+        : world.stats.advice(won, !!world.defense);
   info.detail = `接门 ${world.stats.gatesTaken} · 漏门 ${world.stats.gatesMissed} · 拆补给 ${world.stats.supplies} · 躲砸击 ${world.stats.dodges}`;
-  if (!practice) writeSave(save);
+  if (!practice) persistSave();
   phase = 'result';
   ui.showResult(info);
 }
@@ -493,8 +595,10 @@ function controlSpanPx(): { left: number; width: number } {
   if (l && r && r.x - l.x > 120) {
     return { left: l.x, width: r.x - l.x };
   }
-  const width = Math.min(window.innerWidth, Math.max(320, window.innerHeight * 0.56));
-  return { left: (window.innerWidth - width) * 0.5, width };
+  const vw = app.clientWidth || window.innerWidth;
+  const vh = app.clientHeight || window.innerHeight;
+  const width = Math.min(vw, Math.max(320, vh * 0.56));
+  return { left: (vw - width) * 0.5, width };
 }
 
 app.addEventListener('pointerdown', (e) => {
@@ -511,7 +615,7 @@ app.addEventListener('pointerdown', (e) => {
 });
 
 window.addEventListener('pointermove', (e) => {
-  if (!input.active || e.pointerId !== input.pointerId) return;
+  if (phase !== 'play' || !input.active || e.pointerId !== input.pointerId) return;
   if (Math.hypot(e.clientX - input.startX, e.clientY - input.startY) > 6) input.moved = true;
   const { width } = controlSpanPx();
   const span = TRACK_HALF * 2 * DRAG_GAIN * save.sensitivity;
@@ -535,10 +639,14 @@ const endPointer = (e: PointerEvent) => {
     input.target = Math.max(lo, Math.min(hi, u * TRACK_HALF));
   }
   input.active = false;
+  input.pointerId = -1;
 };
 window.addEventListener('pointerup', endPointer);
 window.addEventListener('pointercancel', endPointer);
 app.addEventListener('lostpointercapture', endPointer);
+
+const isLeftKey = (key: string) => key === 'ArrowLeft' || key === 'a' || key === 'A';
+const isRightKey = (key: string) => key === 'ArrowRight' || key === 'd' || key === 'D';
 
 window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement)?.matches('input, select, textarea')) return;
@@ -551,47 +659,65 @@ window.addEventListener('keydown', (e) => {
       ui.closeSheet();
       return;
     }
+    if (phase === 'result') {
+      handlers.home();
+      return;
+    }
   }
   if (['ArrowLeft', 'ArrowRight', ' '].includes(e.key) && phase === 'play') e.preventDefault();
   if (phase !== 'play' && phase !== 'paused' && phase !== 'menu') return;
-  if (e.key.toLowerCase() === 'e') handlers.nova();
-  if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') input.left = true;
-  if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') input.right = true;
+  if (e.key === 'e' || e.key === 'E') handlers.nova();
+  if (isLeftKey(e.key)) {
+    leftKeys.add(e.key.toLowerCase());
+    input.left = true;
+  }
+  if (isRightKey(e.key)) {
+    rightKeys.add(e.key.toLowerCase());
+    input.right = true;
+  }
   if ((e.key === ' ' || e.key === 'Enter') && phase === 'menu' && ui.screen === 'menu' && !ui.sheetOpen) {
     sfx.unlock();
     startGame();
   }
-  if (e.key === 'Escape' || e.key === 'p') {
+  if (e.key === 'Escape' || e.key === 'p' || e.key === 'P') {
     if (phase === 'play') handlers.pause();
     else if (phase === 'paused') handlers.resume();
   }
 });
 window.addEventListener('keyup', (e) => {
-  if (e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') input.left = false;
-  if (e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') input.right = false;
+  if (isLeftKey(e.key)) {
+    leftKeys.delete(e.key.toLowerCase());
+    input.left = leftKeys.size > 0;
+  }
+  if (isRightKey(e.key)) {
+    rightKeys.delete(e.key.toLowerCase());
+    input.right = rightKeys.size > 0;
+  }
 });
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden && phase === 'play') {
-    input.active = false;
-    input.left = false;
-    input.right = false;
-    phase = 'paused';
-    ui.showPause(!!practice, world.spec.mode === 'carnage', hudTitle());
+  if (document.hidden) {
+    sfx.suspend();
+    if (phase === 'play') {
+      cancelInput();
+      phase = 'paused';
+      ui.showPause(!!practice, world.spec.mode === 'carnage', hudTitle());
+    }
   }
 });
 window.addEventListener('blur', () => {
   if (phase === 'play') handlers.pause();
-  input.active = false;
-  input.left = false;
-  input.right = false;
+  else cancelInput();
 });
 
 function resize() {
-  renderer.resize(window.innerWidth, window.innerHeight);
+  renderer.resize(app.clientWidth || window.innerWidth, app.clientHeight || window.innerHeight);
 }
 window.addEventListener('resize', resize);
 window.addEventListener('orientationchange', () => setTimeout(resize, 200));
+if (typeof ResizeObserver !== 'undefined') {
+  new ResizeObserver(() => resize()).observe(app);
+}
 
 // ---------- 主循环 ----------
 
@@ -608,23 +734,32 @@ function route(events: GameEvent[]) {
   for (const e of events) {
     if (e.type === 'banner') ui.banner(e.text, e.tone);
     if (world.spec.mode === 'carnage') continue;
-    else if (e.type === 'bossDie') {
+    if (e.type === 'bossDie') {
       slowmo = 0.5;
-      // Boss 赏金：一大把金币从 Boss 身上飞进顶栏
       const p = renderer.toScreen(e.boss.x, 3, e.boss.d);
-      if (p) for (let i = 0; i < 10; i++) window.setTimeout(() => {
-        if (runId === eventRun && phase === 'play') ui.flyCoin(p.x + (Math.random() - 0.5) * 80, p.y + (Math.random() - 0.5) * 50, undefined, true);
-      }, i * 45);
-    } else if (e.type === 'bossEnrage') ui.banner(`${BOSSES[e.boss.kind].name} 狂暴了！`, 'boss');
-    else if (e.type === 'gem') {
-      // 钻石飞进顶栏的钻石框
+      if (p) {
+        for (let i = 0; i < 10; i++) {
+          window.setTimeout(() => {
+            if (runId === eventRun && phase === 'play') {
+              ui.flyCoin(p.x + (Math.random() - 0.5) * 80, p.y + (Math.random() - 0.5) * 50, undefined, true);
+            }
+          }, i * 45);
+        }
+      }
+    } else if (e.type === 'bossEnrage') {
+      ui.banner(`${BOSSES[e.boss.kind].name} 狂暴了！`, 'boss');
+    } else if (e.type === 'gem') {
       const p = renderer.toScreen(e.x, 1.5, e.d);
-      if (p) for (let i = 0; i < Math.min(4, e.amount); i++) window.setTimeout(() => {
-        if (runId === eventRun && phase === 'play') ui.flyCoin(p.x, p.y, '#hud-gems-pill .gem-ico', true, ICON.gem);
-      }, i * 90);
-    }
-    else if (e.type === 'zombieDie' && e.coins > 0 && now - lastCoinFly > 90) {
-      // 金币飞向顶栏（限流，免得满屏都是）
+      if (p) {
+        for (let i = 0; i < Math.min(4, e.amount); i++) {
+          window.setTimeout(() => {
+            if (runId === eventRun && phase === 'play') {
+              ui.flyCoin(p.x, p.y, '#hud-gems-pill .gem-ico', true, ICON.gem);
+            }
+          }, i * 90);
+        }
+      }
+    } else if (e.type === 'zombieDie' && e.coins > 0 && now - lastCoinFly > 90) {
       const p = renderer.toScreen(e.x, 1, e.d);
       if (p) {
         lastCoinFly = now;
@@ -661,11 +796,13 @@ function frame(now: number) {
     for (let k = 0; k < debug.speed; k++) {
       if (debug.autoplay) {
         input.target = bot.target(world);
+        if (world.spec.mode === 'carnage' && world.carnage.charge >= 100) {
+          world.releaseNova();
+        }
       } else if (input.left || input.right) {
         const [lo, hi] = steerLimits();
         input.target = Math.max(lo, Math.min(hi, input.target + ((input.right ? 1 : 0) - (input.left ? 1 : 0)) * 11 * dt));
       } else if (!input.active) {
-        // 进出隔离墙时，把目标拉回可去的范围，免得松手后队伍往墙里挤
         const [lo, hi] = steerLimits();
         input.target = Math.max(lo, Math.min(hi, input.target));
       }

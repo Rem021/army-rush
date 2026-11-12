@@ -8,6 +8,8 @@ import {
   HALVES,
   LANE_HALF,
   LANES,
+  MAX_COUNT,
+  RATE_GATE_GROWTH,
   TRACK_HALF,
   WALL_HALF,
   WEAPONS,
@@ -359,8 +361,8 @@ export function extendEndless(gen: Gen, from: number, to: number) {
     gen.hpMul = 1 + d / 1100;
     gen.feats = featsFor(gen.L);
     gen.topTier = maxWeaponTier(Math.ceil(gen.L));
-    // 距离继续加压；枪械和射速预算沿用生成器的预期取门路线，不追涨实际升级。
-    gen.E = Math.max(3, 15 * Math.exp(d / 700));
+    // 距离继续加压；玩家冲锋人数上限为 MAX_COUNT(60)，预算渐近收敛至上限附近，后续压力由 hordeMul / hpMul 递增，防止指数溢出为 Infinity。
+    gen.E = Math.max(3, 12 + (MAX_COUNT * 1.15 - 12) * (1 - Math.exp(-d / 650)));
     const giantDue = gen.feats.giant && Math.floor(d / 420) > Math.floor((d - 60) / 420);
     const t: Template = giantDue
       ? 'miniBoss'
@@ -752,6 +754,7 @@ function pickLane(g: Gen, d: number): number {
   const riskyCount = hordeSize(g, 1.15);
   horde(g, r0 + 0.3, r1 - 0.3, d + 4, riskyCount, mix(g));
   if (feats.giant && g.E >= 25 && rng() < 0.4) addGiant(g, (r0 + r1) / 2, d + 16, 0.6);
+  const riskyTier = g.tier;
   const amount = cageSoldiers(L, g.E);
   addBarrel(g, (r0 + r1) / 2, d + 28, crateHp(g, 0.7), { kind: 'soldiers', amount });
   const mul = L >= 6 && rng() < 0.3 ? 1.5 : 1.25;
@@ -760,11 +763,11 @@ function pickLane(g: Gen, d: number): number {
   const riskyE = Math.max(1, start.E - riskyLoss + amount * 0.7) * mul;
 
   const safeP = (safeOut.E - safeLoss) * soldierDps(safeOut.tier) * safeOut.rate;
-  if (safeP >= riskyE * soldierDps(start.tier) * start.rate) {
+  if (safeP >= riskyE * soldierDps(riskyTier) * start.rate) {
     applyOutcome(g, safeOut);
     g.E = Math.max(3, g.E - safeLoss);
   } else {
-    applyOutcome(g, { ...start, P: 0 });
+    applyOutcome(g, { ...start, tier: riskyTier, P: 0 });
     g.E = Math.max(3, riskyE * 0.9);
   }
   return d + len + 6;
@@ -1006,12 +1009,13 @@ function crateHp(g: Gen, scale: number): number {
 function shootGain(g: Gen, kind: GateKind, from: number, seconds = 3.6): number {
   let hits = Math.min(g.E, EMIT_CAP) * WEAPONS[g.tier].rate * g.rate * seconds * 0.55;
   const base = gateBaseStep(g.L) * (kind === 'rate' ? 4 : 1);
+  const growth = kind === 'rate' ? RATE_GATE_GROWTH : GATE_GROWTH;
   let v = from;
   while (v < 0 && hits >= base) {
     hits -= base;
     v++;
   }
-  if (v >= 0) v += Math.log(1 + ((GATE_GROWTH - 1) * hits) / (base * Math.pow(GATE_GROWTH, v))) / Math.log(GATE_GROWTH);
+  if (v >= 0) v += Math.log(1 + ((growth - 1) * hits) / (base * Math.pow(growth, v))) / Math.log(growth);
   return Math.floor(v) - from;
 }
 

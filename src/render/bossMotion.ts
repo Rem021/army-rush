@@ -1,4 +1,4 @@
-import { BOSS_COMBO } from '../game/config';
+import { BOSS_COMBO, THROWER_MELEE_TIME } from '../game/config';
 import type { Boss } from '../game/world';
 
 /** 贴脸攻击的模型在半段处命中，剩余半段留给收招。 */
@@ -26,7 +26,7 @@ export function bossMotion(b: Boss): Motion {
     return { kind: 'release', phase: BOSS_IMPACT + (1 - BOSS_IMPACT) * easeOut(progress) };
   }
   // 投弹间隔的前半段先站稳，临出手再举桶；余震结束后才准备下一次。
-  if (b.kind === 'thrower' && b.fightTime < 22) {
+  if (b.kind === 'thrower' && b.fightTime < THROWER_MELEE_TIME) {
     if (b.slam > 0) return { kind: 'release', phase: BOSS_IMPACT + (1 - BOSS_IMPACT) * easeOut(clamp01(1 - b.slam)) };
     if (b.windup >= 0.5) return { kind: 'windup', phase: BOSS_IMPACT * clamp01((b.windup - 0.5) * 2) ** 1.25 };
   }

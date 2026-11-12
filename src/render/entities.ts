@@ -1,7 +1,8 @@
 import * as THREE from 'three';
-import { BOSSES, BOSS_STRIKE_HALF, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
+import { BOSSES, BOSS_STRIKE_HALF, THROWER_MELEE_TIME, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
 import type { Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
 import { bossMotion, bossPose } from './bossMotion';
+import { commitInstances, disposeObject } from './dispose';
 import { HpBar, Label, formatNumber, labelPlane, labelSprite } from './label';
 import { barrelGeometry, coinGeometry, gunGeometry, tiresGeometry, tiresHeight } from './models';
 import {
@@ -28,7 +29,9 @@ export const GATE_COLORS = {
 };
 
 const vertexMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+vertexMat.userData.shared = true;
 const _white = new THREE.Color(0xffffff);
+const _wallMat = new THREE.Matrix4();
 
 /** 0..1 衰减的弹跳曲线：先冲高再回落 */
 function easePop(k: number): number {
@@ -37,6 +40,12 @@ function easePop(k: number): number {
 
 /** 门面板上流动的斜条纹，所有门共用一张，每帧挪一下 */
 export const stripeTexture = (() => {
+  if (typeof document === 'undefined') {
+    const t = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping;
+    t.repeat.set(2, 1);
+    return t;
+  }
   const c = document.createElement('canvas');
   c.width = c.height = 64;
   const ctx = c.getContext('2d')!;
@@ -60,11 +69,12 @@ export const stripeTexture = (() => {
   return t;
 })();
 
-function gateColor(g: Gate): number {
+/** 门的主色（0 视为不扣兵/不降速的正向色，与特效颜色严格一致） */
+export function gateColor(g: Gate): number {
   if (g.kind === 'mul') return GATE_COLORS.mul;
   if (g.kind === 'weapon') return GATE_COLORS.weapon;
-  if (g.kind === 'rate') return g.value > 0 ? GATE_COLORS.rate : GATE_COLORS.bad;
-  return g.value > 0 ? GATE_COLORS.good : GATE_COLORS.bad;
+  if (g.kind === 'rate') return g.value >= 0 ? GATE_COLORS.rate : GATE_COLORS.bad;
+  return g.value >= 0 ? GATE_COLORS.good : GATE_COLORS.bad;
 }
 
 export class GateView {
@@ -78,6 +88,8 @@ export class GateView {
   private readonly gun?: THREE.Mesh;
   private gunTier = -1;
   private color = -1;
+  private renderedKind: Gate['kind'] | '' = '';
+  private renderedValue = NaN;
   private fade = 0;
   /** 数字刚往上涨时弹一下 */
   private pop = 0;
@@ -124,6 +136,9 @@ export class GateView {
 
   private refresh() {
     const g = this.gate;
+    if (g.kind === this.renderedKind && g.value === this.renderedValue) return;
+    this.renderedKind = g.kind;
+    this.renderedValue = g.value;
     const color = gateColor(g);
     if (color !== this.color) {
       this.color = color;
@@ -141,7 +156,7 @@ export class GateView {
       this.label.set(`Lv.${tier}`, { fill: '#ffffff', stroke, size: 80, sub: WEAPONS[tier].name });
       if (this.gun && tier !== this.gunTier) {
         this.gunTier = tier;
-        this.gun.geometry.dispose();
+        if (!this.gun.geometry.userData?.shared) this.gun.geometry.dispose();
         this.gun.geometry = gunGeometry(tier, 3.6);
       }
     }
@@ -156,7 +171,6 @@ export class GateView {
       this.lastValue = g.value;
     }
     this.pop = Math.max(0, this.pop - dt * 4);
-    // 挨打：门板闪白、轻微抖动；数字涨了就弹一下
     this.panelMat.color.copy(this.base).lerp(_white, g.bump * 0.45);
     if (!g.consumed) this.panelMat.opacity = 0.5 + g.bump * 0.25;
     this.inner.rotation.z = Math.sin(time * 47) * g.bump * 0.025;
@@ -174,7 +188,6 @@ export class GateView {
     this.fade = Math.min(1, this.fade + dt * (g.taken ? 5 : 2.5));
     const k = this.fade;
     if (g.taken) {
-      // 穿过的门闪一下然后往下收，避免挡住镜头
       this.panelMat.opacity = 0.5 + (1 - k) * 0.35 - k * 0.5;
       this.inner.position.y = -k * k * 2.4;
     } else {
@@ -188,12 +201,7 @@ export class GateView {
 
   dispose() {
     this.label.dispose();
-    this.group.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.geometry.dispose();
-    });
-    this.panelMat.dispose();
-    this.floorMat.dispose();
-    this.postMat.dispose();
+    disposeObject(this.group);
   }
 }
 
@@ -227,6 +235,8 @@ export class BarrelView {
   /** 掉血到 75% / 50% / 25% 时各崩一次，渲染器据此放碎块 */
   private stage = 0;
   private stageHit = false;
+  private lastCeilHp = -1;
+  private lastLow = false;
   topY: number;
 
   constructor(
@@ -236,7 +246,6 @@ export class BarrelView {
   ) {
     this.group.position.set(barrel.x, 0, -barrel.d);
     let geom: THREE.BufferGeometry;
-    // 优先用外部道具模型（轮胎堆、木箱、军用箱、油桶），没有就用代码生成的
     const external = prop ? externalProp(barrel, prop) : null;
     if (external) {
       geom = external;
@@ -258,9 +267,9 @@ export class BarrelView {
       this.topY = barrel.r * 1.72;
     }
     this.mat = vertexMat.clone();
+    this.mat.userData.shared = false;
     this.body = new THREE.Mesh(geom, this.mat);
     this.body.castShadow = true;
-    // 防线的大障碍：放大到几乎占满一条道
     if (barrel.block && (barrel.look === 'crate' || barrel.look === 'cage')) {
       this.body.scale.setScalar(barrel.r / 1.2);
       this.topY *= barrel.r / 1.2;
@@ -339,7 +348,6 @@ export class BarrelView {
       const pulse = b.bump * (0.65 + 0.35 * Math.max(0, Math.sin(time * 58)));
       const s = (1 + pulse * 0.11) * base;
       this.body.scale.set(s, (1 - pulse * 0.08) * base, s);
-      // 挨打：闪白、左右剧烈震颤；血越少抖得越厉害
       const ratio = b.maxHp > 0 ? b.hp / b.maxHp : 1;
       this.mat.emissive.setRGB(pulse * 0.52, pulse * 0.42, pulse * 0.28);
       const shake = b.bump * (0.075 + (1 - ratio) * 0.085);
@@ -351,8 +359,13 @@ export class BarrelView {
         this.stage = stage;
         this.stageHit = true;
       }
-      // 血条颜色：满血橙红，快打爆时转成亮黄
-      this.label.set(formatNumber(Math.max(0, Math.ceil(b.hp))), { fill: ratio < 0.25 ? '#ffe066' : '#ffffff', stroke: '#d9480f', size: 88 });
+      const ceilHp = Math.max(0, Math.ceil(b.hp));
+      const low = ratio < 0.25;
+      if (ceilHp !== this.lastCeilHp || low !== this.lastLow) {
+        this.lastCeilHp = ceilHp;
+        this.lastLow = low;
+        this.label.set(formatNumber(ceilHp), { fill: low ? '#ffe066' : '#ffffff', stroke: '#d9480f', size: 88 });
+      }
       const big = b.r >= 1.5 ? 1.12 : 1;
       this.labelSprite.scale.set(2.6 * big * (1 + b.bump * 0.1), 1.3 * big * (1 + b.bump * 0.1), 1);
       this.reward.rotation.y = time * 1.8;
@@ -376,13 +389,8 @@ export class BarrelView {
     this.label.dispose();
     this.rewardLabel?.dispose();
     this.reward.removeFromParent();
-    for (const root of [this.group, this.reward]) {
-      root.traverse((o) => {
-        // 外部道具几何体是缓存共用的，不能释放
-        if (o instanceof THREE.Mesh && !o.geometry.userData.shared) o.geometry.dispose();
-      });
-    }
-    this.mat.dispose();
+    disposeObject(this.group);
+    disposeObject(this.reward);
   }
 }
 
@@ -398,7 +406,7 @@ function glowRing(color: number): THREE.Mesh {
 
 const DROP_TIME = 0.55;
 
-/** 锁定后留在地面的砸击预警，长度覆盖当时整队的前后排。 */
+/** 锁定后留在地面上的砸击预警，长度覆盖当时整队的前后排。 */
 export class BossStrikeView {
   readonly group = new THREE.Group();
   private readonly fillMat = new THREE.MeshBasicMaterial({ color: 0xff2424, transparent: true, opacity: 0.25, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
@@ -437,10 +445,7 @@ export class BossStrikeView {
 
   dispose() {
     this.group.removeFromParent();
-    this.fill.geometry.dispose();
-    for (const edge of this.edges) edge.geometry.dispose();
-    this.fillMat.dispose();
-    this.edgeMat.dispose();
+    disposeObject(this.group);
   }
 }
 
@@ -469,7 +474,6 @@ export class BossView {
     this.rig = buildBossRig(boss.kind);
     this.rig.root.scale.setScalar(this.scale);
     this.rig.root.rotation.y = Math.PI;
-    // 头顶血条：名字 + 血量条 + 数字
     const mat = new THREE.SpriteMaterial({ map: this.bar.texture, depthTest: false, depthWrite: false, toneMapped: false });
     this.hpSprite = new THREE.Sprite(mat);
     this.hpSprite.scale.set(1.7, 0.42, 1);
@@ -479,6 +483,10 @@ export class BossView {
     this.lastX = boss.x;
     this.lastD = boss.d;
     scene.add(this.rig.root);
+  }
+
+  get isDeadDone(): boolean {
+    return !this.boss.alive && this.deathT > 3.2;
   }
 
   /** 刚落地的那一帧返回 true，渲染器据此放落地特效 */
@@ -512,7 +520,6 @@ export class BossView {
     }
     const hitPulse = boss.alive ? boss.flash * (0.55 + 0.45 * Math.max(0, Math.sin(time * 52))) : 0;
     rig.root.position.set(boss.x + Math.sin(time * 61) * boss.flash * 0.045, drop, -boss.d - hitPulse * 0.08);
-    // 持续被打时高频脉冲泛红，增强受击肉感
     for (const m of rig.materials) m.emissive.setRGB(hitPulse * 0.32, hitPulse * 0.12, hitPulse * 0.06);
     this.throwT += dt;
 
@@ -546,7 +553,7 @@ export class BossView {
       rig.armR.rotation.z = -Math.sin(time * 2 + 1) * 0.4;
     }
 
-    if (boss.kind === 'thrower' && !boss.attacking && boss.fightTime < 22) {
+    if (boss.kind === 'thrower' && !boss.attacking && boss.fightTime < THROWER_MELEE_TIME) {
       const pose = bossPose(motion.phase);
       rig.armR.rotation.x = motion.kind === 'none' ? walk * 0.5 : pose.arm;
       rig.armL.rotation.x = Math.sin(time * 2) * 0.2;
@@ -572,6 +579,7 @@ export class BossView {
   dispose() {
     this.rig.root.removeFromParent();
     this.bar.dispose();
+    disposeObject(this.rig.root);
   }
 }
 
@@ -608,16 +616,17 @@ export class HazardView {
   }
 
   dispose() {
-    this.group.traverse((o) => {
-      if (o instanceof THREE.Mesh) o.geometry.dispose();
-    });
+    disposeObject(this.group);
   }
 }
 
-/** 所有隔离墙的水泥墩，红白相间 */
+/** 所有隔离墙的水泥墩，红白相间（脏检查 + 零分配） */
 export class WallsView {
   private readonly red: THREE.InstancedMesh;
   private readonly white: THREE.InstancedMesh;
+  private prevRed = 0;
+  private prevWhite = 0;
+  private lastKey = '';
 
   constructor(scene: THREE.Scene) {
     this.red = new THREE.InstancedMesh(barrierGeometry(0xd9361f), vertexMat, 200);
@@ -626,33 +635,36 @@ export class WallsView {
       m.castShadow = true;
       m.count = 0;
       m.frustumCulled = false;
+      m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       scene.add(m);
     }
   }
 
   set(walls: readonly Wall[], nearD: number) {
+    const bucket = Math.floor(nearD * 0.5);
+    const key = `${walls.length}:${walls[0]?.id ?? 0}:${walls[walls.length - 1]?.id ?? 0}:${bucket}`;
+    if (key === this.lastKey) return;
+    this.lastKey = key;
+
     let r = 0;
     let w = 0;
-    const m = new THREE.Matrix4();
-    for (const wall of walls) {
+    for (let k = 0; k < walls.length; k++) {
+      const wall = walls[k];
       if (wall.d1 < nearD - 30 || wall.d0 > nearD + 260) continue;
       for (let d = wall.d0 + 1; d < wall.d1; d += 2) {
-        m.makeTranslation(0, 0, -d);
+        _wallMat.makeTranslation(0, 0, -d);
         const i = Math.round((d - wall.d0) / 2);
-        if (i % 2 === 0 && r < 200) this.red.setMatrixAt(r++, m);
-        else if (w < 200) this.white.setMatrixAt(w++, m);
+        if (i % 2 === 0 && r < 200) this.red.setMatrixAt(r++, _wallMat);
+        else if (w < 200) this.white.setMatrixAt(w++, _wallMat);
       }
     }
-    this.red.count = r;
-    this.white.count = w;
-    this.red.instanceMatrix.needsUpdate = true;
-    this.white.instanceMatrix.needsUpdate = true;
+    this.prevRed = commitInstances(this.red, r, this.prevRed);
+    this.prevWhite = commitInstances(this.white, w, this.prevWhite);
   }
 }
 
 export const WALL_WIDTH = WALL_HALF * 2;
 
-/** 投弹：飞行的油桶 + 地上的红圈预警 */
 /** 红圈正中的骷髅：红圈里的兵会全部炸死 */
 let skullTexture: THREE.CanvasTexture | null = null;
 function skullMark(): THREE.CanvasTexture {
@@ -702,7 +714,6 @@ export class ProjectileView {
       this.drum = drumMesh();
       this.drum.scale.setScalar(1.4);
     }
-    // 红圈画在士兵上面，不然大部队会把它挡住
     const mat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
     this.fill = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), mat);
     this.fill.rotation.x = -Math.PI / 2;
@@ -734,7 +745,6 @@ export class ProjectileView {
     const y = 5 + Math.sin(k * Math.PI) * 9 - k * 4.5;
     this.drum.position.set(x, Math.max(0.4, y), -d);
     this.drum.rotation.set(k * 9, 0, k * 6);
-    // 越快落地闪得越急、红得越深
     this.fill.scale.setScalar(Math.max(0.05, k));
     const fillMat = this.fill.material as THREE.MeshBasicMaterial;
     fillMat.opacity = 0.25 + k * 0.3;
@@ -746,9 +756,7 @@ export class ProjectileView {
 
   dispose() {
     this.group.removeFromParent();
-    this.group.traverse((o) => {
-      if (o instanceof THREE.Mesh && !o.geometry.userData.shared) o.geometry.dispose();
-    });
+    disposeObject(this.group);
   }
 }
 
@@ -784,6 +792,6 @@ export class StrikeView {
 
   dispose() {
     this.group.removeFromParent();
-    this.mark.geometry.dispose();
+    disposeObject(this.group);
   }
 }

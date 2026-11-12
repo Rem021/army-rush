@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { LANE_HALF, TRACK_HALF } from '../game/config';
 import { mulberry32 } from '../game/rng';
 
@@ -32,6 +33,7 @@ export const DECK_HALF = TRACK_HALF + 0.6;
 const AHEAD = 230;
 const BEHIND = 50;
 const TOWER_GAP = 110;
+const _envMat = new THREE.Matrix4();
 
 /** 整条桥宽一张贴图：点阵 + 车道虚线，只沿长度方向重复 */
 function deckTexture(): THREE.CanvasTexture {
@@ -53,12 +55,10 @@ function deckTexture(): THREE.CanvasTexture {
       ctx.fill();
     }
   }
-  // 车道虚线
   ctx.fillStyle = 'rgba(255,255,255,0.9)';
   for (const x of [-LANE_HALF, LANE_HALF]) {
     ctx.fillRect(px(x) - 4, 0, 8, H * 0.55);
   }
-  // 两侧实线
   ctx.fillStyle = '#f2c21b';
   for (const x of [-TRACK_HALF + 0.05, TRACK_HALF - 0.05]) ctx.fillRect(px(x) - 5, 0, 10, H);
   const t = new THREE.CanvasTexture(c);
@@ -137,7 +137,11 @@ export class Environment {
   private readonly cityMat: THREE.MeshLambertMaterial;
   private readonly smokes: { sprite: THREE.Sprite; base: THREE.Vector3; phase: number }[] = [];
   private readonly arena: THREE.Group;
+  private readonly bunkers: THREE.Group;
+  private propsApplied = false;
   private time = 0;
+  private lastP0 = NaN;
+  private lastL0 = NaN;
 
   constructor(scene: THREE.Scene) {
     scene.add(this.group);
@@ -238,7 +242,7 @@ export class Environment {
       this.group.add(t);
     }
 
-    // 远处：小岛、城市剪影、黑烟
+    // 远处：小岛、合并后的城市剪影、黑烟
     const rng = mulberry32(17);
     const islandMat = new THREE.MeshLambertMaterial({ color: 0x5f9e5a });
     const rockMat = new THREE.MeshLambertMaterial({ color: 0xb8a98c });
@@ -260,18 +264,21 @@ export class Environment {
       const side = i % 2 ? 1 : -1;
       const city = new THREE.Group();
       const blocks = 5 + Math.floor(rng() * 6);
+      const blockGeoms: THREE.BufferGeometry[] = [];
       for (let b = 0; b < blocks; b++) {
         const h = 14 + rng() * 46;
         const w = 8 + rng() * 12;
-        const block = new THREE.Mesh(new THREE.BoxGeometry(w, h, 8 + rng() * 10), this.cityMat);
-        block.position.set((b - blocks / 2) * 13 + rng() * 4, h / 2 - 9, rng() * 20);
-        city.add(block);
+        const g = new THREE.BoxGeometry(w, h, 8 + rng() * 10);
+        g.translate((b - blocks / 2) * 13 + rng() * 4, h / 2 - 9, rng() * 20);
+        blockGeoms.push(g);
       }
+      const mergedCity = mergeGeometries(blockGeoms, false);
+      for (const g of blockGeoms) g.dispose();
+      if (mergedCity) city.add(new THREE.Mesh(mergedCity, this.cityMat));
       city.position.set(side * (280 + rng() * 120), 0, 0);
       this.scenery.push({ obj: city, d: rng() * SCENERY_SPAN });
       this.group.add(city);
       if (i % 2 === 0) {
-        // 城里冒黑烟
         for (let k = 0; k < 6; k++) {
           const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: smokeTex, color: 0x3d3a3a, transparent: true, opacity: 0.55, depthWrite: false }));
           const base = new THREE.Vector3(rng() * 20 - 10, 20 + k * 14, rng() * 10);
@@ -322,9 +329,6 @@ export class Environment {
     this.group.add(this.bunkers);
   }
 
-  private readonly bunkers: THREE.Group;
-  private propsApplied = false;
-
   /** 用 props.glb 中的 CC0 模型（沙袋、路障、防卫机炮）升级 Boss 决战区与防线阵地 */
   setProps(prop: (name: string, fit: number) => THREE.BufferGeometry | null) {
     if (this.propsApplied) return;
@@ -337,7 +341,10 @@ export class Environment {
 
     if (sandbags) {
       for (const c of [...this.arena.children]) {
-        if (c.userData.fallbackBag) this.arena.remove(c);
+        if (c.userData.fallbackBag) {
+          this.arena.remove(c);
+          if (c instanceof THREE.Mesh && !c.geometry.userData?.shared) c.geometry.dispose();
+        }
       }
       for (const x of [-4.4, -2.2, 0, 2.2, 4.4]) {
         const m = new THREE.Mesh(sandbags, propMat);
@@ -387,6 +394,8 @@ export class Environment {
     this.arena.visible = Number.isFinite(arenaD);
     if (this.arena.visible) this.arena.position.z = -arenaD;
     this.bunkers.visible = !Number.isFinite(arenaD);
+    this.lastP0 = NaN;
+    this.lastL0 = NaN;
   }
 
   /** focusD：镜头对着的世界 d 坐标 */
@@ -401,42 +410,50 @@ export class Environment {
     this.deck.position.z = z;
     this.deckTex.offset.y = focusD / 5.6;
 
-    // 栏杆和路灯：按世界坐标对齐的格点
-    const m = new THREE.Matrix4();
-    let n = 0;
+    // 栏杆和路灯：只在格点起点 p0/l0 变化时才重算和上传实例矩阵
     const p0 = Math.floor((focusD - BEHIND) / 2.4);
-    for (let i = p0; n < this.posts.count - 1; i++) {
-      for (const side of [-1, 1]) {
-        m.makeTranslation(side * (TRACK_HALF + 0.95), 0.9, -i * 2.4);
-        this.posts.setMatrixAt(n++, m);
+    if (p0 !== this.lastP0) {
+      this.lastP0 = p0;
+      let n = 0;
+      for (let i = p0; n < this.posts.count - 1; i++) {
+        for (const side of [-1, 1]) {
+          _envMat.makeTranslation(side * (TRACK_HALF + 0.95), 0.9, -i * 2.4);
+          this.posts.setMatrixAt(n++, _envMat);
+        }
       }
+      this.posts.instanceMatrix.needsUpdate = true;
     }
-    this.posts.instanceMatrix.needsUpdate = true;
-    n = 0;
+
     const l0 = Math.floor((focusD - BEHIND) / 24);
-    for (let i = l0; n < this.lamps.count - 1; i++) {
-      for (const side of [-1, 1]) {
-        m.makeRotationY(side > 0 ? Math.PI : 0);
-        m.setPosition(side * (TRACK_HALF + 1.15), 0, -(i * 24 + 12));
-        this.lamps.setMatrixAt(n, m);
-        this.lampHeads.setMatrixAt(n, m);
-        n++;
+    if (l0 !== this.lastL0) {
+      this.lastL0 = l0;
+      let n = 0;
+      for (let i = l0; n < this.lamps.count - 1; i++) {
+        for (const side of [-1, 1]) {
+          _envMat.makeRotationY(side > 0 ? Math.PI : 0);
+          _envMat.setPosition(side * (TRACK_HALF + 1.15), 0, -(i * 24 + 12));
+          this.lamps.setMatrixAt(n, _envMat);
+          this.lampHeads.setMatrixAt(n, _envMat);
+          n++;
+        }
       }
+      this.lamps.instanceMatrix.needsUpdate = true;
+      this.lampHeads.instanceMatrix.needsUpdate = true;
     }
-    this.lamps.instanceMatrix.needsUpdate = true;
-    this.lampHeads.instanceMatrix.needsUpdate = true;
 
     const t0 = Math.floor((focusD - BEHIND) / TOWER_GAP);
-    this.towers.forEach((t, i) => {
-      t.position.z = -((t0 + i) * TOWER_GAP + 70);
-    });
+    for (let i = 0; i < this.towers.length; i++) {
+      this.towers[i].position.z = -((t0 + i) * TOWER_GAP + 70);
+    }
 
-    for (const s of this.scenery) {
+    for (let i = 0; i < this.scenery.length; i++) {
+      const s = this.scenery[i];
       while (s.d < focusD - 300) s.d += SCENERY_SPAN;
       while (s.d > focusD - 300 + SCENERY_SPAN) s.d -= SCENERY_SPAN;
       s.obj.position.z = -s.d;
     }
-    for (const s of this.smokes) {
+    for (let i = 0; i < this.smokes.length; i++) {
+      const s = this.smokes[i];
       s.sprite.position.set(s.base.x + Math.sin(this.time * 0.3 + s.phase) * 4, s.base.y + Math.sin(this.time * 0.2 + s.phase) * 3, s.base.z);
     }
   }

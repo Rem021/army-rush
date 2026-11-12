@@ -1,14 +1,15 @@
 // 本地浏览器回归：演练隔离、结算幂等、输入、设置与小屏布局。
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { chromium, type Page } from 'playwright-core';
+import type { Page } from 'playwright-core';
+import { launchHeadlessBrowser } from './browser';
 
 const base = process.argv[2] ?? 'http://127.0.0.1:5176/';
 const out = process.argv[3] ?? 'work/shots/player-experience';
 mkdirSync(out, { recursive: true });
 const errors: string[] = [];
 const receipts: unknown[] = [];
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const browser = await launchHeadlessBrowser();
 
 async function ready(page: Page) {
   await page.waitForFunction('!!window.__game', undefined, { timeout: 60000 });

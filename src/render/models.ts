@@ -54,9 +54,13 @@ export function setGunProvider(fn: (tier: number, length: number) => Part | null
 }
 
 export function gunGeometry(tier: number, scale = 1): Part {
-  const external = scale > 1 && gunProvider ? gunProvider(tier, WEAPONS[tier].length * scale * 1.5) : null;
-  if (external) return external.clone();
-  const w = WEAPONS[tier];
+  const safeTier = Math.max(0, Math.min(WEAPONS.length - 1, tier));
+  const external = scale > 1 && gunProvider ? gunProvider(safeTier, WEAPONS[safeTier].length * scale * 1.5) : null;
+  if (external) {
+    external.userData.shared = true;
+    return external;
+  }
+  const w = WEAPONS[safeTier];
   const L = w.length;
   const dark = tier === 5 ? 0xd8a826 : tier === 6 ? 0x6b3fb8 : 0x2c2f36;
   const accent = tier === 5 ? 0xffe27a : tier === 6 ? 0xc7a2ff : tier >= 3 ? 0x4b5563 : 0x3a3d45;

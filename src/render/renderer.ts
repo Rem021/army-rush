@@ -2,11 +2,11 @@ import * as THREE from 'three';
 import { BOSSES, DEFENSE_VIEW_D, MAX_SOLDIERS_SIM, THROW_RADIUS, TRACK_HALF, WEAPONS, ZOMBIES, type SkinDef, type ZombieKind } from '../game/config';
 import type { GameEvent, World, Zombie } from '../game/world';
 import type { Models } from './assets';
-import { ModelBossView, bakeSoldierBody, bossModel, buildSoldier, buildZombies, gunStatic, propGeometry, type SoldierKit } from './characters';
 import { ReferenceCarnageView } from './carnage';
+import { ModelBossView, bakeSoldierBody, bossModel, buildSoldier, buildZombies, gunStatic, propGeometry, type SoldierKit } from './characters';
 import { Crowd, type AgentPose } from './crowd';
 import { BlobShadows, BulletMesh, Explosions, Flashes, FloatTexts, Particles, Pillar, Rings, Splats, Streaks, ZombieBars } from './effects';
-import { BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, stripeTexture } from './entities';
+import { BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, gateColor, stripeTexture } from './entities';
 import { Environment } from './environment';
 import { HpBar, formatNumber } from './label';
 import { setGunProvider, soldierBody, soldierLeg } from './models';
@@ -58,7 +58,33 @@ interface Dying {
 const ZOMBIE_CAPS: Record<ZombieKind, number> = { walker: 700, runner: 360, brute: 90, exploder: 90, giant: 8 };
 const KINDS = Object.keys(ZOMBIE_CAPS) as ZombieKind[];
 const VIEW_AHEAD = 120;
-/** 每帧复用的临时向量（不在主循环里 new，少给垃圾回收添活） */
+
+const ZOMBIE_HIT_COLS = [0x6fae4a, 0x9be858] as const;
+const GIANT_HIT_COLS = [0xff5a3a, 0x6fae4a, 0xffe08a] as const;
+const BARREL_HIT_COLS = [0x8a5222, 0xd99b4e] as const;
+const WEAPON_UP_COLS = [0xffd34d, 0xffffff] as const;
+const ZOMBIE_DIE_COLS = [0x6fae4a, 0x4d7a35, 0x9be858] as const;
+const COIN_COLS = [0xffcc33, 0xffe680] as const;
+const TIRES_COLS = [0x2a2a2e, 0x55555c, 0x8f8f96] as const;
+const CAGE_COLS = [0x9aa1aa, 0x3b3f46] as const;
+const CRATE_COLS = [0x5b6b3a, 0x3d4a26, 0xf2c21b] as const;
+const WOOD_BARREL_COLS = [0xa8682f, 0x8a5222, 0x6b6f76] as const;
+const CAGE_SPARK_COLS = [0xffffff, 0x9be8a8] as const;
+const EXPLODER_DEBRIS_COLS = [0x8fbf6a, 0xd9ff4a, 0x4d7a35] as const;
+const IMPACT_DEBRIS_COLS = [0x8f8f8f, 0x5a5a5a, 0xc23a2e] as const;
+const STONE_COLS = [0xb8b8b8, 0x8f8f8f] as const;
+const LANDING_COLS = [0xb8b8b8, 0x8f8f8f, 0x6b6f76] as const;
+const GEM_COLS = [0x8fe3ff, 0x47a8ff, 0xffffff] as const;
+const ENRAGE_COLS = [0xff3b3b, 0xffb3a0] as const;
+const HIVE_COLS = [0x7a4f8f, 0xd9ff4a] as const;
+const BOSS_SPARK_COLS = [0xffd34d, 0xff8a1f, 0xffffff] as const;
+const BOSS_COIN_COLS = [0xffcc33, 0xffe27a, 0xffb000] as const;
+const TRAP_COLS = [0xff3b3b, 0xffffff] as const;
+const WIN_COLS = [0xff5a5a, 0xffd34d, 0x5dff7a, 0x5cc2ff, 0xd59bff] as const;
+const BARREL_STAGE_COLS = [0x8a5222, 0x5a5f66, 0x3a3d45] as const;
+const BARREL_SPARK_COLS = [0xffb347, 0xffe08a] as const;
+
+/** 每帧复用的临时向量与姿态对象（不在主循环里 new，零 GC 分配） */
 const _camPos = new THREE.Vector3();
 const _camLook = new THREE.Vector3();
 const _weaponLook = new THREE.Vector3();
@@ -66,6 +92,21 @@ const _weaponTarget = new THREE.Vector3();
 const _heroPos = new THREE.Vector3();
 const _heroLook = new THREE.Vector3();
 const _badge = new THREE.Vector3();
+const _projVec = new THREE.Vector3();
+const _tint: [number, number, number] = [1, 1, 1];
+const _pairCols: [number, number] = [0xffffff, 0xffffff];
+const _triCols: [number, number, number] = [0xffffff, 0xffe08a, 0xffffff];
+const _pose: Pose = {
+  x: 0,
+  y: 0,
+  d: 0,
+  yaw: 0,
+  phase: 0,
+  scale: 1,
+  flash: 0,
+  tilt: 0,
+  stride: 0,
+};
 
 function easeOutBack(t: number): number {
   const c1 = 1.70158;
@@ -74,22 +115,27 @@ function easeOutBack(t: number): number {
 }
 
 /** 不同丧尸的颜色变化 */
-function zombieTint(look: number): [number, number, number] {
+function zombieTintAlloc(look: number): [number, number, number] {
   return [0.82 + look * 0.32, 0.9 + ((look * 7) % 1) * 0.18, 1.08 - look * 0.3];
 }
 
-/** 门的主色（和 GateView 一致） */
-function gateColorOf(g: World['gates'][number]): number {
-  if (g.kind === 'weapon') return GATE_COLORS.weapon;
-  if (g.kind === 'rate') return g.value >= 0 ? GATE_COLORS.rate : GATE_COLORS.bad;
-  if (g.kind === 'mul') return GATE_COLORS.mul;
-  return g.value >= 0 ? GATE_COLORS.good : GATE_COLORS.bad;
-}
-
-/** 外部模型的丧尸本身有颜色，只做轻微明暗变化 */
-function zombieShade(look: number): [number, number, number] {
+function zombieShadeAlloc(look: number): [number, number, number] {
   const k = 0.88 + look * 0.24;
   return [k, k * (0.97 + ((look * 7) % 1) * 0.06), k];
+}
+
+function fillZombieTint(look: number, anim: boolean): [number, number, number] {
+  if (anim) {
+    const k = 0.88 + look * 0.24;
+    _tint[0] = k;
+    _tint[1] = k * (0.97 + ((look * 7) % 1) * 0.06);
+    _tint[2] = k;
+  } else {
+    _tint[0] = 0.82 + look * 0.32;
+    _tint[1] = 0.9 + ((look * 7) % 1) * 0.18;
+    _tint[2] = 1.08 - look * 0.3;
+  }
+  return _tint;
 }
 
 function weightScale(z: Zombie): number {
@@ -134,6 +180,7 @@ export class GameRenderer {
   private qualityTimer = 0;
   private qualityHold = 0;
   private basePixelRatio = 1;
+  private contextLost = false;
   /** 枪口相对士兵脚下的位置（换成外部模型后按模型调） */
   private muzzle = { x: 0.07, y: 0.72, z: 0.55 };
   private readonly explosions: Explosions;
@@ -144,6 +191,7 @@ export class GameRenderer {
   private hazards = new Map<number, HazardView>();
   private bosses: (BossView | ModelBossView)[] = [];
   private bossStrikes = new Map<number, BossStrikeView>();
+  private readonly seenIds = new Set<number>();
   private readonly models: Models;
   private soldierKit: SoldierKit | null = null;
   /** 道具几何体缓存：模型名 + 尺寸 */
@@ -166,6 +214,9 @@ export class GameRenderer {
   private readonly camLook = new THREE.Vector3();
   private readonly squadPos = new THREE.Vector3();
   private readonly badge: HTMLDivElement;
+  private lastBadgeX = NaN;
+  private lastBadgeY = NaN;
+  private lastBadgeOpacity = '';
   private time = 0;
   private width = 1;
   private height = 1;
@@ -184,6 +235,15 @@ export class GameRenderer {
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.NoToneMapping;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      this.contextLost = true;
+    });
+    canvas.addEventListener('webglcontextrestored', () => {
+      this.contextLost = false;
+      this.resize(this.width, this.height);
+    });
 
     this.skin = skin;
     this.env = new Environment(this.scene);
@@ -212,7 +272,11 @@ export class GameRenderer {
       const guns = new Map<string, THREE.BufferGeometry | null>();
       setGunProvider((tier, length) => {
         const key = `${tier}:${length.toFixed(2)}`;
-        if (!guns.has(key)) guns.set(key, gunStatic(soldier, tier, length));
+        if (!guns.has(key)) {
+          const g = gunStatic(soldier, tier, length);
+          if (g) g.userData.shared = true;
+          guns.set(key, g);
+        }
         return guns.get(key)!;
       });
       this.players = new SquadHerd(new VatCrowd(this.scene, cap, this.soldierKit.body), new VatCrowd(this.scene, cap, this.soldierKit.guns[0]));
@@ -259,22 +323,25 @@ export class GameRenderer {
     fxLayer.appendChild(this.badge);
   }
 
-  resize(w: number, h: number) {
+  resize(rawW: number, rawH: number) {
+    const w = Math.max(1, rawW);
+    const h = Math.max(1, rawH);
     this.width = w;
     this.height = h;
-    // 大窗口下限制总像素数（约 260 万），避免桌面全屏时掉帧；再乘上当前画质档位的系数
+    // 大窗口下限制总像素数（约 260 万），避免 4K/5K 全屏时掉帧
     const budget = Math.sqrt(2.6e6 / Math.max(1, w * h));
-    this.basePixelRatio = Math.max(1, Math.min(window.devicePixelRatio, this.mobile ? 2 : 1.5, budget));
+    this.basePixelRatio = Math.max(0.5, Math.min(window.devicePixelRatio || 1, this.mobile ? 2 : 1.5, budget));
     this.applyPixelRatio();
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.fov = w / h < 0.8 ? 68 : w / h < 1.2 ? 60 : 53;
     this.camera.updateProjectionMatrix();
+    this.referenceCarnage?.resize(w, h);
   }
 
   private applyPixelRatio() {
     const k = [1, 0.8, 0.62][this.quality];
-    this.renderer.setPixelRatio(Math.max(0.75, this.basePixelRatio * k));
+    this.renderer.setPixelRatio(Math.max(0.5, this.basePixelRatio * k));
   }
 
   /** 每帧报一次真实帧间隔（秒）：持续掉帧就降一档，稳住了再慢慢升回来 */
@@ -299,7 +366,6 @@ export class GameRenderer {
     this.quality = q;
     this.applyPixelRatio();
     this.renderer.setSize(this.width, this.height, false);
-    // 低档关掉太阳阴影（第一次切换会重编译一下着色器）
     const shadows = q < 2;
     if (this.sun.castShadow !== shadows) {
       this.sun.castShadow = shadows;
@@ -323,25 +389,15 @@ export class GameRenderer {
     if (this.soldierKit && this.models.soldier && this.players instanceof SquadHerd) {
       this.soldierKit.body = bakeSoldierBody(this.models.soldier, skin);
       this.players.body.setModel(this.soldierKit.body);
-      // 身体每换一次都会生成一张新的 VAT 浮点纹理；旧纹理已不再被网格使用。
       previousBody?.pos.dispose();
+      previousBody?.geometry.dispose();
     } else if (this.players instanceof Crowd) {
       this.players.setGeometry(soldierBody(skin, Math.max(0, this.tier)), soldierLeg(skin.team));
     }
     this.badge.style.setProperty('--team', `#${skin.team.toString(16).padStart(6, '0')}`);
   }
 
-  loadLevel(world: World) {
-    this.world = world;
-    if (world.spec.mode === 'carnage') {
-      this.referenceCarnage ??= new ReferenceCarnageView(this.models, this.fxLayer);
-      this.referenceCarnage.load(world);
-      this.referenceCarnage.resize(this.width, this.height);
-      this.badge.style.opacity = '0';
-      this.texts.clear();
-      return;
-    }
-    this.referenceCarnage?.clearEffects();
+  private clearNormalViews() {
     for (const v of this.gates.values()) this.dropView(v.group, v);
     for (const v of this.barrels.values()) this.dropView(v.group, v);
     for (const v of this.hazards.values()) this.dropView(v.group, v);
@@ -349,13 +405,43 @@ export class GameRenderer {
     for (const v of this.strikes.values()) v.dispose();
     for (const b of this.bosses) b.dispose();
     for (const v of this.bossStrikes.values()) v.dispose();
+    for (const g of this.giantLabels) g.sprite.visible = false;
     this.gates.clear();
     this.barrels.clear();
     this.hazards.clear();
     this.projectiles.clear();
     this.strikes.clear();
-    this.bosses = world.bosses.map((b) => this.makeBossView(b, false));
+    this.bosses.length = 0;
     this.bossStrikes.clear();
+    this.dyingPlayers.length = 0;
+    for (const k of KINDS) this.dyingZombies[k].length = 0;
+    this.dmgAcc.clear();
+    this.sparks.clear();
+    this.debris.clear();
+    this.rings.clear();
+    this.pillar.clear();
+    this.streaks.clear();
+    this.flashes.clear();
+    this.impacts.clear();
+    this.gatePopAt.clear();
+    this.splats.clear();
+    this.explosions.clear();
+    this.texts.clear();
+  }
+
+  loadLevel(world: World) {
+    this.world = world;
+    this.clearNormalViews();
+    this.lastBadgeOpacity = '';
+    if (world.spec.mode === 'carnage') {
+      this.referenceCarnage ??= new ReferenceCarnageView(this.models, this.fxLayer, this.soldierKit);
+      this.referenceCarnage.load(world);
+      this.referenceCarnage.resize(this.width, this.height);
+      this.badge.style.opacity = '0';
+      return;
+    }
+    this.referenceCarnage?.clearEffects();
+    this.bosses = world.bosses.map((b) => this.makeBossView(b, false));
     this.version = -1;
     this.syncViews();
 
@@ -367,21 +453,7 @@ export class GameRenderer {
     this.hemi.color.set(th.hemiSky);
     this.hemi.groundColor.set(th.hemiGround);
     this.hemi.intensity = th.hemiIntensity;
-    this.dyingPlayers = [];
-    for (const k of KINDS) this.dyingZombies[k] = [];
-    this.dmgAcc.clear();
-    this.sparks.clear();
-    this.debris.clear();
-    this.rings.clear();
-    this.pillar.clear();
     this.weaponCueAge = this.weaponCueDuration;
-    this.streaks.clear();
-    this.flashes.clear();
-    this.impacts.clear();
-    this.gatePopAt.clear();
-    this.splats.clear();
-    this.explosions.clear();
-    this.texts.clear();
     this.trauma = 0;
     this.bossBlend = 0;
     this.menuBlend = this.menu ? 1 : 0;
@@ -401,13 +473,17 @@ export class GameRenderer {
     const w = this.world!;
     if (w.version === this.version) return;
     this.version = w.version;
-    // 防线中途刷出来的 Boss 从天而降
-    for (const b of w.bosses) {
+    // 防线中途刷出来的存活 Boss 从天而降；已死绝回收的 Boss 不再重建
+    for (let i = 0; i < w.bosses.length; i++) {
+      const b = w.bosses[i];
+      if (!b.alive) continue;
       if (!this.bosses.some((v) => v.boss === b)) this.bosses.push(this.makeBossView(b, !!w.defense && w.time > 0.5));
       if (!this.bossStrikes.has(b.id)) this.bossStrikes.set(b.id, new BossStrikeView(this.scene, b));
     }
-    const seen = new Set<number>();
-    for (const g of w.gates) {
+    const seen = this.seenIds;
+    seen.clear();
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
       seen.add(g.id);
       if (!this.gates.has(g.id)) {
         const v = new GateView(g);
@@ -416,8 +492,10 @@ export class GameRenderer {
       }
     }
     for (const [id, v] of this.gates) if (!seen.has(id)) (this.dropView(v.group, v), this.gates.delete(id));
+
     seen.clear();
-    for (const b of w.barrels) {
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
       seen.add(b.id);
       if (!this.barrels.has(b.id)) {
         const v = new BarrelView(b, this.skin, (name, fit) => this.prop(name, fit));
@@ -426,8 +504,10 @@ export class GameRenderer {
       }
     }
     for (const [id, v] of this.barrels) if (!seen.has(id)) (this.dropView(v.group, v), this.barrels.delete(id));
+
     seen.clear();
-    for (const h of w.hazards) {
+    for (let i = 0; i < w.hazards.length; i++) {
+      const h = w.hazards[i];
       seen.add(h.id);
       if (!this.hazards.has(h.id)) {
         const v = new HazardView(h);
@@ -454,9 +534,9 @@ export class GameRenderer {
     return this.propCache.get(key)!;
   }
 
-  private syncTier(tier: number) {
+  private syncTier(rawTier: number) {
+    const tier = Math.max(0, Math.min(WEAPONS.length - 1, rawTier));
     if (tier === this.tier) return;
-    // 对局里换了更好的枪：全队闪一下，脚下冲起一道光柱、两圈冲击波，镜头往前推一下（开局建档时不算）
     if (this.tier >= 0 && tier > this.tier && this.world) {
       this.tierFlash = 1;
       if (this.reducedMotion) {
@@ -464,7 +544,6 @@ export class GameRenderer {
       } else if (this.weaponCueAge >= this.weaponCueDuration) {
         this.weaponCueAge = 0;
       } else if (this.weaponCueAge > this.weaponCueDuration / 2) {
-        // 连续换枪时沿当前镜头位置继续推近，不让镜头跳回基础机位。
         this.weaponCueAge = this.weaponCueDuration - this.weaponCueAge;
       }
       const sq = this.world.squad;
@@ -473,7 +552,9 @@ export class GameRenderer {
       this.pillar.spawn(sq.x, -sq.d, width, color);
       this.rings.spawn(sq.x, -sq.d, width * 2.4, color, 0.6);
       this.rings.spawn(sq.x, -sq.d, width * 4, 0xffffff, 0.9);
-      this.sparks.burst(sq.x, 1.2, -sq.d, 60, 11, 0.9, 0.16, [color, 0xffffff], 4, 0.8);
+      _pairCols[0] = color;
+      _pairCols[1] = 0xffffff;
+      this.sparks.burst(sq.x, 1.2, -sq.d, 60, 11, 0.9, 0.16, _pairCols, 4, 0.8);
       this.shake(0.12);
     }
     this.tier = tier;
@@ -483,7 +564,6 @@ export class GameRenderer {
     } else if (this.players instanceof Crowd) {
       this.players.setGeometry(soldierBody(this.skin, tier), soldierLeg(this.skin.team));
     }
-    // 子弹颜色：有特殊弹种（穿甲、爆裂、电磁）就用弹种的颜色
     const ammoColor = this.world?.ammo.color ?? null;
     this.bullets.setColor(WEAPONS[tier].color, tier, ammoColor ?? WEAPONS[tier].color);
     this.flashes.setColor(WEAPONS[tier].color);
@@ -495,18 +575,21 @@ export class GameRenderer {
   }
 
   handleEvents(events: GameEvent[]) {
-    if (this.world?.spec.mode === 'carnage') { this.referenceCarnage!.handle(events, this.reducedMotion); return; }
+    if (this.world?.spec.mode === 'carnage') {
+      this.referenceCarnage!.handle(events, this.reducedMotion);
+      return;
+    }
     const w = this.world;
     if (!w) return;
     let sparkBudget = 52;
     let impactBudget = 24;
     let splashBudget = 8;
     const sq = w.squad;
-    for (const e of events) {
+    for (let k = 0; k < events.length; k++) {
+      const e = events[k];
       switch (e.type) {
         case 'hit': {
           if (e.target === 'boss' || e.target === 'giant' || e.target === 'barrel' || (e.target === 'zombie' && e.dmg >= 14)) {
-            // 打 Boss、巨尸、大障碍及高伤命中时累积伤害，高频跳出暴击感伤害数字
             const acc = this.dmgAcc.get(e.id) ?? { dmg: 0, x: e.x, y: e.y, d: e.d, t: 0 };
             acc.dmg += e.dmg;
             acc.x = e.x;
@@ -521,26 +604,28 @@ export class GameRenderer {
           }
           if (sparkBudget <= 0) break;
           sparkBudget--;
-          const col = e.target === 'gate' ? 0xffffff : e.target === 'barrel' ? 0xffa53d : e.color;
-          this.sparks.burst(e.x, e.y, -e.d + 0.15, e.target === 'boss' || e.target === 'giant' ? 4 : 3, 5.5, 0.25, 0.095, [col, 0xffe08a, 0xffffff], 8, 0.35);
-          if (e.target === 'zombie' && Math.random() < 0.5) this.debris.burst(e.x, e.y, -e.d, 2, 4.2, 0.42, 0.09, [0x6fae4a, 0x9be858], 20);
-          if ((e.target === 'giant' || e.target === 'boss') && Math.random() < 0.65) this.debris.burst(e.x, e.y, -e.d + 0.3, 2, 5.2, 0.45, 0.12, [0xff5a3a, 0x6fae4a, 0xffe08a], 20);
-          if (e.target === 'barrel' && Math.random() < 0.45) this.debris.burst(e.x, e.y, -e.d + 0.2, 2, 4.8, 0.55, 0.13, [0x8a5222, 0xd99b4e], 20);
+          _triCols[0] = e.target === 'gate' ? 0xffffff : e.target === 'barrel' ? 0xffa53d : e.color;
+          _triCols[1] = 0xffe08a;
+          _triCols[2] = 0xffffff;
+          this.sparks.burst(e.x, e.y, -e.d + 0.15, e.target === 'boss' || e.target === 'giant' ? 4 : 3, 5.5, 0.25, 0.095, _triCols, 8, 0.35);
+          if (e.target === 'zombie' && Math.random() < 0.5) this.debris.burst(e.x, e.y, -e.d, 2, 4.2, 0.42, 0.09, ZOMBIE_HIT_COLS, 20);
+          if ((e.target === 'giant' || e.target === 'boss') && Math.random() < 0.65) this.debris.burst(e.x, e.y, -e.d + 0.3, 2, 5.2, 0.45, 0.12, GIANT_HIT_COLS, 20);
+          if (e.target === 'barrel' && Math.random() < 0.45) this.debris.burst(e.x, e.y, -e.d + 0.2, 2, 4.8, 0.55, 0.13, BARREL_HIT_COLS, 20);
           break;
         }
         case 'gateUp': {
           const g = e.gate;
-          // 数字往上涨：门板上冒一小撮同色亮片（每扇门 0.15 秒最多一次）
           const now = this.time;
           if (now - (this.gatePopAt.get(g.id) ?? -1) > 0.15) {
             this.gatePopAt.set(g.id, now);
-            const col = gateColorOf(g);
-            this.sparks.burst((g.x0 + g.x1) / 2, 1.3, -g.d + 0.2, 9, 4.2, 0.42, 0.11, [col, 0xffffff], 4, 0.7);
+            _pairCols[0] = gateColor(g);
+            _pairCols[1] = 0xffffff;
+            this.sparks.burst((g.x0 + g.x1) / 2, 1.3, -g.d + 0.2, 9, 4.2, 0.42, 0.11, _pairCols, 4, 0.7);
           }
           if (g.kind === 'weapon') {
             const x = (g.x0 + g.x1) / 2;
             this.texts.spawn(`Lv.${g.value}!`, x, 3.2, -g.d, 'gold', 0.9, 1.2);
-            this.sparks.burst(x, 2.5, -g.d, 16, 5, 0.5, 0.12, [0xffd34d, 0xffffff], 6, 0.4);
+            this.sparks.burst(x, 2.5, -g.d, 16, 5, 0.5, 0.12, WEAPON_UP_COLS, 6, 0.4);
           }
           break;
         }
@@ -564,10 +649,11 @@ export class GameRenderer {
             color = g.kind === 'mul' ? GATE_COLORS.mul : good ? GATE_COLORS.good : GATE_COLORS.bad;
           }
           this.texts.spawn(text, sq.x, 2.6, -sq.d, g.kind === 'weapon' && good ? 'big gold' : good ? 'big good' : 'big bad', 1.2, 2);
-          // 门板碎成一片片飞出去
-          this.debris.burst((g.x0 + g.x1) / 2, 1.2, -g.d, 20, 8, 0.72, 0.17, [color, 0xffffff], 18, 0.55);
+          _pairCols[0] = color;
+          _pairCols[1] = 0xffffff;
+          this.debris.burst((g.x0 + g.x1) / 2, 1.2, -g.d, 20, 8, 0.72, 0.17, _pairCols, 18, 0.55);
           this.rings.spawn(sq.x, -sq.d, 3.6, color, 0.42);
-          this.sparks.burst(sq.x, 1.2, -sq.d, 30, 9.5, 0.62, 0.15, [color, 0xffffff], 10, 0.45);
+          this.sparks.burst(sq.x, 1.2, -sq.d, 30, 9.5, 0.62, 0.15, _pairCols, 10, 0.45);
           if (!good) {
             this.shake(0.28);
             this.flash('bad');
@@ -589,12 +675,12 @@ export class GameRenderer {
             yaw: Math.PI + (Math.random() - 0.5) * 0.45,
             t: 0,
             scale: def.scale,
-            tint: this.zombies[e.kind] instanceof VatCrowd ? zombieShade(e.look) : zombieTint(e.look),
+            tint: this.zombies[e.kind] instanceof VatCrowd ? zombieShadeAlloc(e.look) : zombieTintAlloc(e.look),
           });
           this.impacts.spawn(e.x, 0.75 * def.scale, -e.d + 0.25, 0.55 * big);
-          this.debris.burst(e.x, 0.75 * def.scale, -e.d, Math.round(5 * big), 5.2 * big, 0.55, 0.12 * big, [0x6fae4a, 0x4d7a35, 0x9be858], 19);
+          this.debris.burst(e.x, 0.75 * def.scale, -e.d, Math.round(5 * big), 5.2 * big, 0.55, 0.12 * big, ZOMBIE_DIE_COLS, 19);
           if (Math.random() < 0.82) this.splats.spawn(e.x, -e.d, def.scale * (e.kind === 'giant' ? 1.75 : 1.22), e.kind === 'exploder' ? 0xb8e04a : 0x5f8f3a);
-          if (e.coins > 0 && Math.random() < 0.6) this.debris.burst(e.x, 1.1, -e.d, Math.min(7, e.coins), 4.6, 0.72, 0.15, [0xffcc33, 0xffe680], 22, 0.85);
+          if (e.coins > 0 && Math.random() < 0.6) this.debris.burst(e.x, 1.1, -e.d, Math.min(7, e.coins), 4.6, 0.72, 0.15, COIN_COLS, 22, 0.85);
           if (e.kind === 'giant') {
             this.explosions.spawn(e.x, 1.5, -e.d, 2.4);
             this.rings.spawn(e.x, -e.d, 5.5, 0xff9f1c, 0.5);
@@ -607,22 +693,23 @@ export class GameRenderer {
         }
         case 'soldierDie': {
           this.dyingPlayers.push({ x: e.x, y: 0, d: e.d, vx: (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 2, vd: -2 - Math.random() * 2, yaw: 0, t: 0, scale: 1 });
-          this.debris.burst(e.x, 0.7, -e.d, 2, 3, 0.5, 0.1, [this.skin.team, this.skin.shirt], 18);
+          _pairCols[0] = this.skin.team;
+          _pairCols[1] = this.skin.shirt;
+          this.debris.burst(e.x, 0.7, -e.d, 2, 3, 0.5, 0.1, _pairCols, 18);
           break;
         }
         case 'barrelBreak': {
           const b = e.barrel;
           const view = this.barrels.get(b.id);
           const colors =
-            b.look === 'tires' ? [0x2a2a2e, 0x55555c, 0x8f8f96] : b.look === 'cage' ? [0x9aa1aa, 0x3b3f46] : b.look === 'crate' ? [0x5b6b3a, 0x3d4a26, 0xf2c21b] : [0xa8682f, 0x8a5222, 0x6b6f76];
+            b.look === 'tires' ? TIRES_COLS : b.look === 'cage' ? CAGE_COLS : b.look === 'crate' ? CRATE_COLS : WOOD_BARREL_COLS;
           this.debris.burst(b.x, 1, -b.d, 26, 9, 1.1, 0.28, colors, 22, 0.5);
           if (b.look !== 'cage') this.explosions.spawn(b.x, 1, -b.d, 1.8);
-          else this.sparks.burst(b.x, 1, -b.d, 24, 7, 0.6, 0.18, [0xffffff, 0x9be8a8], 4, 0.6);
+          else this.sparks.burst(b.x, 1, -b.d, 24, 7, 0.6, 0.18, CAGE_SPARK_COLS, 4, 0.6);
           this.rings.spawn(b.x, -b.d, 5, 0xffb347, 0.45);
           this.shake(0.3);
           view?.startFly();
           if (b.block && w.defense) {
-            // 放行：门道上一片速度线冲向镜头
             const x0 = w.defense.gateSide < 0 ? -TRACK_HALF : 0.3;
             this.streaks.burst(x0, x0 + TRACK_HALF - 0.3, -(b.d + 40), -b.d, 46, 34);
             this.texts.spawn('冲啊！', b.x, 2.2, -(b.d - 6), 'big good', 0.8, 1.4);
@@ -635,7 +722,7 @@ export class GameRenderer {
             if (e.upgraded) {
               this.texts.spawn(`${WEAPONS[r.tier].name}!`, sq.x, 2.8, -sq.d, 'big gold', 1.4, 1.8);
               this.rings.spawn(sq.x, -sq.d, 3.6, 0xffd34d, 0.5);
-              this.sparks.burst(sq.x, 1.0, -sq.d, 30, 8, 0.7, 0.14, [0xffd34d, 0xffffff], 8, 0.5);
+              this.sparks.burst(sq.x, 1.0, -sq.d, 30, 8, 0.7, 0.14, WEAPON_UP_COLS, 8, 0.5);
             }
           } else if (r.kind === 'soldiers') {
             this.texts.spawn(`+${r.amount}`, sq.x, 2.6, -sq.d, 'big good', 1.2, 1.8);
@@ -651,9 +738,8 @@ export class GameRenderer {
         case 'explode': {
           const r = e.r;
           this.explosions.spawn(e.x, 0.8, -e.d, r * (e.source === 'exploder' ? 1 : 1.2));
-          this.debris.burst(e.x, 0.6, -e.d, Math.round(8 + r * 4), 7 + r * 2, 0.9, 0.2, e.source === 'exploder' ? [0x8fbf6a, 0xd9ff4a, 0x4d7a35] : [0x8f8f8f, 0x5a5a5a, 0xc23a2e], 20, 0.6);
+          this.debris.burst(e.x, 0.6, -e.d, Math.round(8 + r * 4), 7 + r * 2, 0.9, 0.2, e.source === 'exploder' ? EXPLODER_DEBRIS_COLS : IMPACT_DEBRIS_COLS, 20, 0.6);
           this.rings.spawn(e.x, -e.d, r * 2.2, e.source === 'exploder' ? 0xd9ff4a : 0xff8a1f, 0.45);
-          // 油桶炸到人：大大的伤亡数字，屏幕边缘闪红
           if (e.source === 'impact' && e.killed > 0) {
             this.texts.spawn(`-${formatNumber(e.killed)}`, e.x, 2.4, -e.d, 'big bad', 1.3, 1.6);
             this.flash('bad');
@@ -664,21 +750,20 @@ export class GameRenderer {
         }
         case 'giantSmash': {
           this.rings.spawn(e.x, -e.d, 5, 0xff4d4d, 0.45);
-          this.debris.burst(e.x, 0.3, -e.d, 12, 6, 0.7, 0.2, [0xb8b8b8, 0x8f8f8f], 20, 0.6);
+          this.debris.burst(e.x, 0.3, -e.d, 12, 6, 0.7, 0.2, STONE_COLS, 20, 0.6);
           this.shake(0.3);
           if (e.killed > 0) this.texts.spawn(`-${e.killed}`, sq.x, 2.6, -sq.d, 'bad', 0.9, 1.4);
           break;
         }
         case 'gem': {
           this.texts.spawn(`+${e.amount} 钻石`, e.x, 2.2, -e.d, 'gem', 1.4, 1.6);
-          this.sparks.burst(e.x, 1.5, -e.d, 16, 5, 0.6, 0.12, [0x8fe3ff, 0x47a8ff, 0xffffff], 6, 0.6);
+          this.sparks.burst(e.x, 1.5, -e.d, 16, 5, 0.6, 0.12, GEM_COLS, 6, 0.6);
           break;
         }
         case 'bossEnrage': {
-          // 半血狂暴：红光一闪、震屏、冒一圈红色冲击波
           const b = e.boss;
           this.rings.spawn(b.x, -b.d, 8, 0xff2a2a, 0.6);
-          this.sparks.burst(b.x, 3, -b.d, 30, 8, 0.7, 0.2, [0xff3b3b, 0xffb3a0], 6, 0.5);
+          this.sparks.burst(b.x, 3, -b.d, 30, 8, 0.7, 0.2, ENRAGE_COLS, 6, 0.5);
           this.shake(0.4);
           this.flash('boss');
           break;
@@ -692,7 +777,7 @@ export class GameRenderer {
           const quick = e.combo >= 2;
           const finisher = e.combo === 4;
           this.rings.spawn(e.x, -e.d, finisher ? 3.7 : quick ? 2.4 : 3.2, 0xff4d4d, quick ? 0.38 : 0.55);
-          this.debris.burst(e.x, 0.3, -e.d, finisher ? 20 : quick ? 10 : 18, 7, 0.8, 0.22, [0xb8b8b8, 0x8f8f8f], 20, 0.6);
+          this.debris.burst(e.x, 0.3, -e.d, finisher ? 20 : quick ? 10 : 18, 7, 0.8, 0.22, STONE_COLS, 20, 0.6);
           this.shake(finisher ? 0.54 : quick ? 0.28 : 0.48);
           if (e.killed > 0) this.texts.spawn(`-${e.killed}`, sq.x, 2.6, -sq.d, 'big bad', 1, 1.6);
           break;
@@ -704,20 +789,19 @@ export class GameRenderer {
         }
         case 'hiveSpawn': {
           const b = e.boss;
-          this.debris.burst(b.x, 1.5, -(b.d - b.r), 18, 6, 0.6, 0.16, [0x7a4f8f, 0xd9ff4a], 16, 0.5);
+          this.debris.burst(b.x, 1.5, -(b.d - b.r), 18, 6, 0.6, 0.16, HIVE_COLS, 16, 0.5);
           break;
         }
         case 'bossDie': {
           const b = e.boss;
           const s = BOSSES[b.kind].scale;
           this.explosions.spawn(b.x, 2 * s * 0.5, -b.d, 3.5);
-          this.debris.burst(b.x, 3, -b.d, 60, 12, 1.6, 0.3, [0xffcc33, 0xffe27a], 20, 0.6);
-          this.sparks.burst(b.x, 3, -b.d, 40, 10, 0.9, 0.35, [0xffd34d, 0xff8a1f, 0xffffff], 4, 0.4);
+          this.debris.burst(b.x, 3, -b.d, 60, 12, 1.6, 0.3, COIN_COLS, 20, 0.6);
+          this.sparks.burst(b.x, 3, -b.d, 40, 10, 0.9, 0.35, BOSS_SPARK_COLS, 4, 0.4);
           this.rings.spawn(b.x, -b.d, 12, 0xffd34d, 0.8);
           this.texts.spawn(`${BOSSES[b.kind].name} 倒下！`, b.x, 2.5, -(b.d - 5), 'big gold', 1.6, 1.2);
           if (e.bounty > 0) this.texts.spawn(`赏金 +${formatNumber(Math.round(e.bounty))}`, b.x, 0.4, -(b.d - 12), 'big gold', 1.8, 1.2);
-          // 金币雨
-          this.debris.burst(b.x, 3, -b.d, 40, 10, 1.4, 0.22, [0xffcc33, 0xffe27a, 0xffb000], 18, 0.7);
+          this.debris.burst(b.x, 3, -b.d, 40, 10, 1.4, 0.22, BOSS_COIN_COLS, 18, 0.7);
           this.shake(0.7);
           break;
         }
@@ -733,8 +817,10 @@ export class GameRenderer {
           }
           this.rings.spawn(e.x, -e.d, e.nova ? 40 : e.r * 2, color, e.nova ? 1 : 0.5);
           this.rings.spawn(e.x, -e.d, e.nova ? 25 : e.r, 0xd59bff, 0.65);
-          this.sparks.burst(e.x, 1, -e.d, this.reducedMotion ? 12 : e.nova ? 100 : 28,
-            e.nova ? 20 : 9, 0.7, 0.16, [color, 0xd59bff, 0xffffff], 10, 0.6);
+          _triCols[0] = color;
+          _triCols[1] = 0xd59bff;
+          _triCols[2] = 0xffffff;
+          this.sparks.burst(e.x, 1, -e.d, this.reducedMotion ? 12 : e.nova ? 100 : 28, e.nova ? 20 : 9, 0.7, 0.16, _triCols, 10, 0.6);
           this.impacts.spawn(e.x, 1, -e.d, e.nova ? 10 : 4);
           this.shake(e.nova ? 0.35 : 0.1);
           if (e.nova) this.texts.spawn('全 域 超 载', 0, 3, -18, 'big gold', 1.2, 1);
@@ -742,26 +828,26 @@ export class GameRenderer {
         }
         case 'splash': {
           if (splashBudget-- <= 0) break;
-          const col = w.ammo.color ?? 0xffa53d;
+          _pairCols[0] = w.ammo.color ?? 0xffa53d;
+          _pairCols[1] = 0xffffff;
           this.impacts.spawn(e.x, 0.8, -e.d, e.r * 1.1);
-          this.sparks.burst(e.x, 0.7, -e.d, 4, 4 + e.r * 3, 0.3, 0.09, [col, 0xffffff], 8, 0.4);
+          this.sparks.burst(e.x, 0.7, -e.d, 4, 4 + e.r * 3, 0.3, 0.09, _pairCols, 8, 0.4);
           break;
         }
         case 'blocked': {
           const b = e.barrel;
           this.texts.spawn('打掉它！', b.x, 0.6, -(b.d - b.r - 3), 'gold', 1.3, 0.7);
           this.rings.spawn(b.x, -b.d, 5, 0xffd34d, 0.5);
-          // 重重砸在路上：扬尘 + 震屏
-          this.debris.burst(b.x, 0.3, -(b.d - b.r * 0.6), 18, 6, 0.7, 0.2, [0xb8b8b8, 0x8f8f8f], 22, 0.5);
+          this.debris.burst(b.x, 0.3, -(b.d - b.r * 0.6), 18, 6, 0.7, 0.2, STONE_COLS, 22, 0.5);
           this.shake(0.35);
           break;
         }
         case 'trap': {
-          this.sparks.burst(e.x, 0.5, -e.d, 4, 4, 0.3, 0.1, [0xff3b3b, 0xffffff], 10, 0.5);
+          this.sparks.burst(e.x, 0.5, -e.d, 4, 4, 0.3, 0.1, TRAP_COLS, 10, 0.5);
           break;
         }
         case 'won': {
-          this.sparks.burst(sq.x, 2, -sq.d, 60, 10, 1.4, 0.18, [0xff5a5a, 0xffd34d, 0x5dff7a, 0x5cc2ff, 0xd59bff], 10, 0.8);
+          this.sparks.burst(sq.x, 2, -sq.d, 60, 10, 1.4, 0.18, WIN_COLS, 10, 0.8);
           break;
         }
         default:
@@ -784,8 +870,8 @@ export class GameRenderer {
 
   /** 菜单待机或游戏中每帧调用 */
   update(dt: number, realDt = dt) {
+    if (this.contextLost) return;
     if (this.world?.spec.mode === 'carnage') {
-      this.referenceCarnage!.resize(this.width, this.height);
       this.referenceCarnage!.update(dt, this.reducedMotion, this.menu);
       return;
     }
@@ -797,47 +883,47 @@ export class GameRenderer {
     const sq = w.squad;
     const t = this.time;
 
-    // 自己人（外部模型的人群不投实时阴影，脚下画圆形影子）
+    // 自己人
     this.blobs.begin();
     this.players.begin();
-    // 原地开火时也轻轻颠一颠，不然看起来像静止的
     const firing = !sq.moving && (w.state === 'run' || w.state === 'boss') && !this.menu;
     const stride = sq.moving ? 1 : firing ? 0.12 : 0;
     const kit = this.soldierKit;
-    // 外部模型：跑着开枪 / 站着开枪 / 待机，各自错开节奏
     const clip = !kit ? undefined : this.menu || (!firing && !sq.moving) ? 'idle' : sq.moving ? 'run' : 'shoot';
     const clipLen = kit && clip ? kit.body.clips[clip].duration : 1;
-    // 画质低时人太多就均匀少画几个（模拟里一个不少）
     const playerScale = w.spec.mode === 'carnage' ? 0.72 : 1;
     const nSoldiers = w.soldiers.length;
     const cap = this.soldierCap;
     const keep = nSoldiers > cap ? cap / nSoldiers : 1;
+    _pose.tint = undefined;
     for (let i = 0; i < nSoldiers; i++) {
       if (keep < 1 && Math.floor(i * keep) === Math.floor((i - 1) * keep)) continue;
       const s = w.soldiers[i];
       const pop = s.spawn < 1 ? easeOutBack(s.spawn) : 1;
-      // 站定射击时给轻微枪口后坐位移；奔跑时依靠骨骼动作自身摆动，不额外放大或闪白以免模型发抖
       const kick = firing ? Math.max(0, Math.sin(t * (22 + sq.tier * 2) + s.phase * 5.3)) * (0.035 + sq.tier * 0.005) : 0;
+      _pose.x = sq.x + s.ox;
+      _pose.y = 0;
+      _pose.d = sq.d + s.oz - kick;
+      _pose.yaw = 0;
+      _pose.stride = stride;
       if (kit) {
-        const cycle = clip === 'run' ? s.phase / (Math.PI * 2) : t / clipLen + s.phase * 0.37;
-        this.players.push({
-          x: sq.x + s.ox,
-          y: 0,
-          d: sq.d + s.oz - kick,
-          yaw: 0,
-          phase: s.phase,
-          scale: Math.max(0.01, pop) * playerScale * (1 + this.tierFlash * 0.12),
-          flash: this.tierFlash * 0.7,
-          tilt: kick * 0.65,
-          stride,
-          clip,
-          cycle,
-        });
-        this.blobs.push(sq.x + s.ox, -(sq.d + s.oz - kick), 0.8 * pop);
-        continue;
+        _pose.phase = s.phase;
+        _pose.scale = Math.max(0.01, pop) * playerScale * (1 + this.tierFlash * 0.12);
+        _pose.flash = this.tierFlash * 0.7;
+        _pose.tilt = kick * 0.65;
+        _pose.clip = clip;
+        _pose.cycle = clip === 'run' ? s.phase / (Math.PI * 2) : t / clipLen + s.phase * 0.37;
+        this.players.push(_pose);
+        this.blobs.push(_pose.x, -_pose.d, 0.8 * pop);
+      } else {
+        _pose.phase = firing ? s.phase + t * 9 : s.phase;
+        _pose.scale = Math.max(0.01, pop) * playerScale;
+        _pose.flash = this.tierFlash * 0.5;
+        _pose.tilt = kick * 0.8;
+        _pose.clip = undefined;
+        _pose.cycle = undefined;
+        this.players.push(_pose);
       }
-      const phase = firing ? s.phase + t * 9 : s.phase;
-      this.players.push({ x: sq.x + s.ox, y: 0, d: sq.d + s.oz - kick, yaw: 0, phase, scale: Math.max(0.01, pop) * playerScale, flash: this.tierFlash * 0.5, tilt: kick * 0.8, stride });
     }
     this.pushDying(this.players, this.dyingPlayers, dt);
     this.players.end();
@@ -848,7 +934,8 @@ export class GameRenderer {
     const lo = sq.d - 14;
     const hi = sq.d + VIEW_AHEAD;
     let giantIdx = 0;
-    for (const z of w.zombies) {
+    for (let i = 0; i < w.zombies.length; i++) {
+      const z = w.zombies[i];
       if (!z.alive || z.d < lo || z.d > hi) continue;
       const def = ZOMBIES[z.kind];
       let scale = def.scale * weightScale(z) * (1 + z.flash * 0.13);
@@ -857,28 +944,27 @@ export class GameRenderer {
         scale *= 1 + Math.sin(t * 8 + z.id) * 0.05;
         flash = Math.max(flash, 0.25 * (Math.sin(t * 6 + z.id) + 1));
       }
-      // 挨打时明显后仰顿挫与受击膨胀；贴着阵型的（巨尸碾人）播攻击动作
       const herd = this.zombies[z.kind];
       const anim = herd instanceof VatCrowd;
       const close = anim && z.active && z.d < sq.d + this.attackReach(w, z);
-      this.zombies[z.kind].push({
-        x: z.x + Math.sin(t * 55 + z.id) * z.flash * 0.04,
-        y: 0,
-        d: z.d + z.flash * 0.24,
-        yaw: Math.PI,
-        phase: z.phase,
-        scale,
-        flash,
-        tilt: -z.flash * (anim ? 0.34 : 0.42),
-        stride: z.active ? 1 : 0.15,
-        tint: anim ? zombieShade(z.look) : zombieTint(z.look),
-        clip: close ? 'attack' : z.active ? 'run' : 'idle',
-        cycle: close ? t * 1.3 + z.id * 0.17 : z.phase / (Math.PI * 2),
-      });
+      _pose.x = z.x + Math.sin(t * 55 + z.id) * z.flash * 0.04;
+      _pose.y = 0;
+      _pose.d = z.d + z.flash * 0.24;
+      _pose.yaw = Math.PI;
+      _pose.phase = z.phase;
+      _pose.scale = scale;
+      _pose.flash = flash;
+      _pose.tilt = -z.flash * (anim ? 0.34 : 0.42);
+      _pose.stride = z.active ? 1 : 0.15;
+      _pose.tint = fillZombieTint(z.look, anim);
+      _pose.clip = close ? 'attack' : z.active ? 'run' : 'idle';
+      _pose.cycle = close ? t * 1.3 + z.id * 0.17 : z.phase / (Math.PI * 2);
+      herd.push(_pose);
       if (anim) this.blobs.push(z.x, -(z.d + z.flash * 0.24), 0.9 * scale);
       if (z.kind === 'giant') this.giantLabel(giantIdx++, z);
-      // 防线里尸潮一直显示血条（满血也显示），其他模式只显示挨过打的
-      else if (w.spec.mode === 'carnage' ? z.kind === 'brute' && z.hp < z.maxHp : z.hp < z.maxHp || (w.defense && z.d < w.defense.spawnD)) this.zombieBars.push(z.x, scale * (anim ? 1.55 : 1.32) + 0.18, -z.d, 0.78 * scale, Math.max(0, z.hp / z.maxHp));
+      else if (w.spec.mode === 'carnage' ? z.kind === 'brute' && z.hp < z.maxHp : z.hp < z.maxHp || (w.defense && z.d < w.defense.spawnD)) {
+        this.zombieBars.push(z.x, scale * (anim ? 1.55 : 1.32) + 0.18, -z.d, 0.78 * scale, Math.max(0, z.hp / z.maxHp));
+      }
     }
     for (let i = giantIdx; i < this.giantLabels.length; i++) this.giantLabels[i].sprite.visible = false;
     for (const k of KINDS) {
@@ -889,17 +975,25 @@ export class GameRenderer {
     this.blobs.end();
 
     this.bullets.update(w.bullets);
-    // 好枪和电磁弹：随机几颗子弹身后拖一点闪粉/电火花
     const trail = sq.tier >= 5 ? (sq.tier === 6 ? 0xd59bff : 0xffe27a) : w.ammo.name === '电磁弹' ? 0xb98cff : 0;
     if (trail && w.bullets.length && dt > 0) {
       for (let i = 0; i < 6; i++) {
         const b = w.bullets[Math.floor(Math.random() * w.bullets.length)];
-        this.sparks.spawn(b.x + (Math.random() - 0.5) * 0.2, 0.72 + (Math.random() - 0.5) * 0.2, -b.d + 0.4, (Math.random() - 0.5) * 1.5, Math.random() * 1.5, 0, 0.22, 0.07, Math.random() < 0.5 ? trail : 0xffffff, 0);
+        this.sparks.spawn(
+          b.x + (Math.random() - 0.5) * 0.2,
+          0.72 + (Math.random() - 0.5) * 0.2,
+          -b.d + 0.4,
+          (Math.random() - 0.5) * 1.5,
+          Math.random() * 1.5,
+          0,
+          0.22,
+          0.07,
+          Math.random() < 0.5 ? trail : 0xffffff,
+          0,
+        );
       }
     }
-    // 换枪那一下：全队闪白
     this.tierFlash = Math.max(0, this.tierFlash - dt * 2.5);
-    // 枪口火光与抛壳火星：每帧随机一批士兵的枪口爆亮，枪越好火光越猛
     if ((w.state === 'run' || w.state === 'boss') && w.soldiers.length > 0 && dt > 0 && !this.menu) {
       const flashes = Math.min(20, Math.ceil(w.soldiers.length / 4));
       const size = 0.44 + sq.tier * 0.07;
@@ -916,7 +1010,6 @@ export class GameRenderer {
 
     this.squadPos.set(sq.x, 1, -sq.d);
     stripeTexture.offset.x -= dt * 0.6;
-    // 防线：主页上不摆门道队列（会挡住标题）；排在刷新点后面的东西也先不画
     const queueFar = w.defense ? (this.menuBlend > 0.5 ? -1e9 : DEFENSE_VIEW_D) : Infinity;
     for (const v of this.gates.values()) {
       const near = v.gate.d > sq.d - 20 && v.gate.d < Math.min(sq.d + 260, queueFar);
@@ -932,46 +1025,67 @@ export class GameRenderer {
       v.update(dt, t, this.squadPos);
       const b = v.barrel;
       if (!b.alive || !v.group.visible) continue;
-      // 掉到 75% / 50% / 25%：崩下一大块
       const stage = v.consumeStage();
       if (stage) {
-        this.debris.burst(b.x, v.topY * 0.6, -b.d + b.r * 0.5, 12 + stage * 5, 6.8, 0.85, 0.19 + stage * 0.03, [0x8a5222, 0x5a5f66, 0x3a3d45], 20, 0.6);
-        this.sparks.burst(b.x, v.topY * 0.6, -b.d + b.r * 0.5, 14, 7.5, 0.45, 0.13, [0xffd34d, 0xffffff], 8, 0.5);
+        this.debris.burst(b.x, v.topY * 0.6, -b.d + b.r * 0.5, 12 + stage * 5, 6.8, 0.85, 0.19 + stage * 0.03, BARREL_STAGE_COLS, 20, 0.6);
+        this.sparks.burst(b.x, v.topY * 0.6, -b.d + b.r * 0.5, 14, 7.5, 0.45, 0.13, WEAPON_UP_COLS, 8, 0.5);
         this.shake(0.11 + stage * 0.04);
       }
-      // 快被打爆时冒烟、冒火星
       const ratio = v.hpRatio;
       if (ratio < 0.5 && Math.random() < dt * (ratio < 0.25 ? 9 : 4)) this.explosions.spawn(b.x + (Math.random() - 0.5) * b.r, v.topY * 0.8, -b.d, 0.35 + Math.random() * 0.3, true);
-      if (ratio < 0.25 && Math.random() < dt * 6) this.sparks.burst(b.x, v.topY * 0.7, -b.d + b.r * 0.4, 3, 4, 0.35, 0.08, [0xffb347, 0xffe08a], 10, 0.7);
+      if (ratio < 0.25 && Math.random() < dt * 6) this.sparks.burst(b.x, v.topY * 0.7, -b.d + b.r * 0.4, 3, 4, 0.35, 0.08, BARREL_SPARK_COLS, 10, 0.7);
     }
     for (const v of this.hazards.values()) {
       v.group.visible = v.hazard.d1 > sq.d - 15 && v.hazard.d0 < sq.d + VIEW_AHEAD + 30;
       if (v.group.visible) v.update(t);
     }
     this.walls.set(w.walls, sq.d);
-    for (const b of this.bosses) {
+
+    for (let i = this.bosses.length - 1; i >= 0; i--) {
+      const b = this.bosses[i];
       b.update(dt, t);
       if (b.consumeLanding()) {
         const { x, d } = b.boss;
         this.rings.spawn(x, -d, 9, 0xffd34d, 0.6);
-        this.debris.burst(x, 0.4, -d, 30, 9, 0.9, 0.24, [0xb8b8b8, 0x8f8f8f, 0x6b6f76], 20, 0.7);
+        this.debris.burst(x, 0.4, -d, 30, 9, 0.9, 0.24, LANDING_COLS, 20, 0.7);
         this.explosions.spawn(x, 0.6, -d, 2.4, true);
         this.shake(0.5);
+      }
+      if (b.isDeadDone) {
+        b.dispose();
+        const strike = this.bossStrikes.get(b.boss.id);
+        if (strike) {
+          strike.dispose();
+          this.bossStrikes.delete(b.boss.id);
+        }
+        this.bosses.splice(i, 1);
       }
     }
     for (const v of this.bossStrikes.values()) v.update();
 
-    const projIds = new Set(w.projectiles.map((p) => p.id));
     for (const [id, v] of this.projectiles) {
-      if (projIds.has(id)) v.update();
+      let active = false;
+      for (let i = 0; i < w.projectiles.length; i++) {
+        if (w.projectiles[i].id === id) {
+          active = true;
+          break;
+        }
+      }
+      if (active) v.update();
       else {
         v.dispose();
         this.projectiles.delete(id);
       }
     }
-    const strikeIds = new Set(w.strikes.map((s) => s.id));
     for (const [id, v] of this.strikes) {
-      if (strikeIds.has(id)) {
+      let active = false;
+      for (let i = 0; i < w.strikes.length; i++) {
+        if (w.strikes[i].id === id) {
+          active = true;
+          break;
+        }
+      }
+      if (active) {
         v.update();
         if (Math.random() < 0.6 && v.strike.t > 0) {
           const k = v.strike.t / v.strike.T;
@@ -994,11 +1108,16 @@ export class GameRenderer {
     this.splats.update(dt);
     this.explosions.update(dt);
 
-    this.placeCamera(w, Math.min(1, dt * 6.5), realDt);
+    const camDamp = dt <= 0 ? 0 : 1 - Math.exp(-6.5 * dt);
+    this.placeCamera(w, camDamp, realDt);
     this.env.update(dt, sq.d);
+
     const look = this.camLook;
-    this.sun.position.set(look.x - 7, 20, look.z + 9);
-    this.sun.target.position.set(look.x, 0, look.z - 2);
+    const texel = 38 / Math.max(1, this.sun.shadow.mapSize.x);
+    const snapX = Math.round(look.x / texel) * texel;
+    const snapZ = Math.round(look.z / texel) * texel;
+    this.sun.position.set(snapX - 7, 20, snapZ + 9);
+    this.sun.target.position.set(snapX, 0, snapZ - 2);
 
     this.texts.update(dt, this.camera, this.width, this.height);
     this.updateBadge(w);
@@ -1050,15 +1169,32 @@ export class GameRenderer {
       a.x += a.vx * dt;
       a.d += a.vd * dt;
       const k = a.t < 0.45 ? 1 : 1 - (a.t - 0.45) / 0.25;
-      // 外部模型播倒地动作时贴近桥面，不悬空打转；代码小人靠整体往后倒
-      if (anim) crowd.push({ x: a.x, y: a.y * 0.15, d: a.d, yaw: a.yaw, phase: 0, scale: Math.max(0.01, k * a.scale), flash: Math.max(0, 0.85 - a.t * 2.2), tilt: -Math.min(0.2, a.t * 0.8), stride: 0, tint: a.tint, clip: 'death', cycle: Math.min(0.97, a.t / 0.6) });
-      else crowd.push({ x: a.x, y: a.y, d: a.d, yaw: a.yaw, phase: 0, scale: Math.max(0.01, k * a.scale), flash: 0.75, tilt: Math.min(1.5, a.t * 6), stride: 0, tint: a.tint });
+      _pose.x = a.x;
+      _pose.d = a.d;
+      _pose.yaw = a.yaw;
+      _pose.phase = 0;
+      _pose.scale = Math.max(0.01, k * a.scale);
+      _pose.stride = 0;
+      _pose.tint = a.tint;
+      if (anim) {
+        _pose.y = a.y * 0.15;
+        _pose.flash = Math.max(0, 0.85 - a.t * 2.2);
+        _pose.tilt = -Math.min(0.2, a.t * 0.8);
+        _pose.clip = 'death';
+        _pose.cycle = Math.min(0.97, a.t / 0.6);
+      } else {
+        _pose.y = a.y;
+        _pose.flash = 0.75;
+        _pose.tilt = Math.min(1.5, a.t * 6);
+        _pose.clip = undefined;
+        _pose.cycle = undefined;
+      }
+      crowd.push(_pose);
     }
     if (list.length > 160) list.splice(0, list.length - 160);
   }
 
   private placeCamera(w: World, k: number, realDt: number) {
-    // 调试：window.__cam = [px, py, pz, lx, ly, lz] 时用固定镜头（截图看模型用）
     const debugCam = (window as unknown as { __cam?: number[] }).__cam;
     if (debugCam) {
       this.camera.position.set(debugCam[0], debugCam[1], debugCam[2]);
@@ -1069,14 +1205,12 @@ export class GameRenderer {
     const wide = this.camera.aspect > 1.2;
     const t = Math.tan(THREE.MathUtils.degToRad(this.camera.fov / 2));
     const hTan = Math.max(0.2, t * this.camera.aspect);
-    // 战斗镜头
     const pos = _camPos.set(0, 0, 0);
     const look = _camLook.set(0, 0, 0);
     if (w.defense) {
-      // 防线：开阔鸟瞰视野，完整收纳整座桥面、两侧护栏与沙袋炮塔，并稳住水平机位减少拖屏晃动
       const pitch = THREE.MathUtils.degToRad(wide ? 25 : 28.5);
       const rear = Math.min(8.5, Math.max(2.6, -w.back + 1.2));
-      const aNear = pitch + Math.atan((wide ? 0.56 : 0.50) * t);
+      const aNear = pitch + Math.atan((wide ? 0.56 : 0.5) * t);
       const halfSpan = wide ? 9.2 : 6.85;
       const minDist = halfSpan / hTan;
       const h = Math.max(minDist * Math.sin(pitch), (rear + 12) * Math.tan(pitch) * 0.74);
@@ -1084,7 +1218,6 @@ export class GameRenderer {
       pos.set(sq.x * 0.08, h, cz);
       look.set(sq.x * 0.05, 0.42, cz - h / Math.tan(pitch));
     } else {
-      // 突围/无尽：把机位拉得更开阔，保证竖屏与横屏都能同时看清左右双门、整条桥面与远方尸潮
       const bossFight = w.bosses.some((b) => b.active);
       this.bossBlend += ((bossFight ? 1 : 0) - this.bossBlend) * Math.min(1, k * 0.6);
       const crowd = Math.min(1, Math.sqrt(w.soldiers.length) / 18);
@@ -1093,19 +1226,17 @@ export class GameRenderer {
       const halfSpan = wide ? 8.2 : 6.25;
       const minDist = halfSpan / hTan;
       const rearGrow = Math.max(0, -w.back - 0.8) * 0.78;
-      const height = Math.max(minDist * Math.sin(pitch), (wide ? 5.6 : 6.8)) + crowd * 1.4 + this.bossBlend * (1.8 + double * 1.0);
-      const back = Math.max(minDist * Math.cos(pitch), (wide ? 7.6 : 9.6)) + rearGrow + crowd * 1.7 + this.bossBlend * (2.2 + double * 1.1);
+      const height = Math.max(minDist * Math.sin(pitch), wide ? 5.6 : 6.8) + crowd * 1.4 + this.bossBlend * (1.8 + double * 1.0);
+      const back = Math.max(minDist * Math.cos(pitch), wide ? 7.6 : 9.6) + rearGrow + crowd * 1.7 + this.bossBlend * (2.2 + double * 1.1);
       const ahead = (wide ? 12.5 : 14.5) + this.bossBlend * 5.5;
       const fx = sq.x * (0.18 - this.bossBlend * 0.08);
       pos.set(fx, height, -sq.d + back);
       look.set(fx * 0.65, 0.55 + this.bossBlend * 0.35, -sq.d - ahead);
     }
-    // 主页：把英雄机位稍微拉远拉广，让整支队伍与背后大桥更舒展
     this.menuBlend += ((this.menu ? 1 : 0) - this.menuBlend) * Math.min(1, k * 0.45);
     const m = this.menuBlend * this.menuBlend * (3 - 2 * this.menuBlend);
     if (m > 0.001) {
       const sway = Math.sin(this.time * 0.35) * 0.65;
-      // 横屏时界面在中间，把队伍放到画面左边
       const heroPos = _heroPos.set(sq.x + 1.4 + sway, wide ? 1.65 : 1.85, -sq.d - (wide ? 5.6 : 6.0));
       const heroLook = _heroLook.set(sq.x + sway * 0.25 - (wide ? 2.75 : 0), wide ? 0.98 : 0.78, -sq.d + 0.6);
       pos.lerp(heroPos, m);
@@ -1122,12 +1253,10 @@ export class GameRenderer {
     if (!this.reducedMotion && this.weaponCueAge < this.weaponCueDuration) {
       this.weaponCueAge = Math.min(this.weaponCueDuration, this.weaponCueAge + realDt);
       const progress = this.weaponCueAge / this.weaponCueDuration;
-      // 从当前机位推近、看向队伍、再沿原路径退回；始终渲染同一场景，没有镜头切换。
       const focus = Math.sin(Math.PI * progress) ** 2;
       this.camera.position.lerp(this.camLook, 0.18 * focus);
       cameraTarget.lerp(_weaponTarget.set(w.squad.x, 1.25, -w.squad.d), 0.1 * focus);
     }
-    // 仅在爆炸/重击/破障时触发短促冲击震屏，常态射击保持画面稳定不发抖
     this.trauma = Math.max(0, this.trauma - realDt * 2.6);
     const shake = this.reducedMotion ? 0 : this.trauma * this.trauma * 0.65;
     if (shake > 0) {
@@ -1139,29 +1268,37 @@ export class GameRenderer {
     this.camera.lookAt(cameraTarget);
   }
 
-  /** 世界坐标投到屏幕像素，镜头背后返回 null */
+  /** 世界坐标投到屏幕像素，镜头背后返回 null（复用临时向量，零分配） */
   toScreen(x: number, y: number, d: number): { x: number; y: number } | null {
     const cam = this.world?.spec.mode === 'carnage' && this.referenceCarnage ? this.referenceCarnage.camera : this.camera;
-    const v = new THREE.Vector3(x, y, -d).project(cam);
+    const v = _projVec.set(x, y, -d).project(cam);
     if (v.z > 1) return null;
     return { x: (v.x * 0.5 + 0.5) * this.width, y: (-v.y * 0.5 + 0.5) * this.height };
   }
 
   private updateBadge(w: World) {
     const sq = w.squad;
-    // 镜头从主页甩过来的路上不显示（锚点可能在镜头背后）
     if (sq.count <= 0 || w.soldiers.length === 0 || this.menuBlend > 0.04) {
-      this.badge.style.opacity = '0';
+      if (this.lastBadgeOpacity !== '0') {
+        this.lastBadgeOpacity = '0';
+        this.badge.style.opacity = '0';
+      }
       return;
     }
-    // 锚在前几排头上：防线里人多时纵队很长，用 back 算会跑到镜头后面去
     const v = _badge.set(sq.x, 1.6 + Math.min(1.2, w.halfWidth * 0.12), -(sq.d + Math.max(w.back * 0.2, w.front - 2.5)));
     v.project(this.camera);
-    // 人太多时锚点可能出画，夹在屏幕里（避开顶栏和底部升级栏）
-    const x = Math.max(40, Math.min(this.width - 40, (v.x * 0.5 + 0.5) * this.width));
-    const y = Math.max(90, Math.min(this.height - 130, (-v.y * 0.5 + 0.5) * this.height));
-    this.badge.style.opacity = v.z > 1 ? '0' : '1';
-    this.badge.style.transform = `translate(-50%, -100%) translate(${x}px, ${y}px)`;
+    const x = Math.round(Math.max(40, Math.min(this.width - 40, (v.x * 0.5 + 0.5) * this.width)) * 2) * 0.5;
+    const y = Math.round(Math.max(90, Math.min(this.height - 130, (-v.y * 0.5 + 0.5) * this.height)) * 2) * 0.5;
+    const op = v.z > 1 ? '0' : '1';
+    if (op !== this.lastBadgeOpacity) {
+      this.lastBadgeOpacity = op;
+      this.badge.style.opacity = op;
+    }
+    if (x !== this.lastBadgeX || y !== this.lastBadgeY) {
+      this.lastBadgeX = x;
+      this.lastBadgeY = y;
+      this.badge.style.transform = `translate(-50%, -100%) translate(${x}px, ${y}px)`;
+    }
     const text = formatNumber(sq.count);
     if (this.badge.textContent !== text) {
       this.badge.textContent = text;
@@ -1172,6 +1309,7 @@ export class GameRenderer {
   }
 
   render() {
+    if (this.contextLost) return;
     const tRender = performance.now();
     if (this.world?.spec.mode === 'carnage') this.referenceCarnage!.render(this.renderer);
     else this.renderer.render(this.scene, this.camera);
@@ -1182,7 +1320,7 @@ export class GameRenderer {
 
   /** 给截图/测试用：把世界坐标投到屏幕 */
   project(x: number, y: number, d: number): { x: number; y: number } {
-    const v = new THREE.Vector3(x, y, -d).project(this.camera);
+    const v = _projVec.set(x, y, -d).project(this.camera);
     return { x: (v.x * 0.5 + 0.5) * this.width, y: (-v.y * 0.5 + 0.5) * this.height };
   }
 }

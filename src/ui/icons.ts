@@ -1,6 +1,7 @@
 // 界面图标，全部内联 SVG，24×24 网格（少数徽章另行注明）。
 
-const svg = (body: string, view = '0 0 24 24') => `<svg viewBox="${view}" xmlns="http://www.w3.org/2000/svg">${body}</svg>`;
+const svg = (body: string, view = '0 0 24 24') =>
+  `<svg viewBox="${view}" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">${body}</svg>`;
 
 export const ICON = {
   coin: svg(

@@ -10,7 +10,7 @@
 
   --text: #f4f7ff;
   --dim: #a7b4d0;
-  --faint: #6d7c9c;
+  --faint: #8b9ab8;
   --ink: #0d1424;
 
   --panel: linear-gradient(180deg, rgba(34, 48, 78, 0.94), rgba(16, 24, 42, 0.95));
@@ -30,6 +30,8 @@
 
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
 }
 
 * {
@@ -130,6 +132,11 @@ button {
   padding: 0;
   cursor: pointer;
   touch-action: manipulation;
+}
+button:focus-visible,
+input:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 2px;
 }
 
 svg {
@@ -832,7 +839,7 @@ span.gun-img svg {
   position: absolute;
   left: 50%;
   top: 30%;
-  z-index: 40;
+  z-index: 70;
   max-width: min(92vw, 420px);
   width: max-content;
   padding: 10px 20px;
@@ -891,6 +898,7 @@ span.gun-img svg {
 .sheet-wrap {
   position: absolute;
   inset: 0;
+  z-index: 50;
   display: none;
   align-items: flex-end;
   justify-content: center;
@@ -900,6 +908,9 @@ span.gun-img svg {
 .sheet-wrap.visible {
   display: flex;
   animation: fade-in 0.2s ease-out;
+}
+.sheet-wrap.updating {
+  animation: none;
 }
 .sheet {
   width: 100%;
@@ -914,6 +925,9 @@ span.gun-img svg {
   box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.5);
   padding-bottom: calc(var(--safe-bottom) + 14px);
   animation: sheet-up 0.28s cubic-bezier(0.2, 0.9, 0.3, 1);
+}
+.sheet-wrap.updating .sheet {
+  animation: none;
 }
 .sheet-head {
   display: flex;
@@ -1318,7 +1332,7 @@ span.gun-img svg {
   width: 26px;
   height: 26px;
   pointer-events: none;
-  z-index: 30;
+  z-index: 35;
   filter: drop-shadow(0 2px 3px rgba(0, 0, 0, 0.45));
 }
 .hud-row {
@@ -1608,6 +1622,7 @@ span.gun-img svg {
 /* ---------- 弹窗：结算 / 暂停 ---------- */
 
 .modal {
+  z-index: 20;
   align-items: center;
   justify-content: center;
   background: radial-gradient(circle at 50% 40%, rgba(10, 18, 36, 0.5), rgba(4, 8, 18, 0.82));
@@ -2386,7 +2401,10 @@ span.gun-img svg {
 #menu.visible .menu-dock > :nth-child(2) {
   animation-delay: 0.06s;
 }
-#menu.visible .menu-dock > :nth-child(3) {
+#menu.visible .menu-dock > .brief-actions {
+  animation-delay: 0.09s;
+}
+#menu.visible .menu-dock > .start-btn {
   animation: rise-in 0.5s cubic-bezier(0.2, 1.3, 0.4, 1) 0.12s both, breathe 2.4s ease-in-out 0.7s infinite;
 }
 #menu.visible .nav {
@@ -2454,22 +2472,22 @@ span.gun-img svg {
 }
 
 /* 弹出页里的每一行依次滑进来 */
-.sheet-wrap.visible .sheet-body > * {
+.sheet-wrap.visible:not(.updating) .sheet-body > * {
   animation: rise-in 0.35s cubic-bezier(0.2, 1.2, 0.4, 1) both;
 }
-.sheet-wrap.visible .sheet-body > :nth-child(2) {
+.sheet-wrap.visible:not(.updating) .sheet-body > :nth-child(2) {
   animation-delay: 0.04s;
 }
-.sheet-wrap.visible .sheet-body > :nth-child(3) {
+.sheet-wrap.visible:not(.updating) .sheet-body > :nth-child(3) {
   animation-delay: 0.08s;
 }
-.sheet-wrap.visible .sheet-body > :nth-child(4) {
+.sheet-wrap.visible:not(.updating) .sheet-body > :nth-child(4) {
   animation-delay: 0.12s;
 }
-.sheet-wrap.visible .sheet-body > :nth-child(5) {
+.sheet-wrap.visible:not(.updating) .sheet-body > :nth-child(5) {
   animation-delay: 0.16s;
 }
-.sheet-wrap.visible .sheet-body > :nth-child(n + 6) {
+.sheet-wrap.visible:not(.updating) .sheet-body > :nth-child(n + 6) {
   animation-delay: 0.2s;
 }
 
@@ -2809,58 +2827,71 @@ span.gun-img svg {
 #ui.reduced-motion .confetti { display:none; }
 
 
-/* 火力狂潮：独立击杀面板与单手超载按钮。 */
+/* 火力狂潮：独立击杀面板与单手超载按钮（合并收敛全部覆盖项，补齐安全区回退） */
 #carnage-hud[hidden] { display: none; }
-.carnage-score { position: absolute; left: 14px; top: calc(135px + env(safe-area-inset-top)); color: #fff; text-shadow: 0 2px 5px #201642; pointer-events: none; }
-.carnage-score small { display: block; font-size: 9px; letter-spacing: 2px; color: #ffe298; }
-.carnage-score b { display: block; font-size: 30px; line-height: 1.2; color: #ffe098; }
-.carnage-score span { font-size: 11px; }
-#btn-nova { position: absolute; right: 15px; bottom: calc(30px + env(safe-area-inset-bottom)); width: 180px; min-height: 78px; overflow: hidden; border-radius: 18px; border: 1px solid #aef5ff88; background: linear-gradient(130deg,#173a63eb,#45296aeb); color: white; padding: 12px 15px; text-align: left; pointer-events: auto; box-shadow: 0 5px 25px #06182a77; }
-#btn-nova span { font-size: 16px; font-weight: 900; position: relative; z-index: 1; }
-#btn-nova b { float: right; font-size: 20px; color: #aef5ff; position: relative; z-index: 1; }
-#btn-nova small { display: block; margin-top: 8px; font-size: 10px; position: relative; z-index: 1; }
-#btn-nova i { position: absolute; height: 5px; left: 0; bottom: 0; background: linear-gradient(90deg,#64daff,#e2a0ff); transition: width .15s; }
-#btn-nova:disabled { opacity: .78; }
-#btn-nova.ready { border-color: #fff1b0; background: linear-gradient(130deg,#a64819,#7431a9); box-shadow: 0 0 25px #eea85388; }
+.carnage-score {
+  position: absolute;
+  left: calc(14px + var(--safe-left));
+  bottom: calc(32px + var(--safe-bottom));
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #11192cba;
+  color: #fff;
+  text-shadow: 0 2px 5px #201642;
+  pointer-events: none;
+}
+.carnage-score small { display: block; font-size: 8px; letter-spacing: 1px; color: #ffe298; }
+.carnage-score b { display: block; font-size: 19px; line-height: 1.2; color: #ffe098; }
+.carnage-score span { display: block; font-size: 10px; }
+
+#btn-nova {
+  position: absolute;
+  right: calc(15px + var(--safe-right));
+  bottom: calc(30px + var(--safe-bottom));
+  width: 164px;
+  min-height: 68px;
+  overflow: hidden;
+  border-radius: 18px;
+  border: 1px solid #aef5ff88;
+  background: linear-gradient(130deg, #173a63eb, #45296aeb);
+  color: white;
+  padding: 12px 15px;
+  text-align: left;
+  pointer-events: auto;
+  box-shadow: 0 5px 25px #06182a77;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  column-gap: 5px;
+}
+#btn-nova span { font-size: 14px; font-weight: 900; white-space: nowrap; position: relative; z-index: 1; }
+#btn-nova b { font-size: 18px; color: #aef5ff; position: relative; z-index: 1; }
+#btn-nova small { grid-column: 1 / -1; display: block; margin-top: 8px; font-size: 9px; position: relative; z-index: 1; }
+#btn-nova i { position: absolute; height: 5px; left: 0; bottom: 0; background: linear-gradient(90deg, #64daff, #e2a0ff); transition: width 0.15s; }
+#btn-nova:disabled { opacity: 0.78; }
+#btn-nova.ready { border-color: #fff1b0; background: linear-gradient(130deg, #a64819, #7431a9); box-shadow: 0 0 25px #eea85388; }
 .carnage-note { color: #ffe29e; }
-@media (max-height: 600px) { .carnage-score { top: 115px; } #btn-nova { bottom: 15px; min-height: 62px; } }
+@media (max-height: 600px) {
+  .carnage-score { bottom: calc(18px + var(--safe-bottom)); }
+  #btn-nova { bottom: calc(15px + var(--safe-bottom)); min-height: 62px; }
+}
 
-.carnage-mode #hud .hud-wallet { display: none; }
-.carnage-mode #tip { bottom: calc(var(--safe-bottom) + 125px); font-size: 12px; }
-.carnage-mode #hud-cue { bottom: calc(var(--safe-bottom) + 185px); }
-
-.carnage-mode .banner { max-width: 96vw; padding: 10px 18px; font-size: clamp(15px, 4.5vw, 22px); letter-spacing: 1px; white-space: normal; text-align: center; }
-.carnage-mode .banner.boss { top: 30%; }
-#btn-nova { display: grid; grid-template-columns: minmax(0,1fr) auto; column-gap: 5px; }
-#btn-nova span { font-size: 14px; white-space: nowrap; }
-#btn-nova b { float: none; font-size: 18px; }
-#btn-nova small { grid-column: 1 / -1; }
-
-/* 参考图复刻：收起通用武器/Boss 面板，把空间留给四列阵列。 */
-.carnage-mode #hud .hud-row, .carnage-mode #hud .boss-bars { display: none !important; }
-.carnage-mode .carnage-score { top: auto; bottom: calc(32px + env(safe-area-inset-bottom)); padding: 8px 10px; border-radius: 10px; background: #11192cba; }
-.carnage-mode .carnage-score small { font-size: 8px; letter-spacing: 1px; }
-.carnage-mode .carnage-score b { font-size: 19px; }
-.carnage-mode .carnage-score span { display: block; font-size: 10px; }
-.carnage-mode #hud-cue { display: none; }
-.carnage-mode #btn-nova { width: 164px; min-height: 68px; }
-.carnage-mode #btn-nova small { font-size: 9px; }
+.carnage-mode #hud .hud-wallet,
+.carnage-mode #hud .hud-row,
+.carnage-mode #hud .boss-bars { display: none !important; }
 .carnage-mode .hud-bar { padding: 6px 8px; }
 .carnage-mode .hud-title { font-size: 11px; }
-
 .carnage-mode #tip { bottom: calc(var(--safe-bottom) + 110px); padding: 6px 10px; font-size: 10px; max-width: 94% !important; }
-.carnage-mode .banner, .carnage-mode .banner.boss { top: 11%; font-size: 13px; padding: 6px 16px; }
-
-/* 狂潮实玩修复：固定军备不展示主线购买入口，结算标题不折行。 */
-.carnage-mode #home-ups, .carnage-mode #home-tactic { display: none; }
+.carnage-mode #hud-cue { display: block; top: calc(var(--safe-top) + 72px); bottom: auto; max-width: 88vw; padding: 6px 10px; font-size: 11px; }
+.carnage-mode #home-ups,
+.carnage-mode #home-tactic { display: none; }
 .carnage-loadout { color: #c6d9f2; text-align: center; font-size: 11px; line-height: 1.5; }
 .carnage-loadout[hidden] { display: none; }
 .carnage-mode #result .dialog { display: flex; flex-direction: column; width: min(92vw, 420px); padding-top: 40px; }
 .carnage-mode #result .ribbon { left: 50%; min-width: 0; width: max-content; max-width: 90%; white-space: nowrap; padding: 8px 26px 10px; font-size: clamp(20px, 6vw, 27px); letter-spacing: 2px; }
-.carnage-mode #result #btn-next, .carnage-mode #result #btn-home { width: 100%; }
-.carnage-mode #hud-cue { display: block; top: calc(var(--safe-top) + 72px); bottom: auto; max-width: 88vw; padding: 6px 10px; font-size: 11px; }
+.carnage-mode #result #btn-next,
+.carnage-mode #result #btn-home { width: 100%; }
 
-/* 长开场文案在小屏上完整显示。 */
-.banner { max-width: 94vw; white-space: normal; text-align: center; padding: 10px 18px; font-size: clamp(17px, 5vw, 30px); letter-spacing: 1px; }
-
-.banner { width: max-content !important; }
+/* 长开场文案在小屏上完整显示 */
+.banner { width: max-content !important; max-width: 94vw; white-space: normal; text-align: center; padding: 10px 18px; font-size: clamp(17px, 5vw, 30px); letter-spacing: 1px; }
+.carnage-mode .banner,
+.carnage-mode .banner.boss { max-width: 96vw; top: 11%; font-size: 13px; padding: 6px 16px; }

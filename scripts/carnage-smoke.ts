@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { chromium } from 'playwright-core';
+import { launchHeadlessBrowser } from './browser';
 const base = process.argv[2] ?? 'http://127.0.0.1:5178/';
 const out = 'work/shots/carnage-reference'; mkdirSync(out, { recursive: true });
-const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+const browser = await launchHeadlessBrowser();
 const errors: string[] = [];
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true });
 const page = await ctx.newPage();

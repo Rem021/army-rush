@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { Bullet } from '../game/world';
+import { commitInstances } from './dispose';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -7,12 +8,14 @@ const _e = new THREE.Euler();
 const _p = new THREE.Vector3();
 const _s = new THREE.Vector3();
 const _c = new THREE.Color();
+const _white = new THREE.Color(0xffffff);
 
 /** 固定容量的粒子池，数据放在 typed array 里 */
 export class Particles {
   readonly mesh: THREE.InstancedMesh;
   private readonly cap: number;
   private n = 0;
+  private prevCount = 0;
   private readonly pos: Float32Array;
   private readonly vel: Float32Array;
   private readonly life: Float32Array;
@@ -29,6 +32,7 @@ export class Particles {
     this.mesh.count = 0;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     for (let i = 0; i < cap; i++) this.mesh.setColorAt(i, _c.setRGB(1, 1, 1));
+    this.mesh.instanceColor!.setUsage(THREE.DynamicDrawUsage);
     scene.add(this.mesh);
     this.pos = new Float32Array(cap * 3);
     this.vel = new Float32Array(cap * 3);
@@ -43,7 +47,6 @@ export class Particles {
   spawn(x: number, y: number, z: number, vx: number, vy: number, vz: number, life: number, size: number, color: number, gravity = 18) {
     let i = this.n;
     if (i >= this.cap) {
-      // 满了就覆盖一个随机的旧粒子
       i = Math.floor(Math.random() * this.cap);
     } else {
       this.n++;
@@ -65,7 +68,7 @@ export class Particles {
     this.col[i * 3 + 2] = _c.b;
   }
 
-  burst(x: number, y: number, z: number, count: number, speed: number, life: number, size: number, colors: number[], gravity = 18, up = 0.6) {
+  burst(x: number, y: number, z: number, count: number, speed: number, life: number, size: number, colors: readonly number[], gravity = 18, up = 0.6) {
     for (let k = 0; k < count; k++) {
       const a = Math.random() * Math.PI * 2;
       const s = speed * (0.4 + Math.random() * 0.6);
@@ -108,9 +111,7 @@ export class Particles {
       this.mesh.setMatrixAt(k, _m);
       this.mesh.setColorAt(k, _c.setRGB(this.col[k * 3], this.col[k * 3 + 1], this.col[k * 3 + 2]));
     }
-    this.mesh.count = this.n;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.prevCount = commitInstances(this.mesh, this.n, this.prevCount, undefined, true);
   }
 
   private copy(from: number, to: number) {
@@ -128,16 +129,34 @@ export class Particles {
 
   clear() {
     this.n = 0;
+    this.prevCount = 0;
     this.mesh.count = 0;
   }
 }
 
-/** 枪口火光：朝向镜头的星形亮片，一闪即逝（几十个共用一次绘制） */
+interface FlashItem {
+  x: number;
+  y: number;
+  z: number;
+  size: number;
+  life: number;
+  max: number;
+  rot: number;
+}
+
+const _qz = new THREE.Quaternion();
+const _zAxis = new THREE.Vector3(0, 0, 1);
+
+/** 枪口火光：朝向镜头的星形亮片，一闪即逝（对象池 + O(1) 交换删除） */
 export class Flashes {
   private readonly mesh: THREE.InstancedMesh;
-  private readonly items: { x: number; y: number; z: number; size: number; life: number; max: number; rot: number }[] = [];
+  private readonly pool: FlashItem[];
+  private n = 0;
+  private cursor = 0;
+  private prevCount = 0;
 
   constructor(scene: THREE.Scene, private readonly cap = 64) {
+    this.pool = Array.from({ length: cap }, () => ({ x: 0, y: 0, z: 0, size: 1, life: 0, max: 1, rot: 0 }));
     const c = document.createElement('canvas');
     c.width = c.height = 64;
     const g = c.getContext('2d')!;
@@ -147,7 +166,6 @@ export class Flashes {
     grad.addColorStop(1, 'rgba(255,170,40,0)');
     g.fillStyle = grad;
     g.beginPath();
-    // 四角星
     for (let i = 0; i < 8; i++) {
       const a = (i / 8) * Math.PI * 2;
       const r = i % 2 === 0 ? 32 : 9;
@@ -165,22 +183,39 @@ export class Flashes {
   }
 
   setColor(color: number) {
-    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(new THREE.Color(0xffffff), 0.5);
+    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.5);
   }
 
   spawn(x: number, y: number, z: number, size: number) {
-    if (this.items.length >= this.cap) this.items.shift();
+    let idx: number;
+    if (this.n < this.cap) {
+      idx = this.n++;
+    } else {
+      idx = this.cursor;
+      this.cursor = (this.cursor + 1) % this.cap;
+    }
+    const it = this.pool[idx];
     const life = 0.05 + Math.random() * 0.03;
-    this.items.push({ x, y, z, size: size * (0.7 + Math.random() * 0.6), life, max: life, rot: Math.random() * Math.PI });
+    it.x = x;
+    it.y = y;
+    it.z = z;
+    it.size = size * (0.7 + Math.random() * 0.6);
+    it.life = life;
+    it.max = life;
+    it.rot = Math.random() * Math.PI;
   }
 
   update(dt: number, camera: THREE.Camera) {
-    let n = 0;
-    for (let i = this.items.length - 1; i >= 0; i--) {
-      const it = this.items[i];
+    let i = 0;
+    while (i < this.n) {
+      const it = this.pool[i];
       it.life -= dt;
       if (it.life <= 0) {
-        this.items.splice(i, 1);
+        const last = --this.n;
+        if (i !== last) {
+          this.pool[i] = this.pool[last];
+          this.pool[last] = it;
+        }
         continue;
       }
       const k = it.life / it.max;
@@ -188,25 +223,25 @@ export class Flashes {
       _p.set(it.x, it.y, it.z);
       _s.setScalar(it.size * (0.6 + 0.4 * k));
       _m.compose(_p, _q, _s);
-      this.mesh.setMatrixAt(n++, _m);
+      this.mesh.setMatrixAt(i, _m);
+      i++;
     }
-    this.mesh.count = n;
-    this.mesh.instanceMatrix.needsUpdate = true;
+    this.prevCount = commitInstances(this.mesh, this.n, this.prevCount);
   }
 
   clear() {
-    this.items.length = 0;
+    this.n = 0;
+    this.cursor = 0;
+    this.prevCount = 0;
     this.mesh.count = 0;
   }
 }
-
-const _qz = new THREE.Quaternion();
-const _zAxis = new THREE.Vector3(0, 0, 1);
 
 /** 人群脚下的圆形影子：代替几百个人的实时阴影（每人两个三角形，一次绘制） */
 export class BlobShadows {
   private readonly mesh: THREE.InstancedMesh;
   private n = 0;
+  private prevCount = 0;
 
   constructor(scene: THREE.Scene, private readonly cap = 1400) {
     const c = document.createElement('canvas');
@@ -244,22 +279,35 @@ export class BlobShadows {
   }
 
   end() {
-    this.mesh.count = this.n;
-    this.mesh.instanceMatrix.needsUpdate = true;
+    this.prevCount = commitInstances(this.mesh, this.n, this.prevCount);
   }
 }
 
-/** 地上的尸液：丧尸倒下的地方留一摊，几秒后淡掉（共用一次绘制） */
+interface SplatItem {
+  x: number;
+  z: number;
+  size: number;
+  rot: number;
+  life: number;
+  color: THREE.Color;
+}
+
+const _yAxis = new THREE.Vector3(0, 1, 0);
+
+/** 地上的尸液：丧尸倒下的地方留一摊，几秒后淡掉（对象池复用 Color） */
 export class Splats {
   private readonly mesh: THREE.InstancedMesh;
-  private readonly items: { x: number; z: number; size: number; rot: number; life: number; color: THREE.Color }[] = [];
+  private readonly pool: SplatItem[];
+  private n = 0;
+  private cursor = 0;
+  private prevCount = 0;
 
   constructor(scene: THREE.Scene, private readonly cap = 160) {
-    // 不规则的一摊：圆周上随机起伏的扇形
+    this.pool = Array.from({ length: cap }, () => ({ x: 0, z: 0, size: 1, rot: 0, life: 0, color: new THREE.Color() }));
     const pts: THREE.Vector2[] = [];
     for (let i = 0; i < 14; i++) {
       const a = (i / 14) * Math.PI * 2;
-      const r = 0.35 + ((i * 7919) % 13) / 13 * 0.25;
+      const r = 0.35 + (((i * 7919) % 13) / 13) * 0.25;
       pts.push(new THREE.Vector2(Math.cos(a) * r, Math.sin(a) * r));
     }
     const geo = new THREE.ShapeGeometry(new THREE.Shape(pts));
@@ -271,54 +319,82 @@ export class Splats {
     this.mesh.renderOrder = 1;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     for (let i = 0; i < cap; i++) this.mesh.setColorAt(i, _c.setRGB(1, 1, 1));
+    this.mesh.instanceColor!.setUsage(THREE.DynamicDrawUsage);
     scene.add(this.mesh);
   }
 
   spawn(x: number, z: number, size: number, color: number) {
-    if (this.items.length >= this.cap) this.items.shift();
-    this.items.push({ x, z, size: size * (0.8 + Math.random() * 0.5), rot: Math.random() * Math.PI * 2, life: 4, color: new THREE.Color(color) });
+    let idx: number;
+    if (this.n < this.cap) {
+      idx = this.n++;
+    } else {
+      idx = this.cursor;
+      this.cursor = (this.cursor + 1) % this.cap;
+    }
+    const it = this.pool[idx];
+    it.x = x;
+    it.z = z;
+    it.size = size * (0.8 + Math.random() * 0.5);
+    it.rot = Math.random() * Math.PI * 2;
+    it.life = 4;
+    it.color.set(color);
   }
 
   update(dt: number) {
-    let n = 0;
-    for (let i = this.items.length - 1; i >= 0; i--) {
-      const it = this.items[i];
+    let i = 0;
+    while (i < this.n) {
+      const it = this.pool[i];
       it.life -= dt;
       if (it.life <= 0) {
-        this.items.splice(i, 1);
+        const last = --this.n;
+        if (i !== last) {
+          this.pool[i] = this.pool[last];
+          this.pool[last] = it;
+        }
         continue;
       }
       const grow = Math.min(1, (4 - it.life) * 8);
       const fade = Math.min(1, it.life / 1.5);
       _q.setFromAxisAngle(_yAxis, it.rot);
       _p.set(it.x, 0.03, it.z);
-      // 淡出时慢慢缩小（逐个改透明度要多一个属性，不值得）
       const k = it.size * grow * Math.sqrt(fade);
       _s.set(k, 1, k);
       _m.compose(_p, _q, _s);
-      this.mesh.setMatrixAt(n, _m);
-      this.mesh.setColorAt(n, it.color);
-      n++;
+      this.mesh.setMatrixAt(i, _m);
+      this.mesh.setColorAt(i, it.color);
+      i++;
     }
-    this.mesh.count = n;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    this.prevCount = commitInstances(this.mesh, this.n, this.prevCount, undefined, true);
   }
 
   clear() {
-    this.items.length = 0;
+    this.n = 0;
+    this.cursor = 0;
+    this.prevCount = 0;
     this.mesh.count = 0;
   }
 }
 
-const _yAxis = new THREE.Vector3(0, 1, 0);
+interface StreakItem {
+  x: number;
+  y: number;
+  z: number;
+  v: number;
+  len: number;
+  life: number;
+  max: number;
+}
 
 /** 速度线：门道放行时沿着道冲向镜头的细长亮条 */
 export class Streaks {
   private readonly mesh: THREE.InstancedMesh;
-  private readonly items: { x: number; y: number; z: number; v: number; len: number; life: number; max: number }[] = [];
+  private readonly pool: StreakItem[];
+  private n = 0;
+  private cursor = 0;
+  private prevCount = 0;
 
   constructor(scene: THREE.Scene, private readonly cap = 90) {
+    this.pool = Array.from({ length: cap }, () => ({ x: 0, y: 0, z: 0, v: 0, len: 1, life: 0, max: 1 }));
     const mat = new THREE.MeshBasicMaterial({ color: 0xfff6d8, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
     this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, cap);
     this.mesh.frustumCulled = false;
@@ -330,19 +406,36 @@ export class Streaks {
   /** 在 x0..x1、z0..z1 的范围里撒 n 条，速度 v（朝镜头） */
   burst(x0: number, x1: number, z0: number, z1: number, n: number, v: number) {
     for (let i = 0; i < n; i++) {
-      if (this.items.length >= this.cap) this.items.shift();
+      let idx: number;
+      if (this.n < this.cap) {
+        idx = this.n++;
+      } else {
+        idx = this.cursor;
+        this.cursor = (this.cursor + 1) % this.cap;
+      }
+      const it = this.pool[idx];
       const life = 0.25 + Math.random() * 0.25;
-      this.items.push({ x: x0 + Math.random() * (x1 - x0), y: 0.15 + Math.random() * 2.6, z: z0 + Math.random() * (z1 - z0), v: v * (0.7 + Math.random() * 0.6), len: 1.5 + Math.random() * 3, life, max: life });
+      it.x = x0 + Math.random() * (x1 - x0);
+      it.y = 0.15 + Math.random() * 2.6;
+      it.z = z0 + Math.random() * (z1 - z0);
+      it.v = v * (0.7 + Math.random() * 0.6);
+      it.len = 1.5 + Math.random() * 3;
+      it.life = life;
+      it.max = life;
     }
   }
 
   update(dt: number) {
-    let n = 0;
-    for (let i = this.items.length - 1; i >= 0; i--) {
-      const it = this.items[i];
+    let i = 0;
+    while (i < this.n) {
+      const it = this.pool[i];
       it.life -= dt;
       if (it.life <= 0) {
-        this.items.splice(i, 1);
+        const last = --this.n;
+        if (i !== last) {
+          this.pool[i] = this.pool[last];
+          this.pool[last] = it;
+        }
         continue;
       }
       it.z += it.v * dt;
@@ -351,19 +444,30 @@ export class Streaks {
       _s.set(0.045, 0.045, it.len * (0.4 + k));
       _q.identity();
       _m.compose(_p, _q, _s);
-      this.mesh.setMatrixAt(n++, _m);
+      this.mesh.setMatrixAt(i, _m);
+      i++;
     }
-    this.mesh.count = n;
-    this.mesh.instanceMatrix.needsUpdate = true;
+    this.prevCount = commitInstances(this.mesh, this.n, this.prevCount);
   }
 
   clear() {
-    this.items.length = 0;
+    this.n = 0;
+    this.cursor = 0;
+    this.prevCount = 0;
     this.mesh.count = 0;
   }
 }
 
-/** 地面冲击波圆环 */
+let sharedRingGeom: THREE.RingGeometry | null = null;
+function getRingGeometry(): THREE.RingGeometry {
+  if (!sharedRingGeom) {
+    sharedRingGeom = new THREE.RingGeometry(0.86, 1, 48);
+    sharedRingGeom.userData.shared = true;
+  }
+  return sharedRingGeom;
+}
+
+/** 地面冲击波圆环（共用同一份 RingGeometry） */
 export class Rings {
   private readonly items: { mesh: THREE.Mesh; t: number; life: number; size: number }[] = [];
 
@@ -373,7 +477,7 @@ export class Rings {
     let item = this.items.find((r) => r.t >= r.life);
     if (!item) {
       const mesh = new THREE.Mesh(
-        new THREE.RingGeometry(0.86, 1, 48),
+        getRingGeometry(),
         new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false }),
       );
       mesh.rotation.x = -Math.PI / 2;
@@ -450,7 +554,6 @@ export class Pillar {
     if (this.t >= 1) return;
     this.t = Math.min(1, this.t + dt / 0.9);
     const k = this.t;
-    // 0–0.15 冲起来变粗，之后慢慢收细变淡
     const grow = Math.min(1, k / 0.15);
     const w = this.width * (0.35 + 0.65 * grow) * (1 - 0.6 * Math.max(0, k - 0.15));
     this.mesh.scale.set(w, 9 * grow, w);
@@ -464,7 +567,6 @@ export class Pillar {
   }
 }
 
-/** 子弹：拉长的发光方块 */
 /** 每种枪的弹道样子：芯粗细、光晕粗细、长度倍数、光晕亮度 */
 const BULLET_STYLE: { core: number; glow: number; len: number; alpha: number }[] = [
   { core: 1.15, glow: 1.1, len: 0.65, alpha: 0.58 }, // 手枪：清晰明亮的单发弹头
@@ -481,6 +583,7 @@ export class BulletMesh {
   readonly glow: THREE.InstancedMesh;
   private readonly cap: number;
   private style = BULLET_STYLE[0];
+  private prevCount = 0;
 
   constructor(scene: THREE.Scene, cap = 1400) {
     this.cap = cap;
@@ -498,10 +601,11 @@ export class BulletMesh {
 
   /** 子弹芯用枪的颜色，外圈光晕用弹种的颜色（普通弹就还是枪的颜色），两样都看得出来 */
   setColor(color: number, tier = 0, glow = color) {
-    this.style = BULLET_STYLE[Math.min(BULLET_STYLE.length - 1, tier)];
+    const safeTier = Math.max(0, Math.min(BULLET_STYLE.length - 1, tier));
+    this.style = BULLET_STYLE[safeTier];
     (this.glow.material as THREE.MeshBasicMaterial).opacity = this.style.alpha;
     (this.glow.material as THREE.MeshBasicMaterial).color.set(glow);
-    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(new THREE.Color(0xffffff), 0.55);
+    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.55);
   }
 
   update(bullets: readonly Bullet[]) {
@@ -520,40 +624,67 @@ export class BulletMesh {
       _m.compose(_p, _q, _s);
       this.glow.setMatrixAt(i, _m);
     }
-    this.mesh.count = n;
-    this.glow.count = n;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    this.glow.instanceMatrix.needsUpdate = true;
+    commitInstances(this.glow, n, this.prevCount);
+    this.prevCount = commitInstances(this.mesh, n, this.prevCount);
   }
 }
 
 const _v = new THREE.Vector3();
 
-/** DOM 飘字：+12、武器升级之类 */
+interface FloatItem {
+  el: HTMLDivElement;
+  pos: THREE.Vector3;
+  t: number;
+  life: number;
+  rise: number;
+}
+
+/** DOM 飘字：+12、武器升级之类（DOM 节点池复用，零 createElement/remove 抖动） */
 export class FloatTexts {
-  private readonly items: { el: HTMLDivElement; pos: THREE.Vector3; t: number; life: number; rise: number }[] = [];
+  private readonly items: FloatItem[] = [];
+  private readonly free: FloatItem[] = [];
+  private cursor = 0;
 
   constructor(private readonly layer: HTMLElement) {}
 
   spawn(text: string, x: number, y: number, z: number, cls = '', life = 1.1, rise = 1.6) {
-    // 同一个地方刚冒过字就往上叠一层，不要糊在一起
     let stack = 0;
-    for (const it of this.items) if (it.t < 0.5 && Math.abs(it.pos.x - x) < 1.6 && Math.abs(it.pos.z - z) < 1.6) stack++;
+    for (let i = 0; i < this.items.length; i++) {
+      const existing = this.items[i];
+      if (existing.t < 0.5 && Math.abs(existing.pos.x - x) < 1.6 && Math.abs(existing.pos.z - z) < 1.6) stack++;
+    }
     y += Math.min(4, stack) * 0.75;
-    const el = document.createElement('div');
-    el.className = `float-text ${cls}`;
-    el.textContent = text;
-    this.layer.appendChild(el);
-    this.items.push({ el, pos: new THREE.Vector3(x, y, z), t: 0, life, rise });
-    if (this.items.length > 45) this.remove(0);
+
+    let item: FloatItem;
+    if (this.items.length >= 45) {
+      item = this.items[this.cursor % this.items.length];
+      this.cursor = (this.cursor + 1) % 45;
+    } else if (this.free.length > 0) {
+      item = this.free.pop()!;
+      item.el.style.display = '';
+      this.items.push(item);
+    } else {
+      const el = document.createElement('div');
+      this.layer.appendChild(el);
+      item = { el, pos: new THREE.Vector3(), t: 0, life, rise };
+      this.items.push(item);
+    }
+    item.el.className = cls ? `float-text ${cls}` : 'float-text';
+    item.el.textContent = text;
+    item.el.style.opacity = '1';
+    item.pos.set(x, y, z);
+    item.t = 0;
+    item.life = life;
+    item.rise = rise;
   }
 
   update(dt: number, camera: THREE.Camera, w: number, h: number) {
-    for (let i = this.items.length - 1; i >= 0; i--) {
+    let i = 0;
+    while (i < this.items.length) {
       const it = this.items[i];
       it.t += dt;
       if (it.t >= it.life) {
-        this.remove(i);
+        this.recycle(i);
         continue;
       }
       const k = it.t / it.life;
@@ -564,28 +695,67 @@ export class FloatTexts {
       const sy = (-_v.y * 0.5 + 0.5) * h;
       const pop = k < 0.12 ? 0.55 + (k / 0.12) * 0.78 : 1.33 - Math.min(0.33, (k - 0.12) * 0.85);
       it.el.style.transform = `translate(-50%, -50%) translate(${sx}px, ${sy}px) scale(${pop})`;
-      // 跑到镜头背后的不画（投影会翻到屏幕另一边）
       it.el.style.opacity = _v.z > 1 ? '0' : String(k > 0.68 ? (1 - k) / 0.32 : 1);
+      i++;
     }
   }
 
-  private remove(i: number) {
-    this.items[i].el.remove();
-    this.items.splice(i, 1);
+  private recycle(i: number) {
+    const it = this.items[i];
+    it.el.style.opacity = '0';
+    it.el.style.display = 'none';
+    const last = this.items.length - 1;
+    if (i !== last) this.items[i] = this.items[last];
+    this.items.pop();
+    this.free.push(it);
   }
 
   clear() {
-    while (this.items.length) this.remove(this.items.length - 1);
+    while (this.items.length > 0) this.recycle(this.items.length - 1);
+    this.cursor = 0;
   }
 }
 
-/** 爆炸：发光火球 + 灰色烟团，都是会长大的球 */
+interface ExplosionItem {
+  x: number;
+  y: number;
+  z: number;
+  vx: number;
+  vy: number;
+  vz: number;
+  t: number;
+  life: number;
+  size: number;
+  grow: number;
+  smoke: boolean;
+  shade: number;
+}
+
+/** 爆炸：发光火球 + 灰色烟团（对象池 + 子区间缓冲上传） */
 export class Explosions {
   private readonly fire: THREE.InstancedMesh;
   private readonly smoke: THREE.InstancedMesh;
-  private readonly items: { x: number; y: number; z: number; vx: number; vy: number; vz: number; t: number; life: number; size: number; grow: number; smoke: boolean; shade: number }[] = [];
+  private readonly pool: ExplosionItem[];
+  private n = 0;
+  private cursor = 0;
+  private prevFire = 0;
+  private prevSmoke = 0;
 
   constructor(scene: THREE.Scene, private readonly cap = 260) {
+    this.pool = Array.from({ length: cap }, () => ({
+      x: 0,
+      y: 0,
+      z: 0,
+      vx: 0,
+      vy: 0,
+      vz: 0,
+      t: 0,
+      life: 1,
+      size: 1,
+      grow: 1,
+      smoke: false,
+      shade: 1,
+    }));
     const geo = new THREE.IcosahedronGeometry(1, 1);
     this.fire = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), cap);
     this.smoke = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.6, depthWrite: false }), cap);
@@ -594,74 +764,99 @@ export class Explosions {
       m.count = 0;
       m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       for (let i = 0; i < cap; i++) m.setColorAt(i, _c.setRGB(1, 1, 1));
+      m.instanceColor!.setUsage(THREE.DynamicDrawUsage);
       scene.add(m);
     }
     this.smoke.renderOrder = 4;
     this.fire.renderOrder = 5;
   }
 
+  private alloc(): ExplosionItem {
+    if (this.n < this.cap) return this.pool[this.n++];
+    const it = this.pool[this.cursor];
+    this.cursor = (this.cursor + 1) % this.cap;
+    return it;
+  }
+
   /** radius 大约是爆炸覆盖的半径 */
   spawn(x: number, y: number, z: number, radius: number, smoky = true) {
-    const add = (it: (typeof this.items)[number]) => {
-      if (this.items.length >= this.cap) this.items.shift();
-      this.items.push(it);
-    };
-    add({ x, y, z, vx: 0, vy: 1, vz: 0, t: 0, life: 0.32, size: Math.min(1.1, radius * 0.32), grow: 1.3, smoke: false, shade: 1 });
-    const n = Math.round(4 + radius * 2);
-    for (let i = 0; i < n; i++) {
+    const core = this.alloc();
+    core.x = x;
+    core.y = y;
+    core.z = z;
+    core.vx = 0;
+    core.vy = 1;
+    core.vz = 0;
+    core.t = 0;
+    core.life = 0.32;
+    core.size = Math.min(1.1, radius * 0.32);
+    core.grow = 1.3;
+    core.smoke = false;
+    core.shade = 1;
+
+    const count = Math.round(4 + radius * 2);
+    for (let i = 0; i < count; i++) {
       const a = Math.random() * Math.PI * 2;
       const r = radius * (0.2 + Math.random() * 0.6);
-      add({
-        x: x + Math.cos(a) * r * 0.5,
-        y: y + Math.random() * radius * 0.4,
-        z: z + Math.sin(a) * r * 0.5,
-        vx: Math.cos(a) * r * 1.8,
-        vy: 1.5 + Math.random() * 2.5,
-        vz: Math.sin(a) * r * 1.8,
-        t: 0,
-        life: 0.3 + Math.random() * 0.25,
-        size: Math.min(0.7, radius * (0.12 + Math.random() * 0.14)),
-        grow: 1.2,
-        smoke: false,
-        shade: 0.7 + Math.random() * 0.3,
-      });
+      const it = this.alloc();
+      it.x = x + Math.cos(a) * r * 0.5;
+      it.y = y + Math.random() * radius * 0.4;
+      it.z = z + Math.sin(a) * r * 0.5;
+      it.vx = Math.cos(a) * r * 1.8;
+      it.vy = 1.5 + Math.random() * 2.5;
+      it.vz = Math.sin(a) * r * 1.8;
+      it.t = 0;
+      it.life = 0.3 + Math.random() * 0.25;
+      it.size = Math.min(0.7, radius * (0.12 + Math.random() * 0.14));
+      it.grow = 1.2;
+      it.smoke = false;
+      it.shade = 0.7 + Math.random() * 0.3;
     }
     if (!smoky) return;
-    for (let i = 0; i < Math.round(3 + radius * 1.5); i++) {
+    const smokeCount = Math.round(3 + radius * 1.5);
+    for (let i = 0; i < smokeCount; i++) {
       const a = Math.random() * Math.PI * 2;
-      add({
-        x: x + Math.cos(a) * radius * 0.4,
-        y: y + 0.3,
-        z: z + Math.sin(a) * radius * 0.4,
-        vx: Math.cos(a) * 0.8,
-        vy: 1.6 + Math.random() * 1.6,
-        vz: Math.sin(a) * 0.8,
-        t: -0.08,
-        life: 0.8 + Math.random() * 0.5,
-        size: Math.min(0.9, radius * (0.14 + Math.random() * 0.12)),
-        grow: 1.1,
-        smoke: true,
-        shade: 0.35 + Math.random() * 0.25,
-      });
+      const it = this.alloc();
+      it.x = x + Math.cos(a) * radius * 0.4;
+      it.y = y + 0.3;
+      it.z = z + Math.sin(a) * radius * 0.4;
+      it.vx = Math.cos(a) * 0.8;
+      it.vy = 1.6 + Math.random() * 1.6;
+      it.vz = Math.sin(a) * 0.8;
+      it.t = -0.08;
+      it.life = 0.8 + Math.random() * 0.5;
+      it.size = Math.min(0.9, radius * (0.14 + Math.random() * 0.12));
+      it.grow = 1.1;
+      it.smoke = true;
+      it.shade = 0.35 + Math.random() * 0.25;
     }
   }
 
   update(dt: number) {
     let nf = 0;
     let ns = 0;
-    for (let i = this.items.length - 1; i >= 0; i--) {
-      const it = this.items[i];
+    let i = 0;
+    while (i < this.n) {
+      const it = this.pool[i];
       it.t += dt;
       if (it.t >= it.life) {
-        this.items.splice(i, 1);
+        const last = --this.n;
+        if (i !== last) {
+          this.pool[i] = this.pool[last];
+          this.pool[last] = it;
+        }
         continue;
       }
-      if (it.t < 0) continue;
+      if (it.t < 0) {
+        i++;
+        continue;
+      }
       it.x += it.vx * dt;
       it.y += it.vy * dt;
       it.z += it.vz * dt;
-      it.vx *= 0.9;
-      it.vz *= 0.9;
+      const damp = Math.pow(0.9, dt * 60);
+      it.vx *= damp;
+      it.vz *= damp;
       const k = it.t / it.life;
       const s = it.size * (0.5 + it.grow * Math.sqrt(k)) * (k > 0.8 ? 1 - (k - 0.8) / 0.2 : 1);
       _p.set(it.x, it.y, it.z);
@@ -673,24 +868,23 @@ export class Explosions {
         this.smoke.setColorAt(ns, _c.setRGB(it.shade, it.shade, it.shade * 1.05));
         ns++;
       } else {
-        // 火球从白黄变橙红，再变暗（叠加混合下变暗等于淡出）
         const fade = 1 - k;
         _c.setRGB(1, 0.62 - k * 0.4, 0.22 - k * 0.22).multiplyScalar(fade * it.shade);
         this.fire.setMatrixAt(nf, _m);
         this.fire.setColorAt(nf, _c);
         nf++;
       }
+      i++;
     }
-    this.fire.count = nf;
-    this.smoke.count = ns;
-    for (const m of [this.fire, this.smoke]) {
-      m.instanceMatrix.needsUpdate = true;
-      if (m.instanceColor) m.instanceColor.needsUpdate = true;
-    }
+    this.prevFire = commitInstances(this.fire, nf, this.prevFire, undefined, true);
+    this.prevSmoke = commitInstances(this.smoke, ns, this.prevSmoke, undefined, true);
   }
 
   clear() {
-    this.items.length = 0;
+    this.n = 0;
+    this.cursor = 0;
+    this.prevFire = 0;
+    this.prevSmoke = 0;
     this.fire.count = 0;
     this.smoke.count = 0;
   }
@@ -704,10 +898,10 @@ export class ZombieBars {
   private readonly bg: THREE.InstancedMesh;
   private readonly fill: THREE.InstancedMesh;
   private n = 0;
+  private prevCount = 0;
 
   constructor(scene: THREE.Scene, private readonly cap = 500) {
     const geo = new THREE.PlaneGeometry(1, 1);
-    // 两层都放进透明队列，renderOrder 才能保证填充画在底板上面
     this.bg = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0x14080c, transparent: true, opacity: 0.85, depthTest: false, depthWrite: false, toneMapped: false }), cap);
     this.fill = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }), cap);
     for (const m of [this.bg, this.fill]) {
@@ -717,6 +911,7 @@ export class ZombieBars {
       scene.add(m);
     }
     for (let i = 0; i < cap; i++) this.fill.setColorAt(i, _c.setRGB(1, 0.2, 0.2));
+    this.fill.instanceColor!.setUsage(THREE.DynamicDrawUsage);
     this.bg.renderOrder = 18;
     this.fill.renderOrder = 19;
   }
@@ -740,15 +935,11 @@ export class ZombieBars {
     _s.set(w, h, 1);
     _m.compose(_p, _cq, _s);
     this.fill.setMatrixAt(i, _m);
-    // 血多偏黄，血少偏红
     this.fill.setColorAt(i, _c.setRGB(1, 0.25 + 0.6 * ratio, 0.15));
   }
 
   end() {
-    this.bg.count = this.n;
-    this.fill.count = this.n;
-    this.bg.instanceMatrix.needsUpdate = true;
-    this.fill.instanceMatrix.needsUpdate = true;
-    if (this.fill.instanceColor) this.fill.instanceColor.needsUpdate = true;
+    commitInstances(this.bg, this.n, this.prevCount);
+    this.prevCount = commitInstances(this.fill, this.n, this.prevCount, undefined, true);
   }
 }

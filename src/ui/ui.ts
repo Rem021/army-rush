@@ -3,7 +3,7 @@ import { modeUnlocked, progressLevel } from '../game/access';
 export { modeUnlocked, progressLevel } from '../game/access';
 import { isBossLevel, recommendUpgrade, upgradeGain } from '../game/economy';
 import { TACTICS, type TacticId } from '../game/tactics';
-import type { World } from '../game/world';
+import type { Boss, World } from '../game/world';
 import { formatNumber } from '../render/label';
 import type { SaveData } from '../save';
 import { EMBLEM, ICON, MODE_STYLE, RANK_SHIELD, SVG_DEFS } from './icons';
@@ -74,7 +74,13 @@ const UPGRADE_LOOK: Record<UpgradeId, { icon: string; bg: string }> = {
 function evoPips(u: (typeof UPGRADES)[number], lvl: number): string {
   const next = nextEvolution(u, lvl);
   if (!next) return '';
-  const prev = [...u.evolutions].reverse().find((e) => e.at <= lvl)?.at ?? 0;
+  let prev = 0;
+  for (let i = u.evolutions.length - 1; i >= 0; i--) {
+    if (u.evolutions[i].at <= lvl) {
+      prev = u.evolutions[i].at;
+      break;
+    }
+  }
   const span = next.at - prev;
   const done = lvl - prev;
   if (span > 8) return `<div class="evo-bar"><i style="width:${Math.round((done / span) * 100)}%"></i></div>`;
@@ -107,21 +113,98 @@ function coin(cls = '') {
   return `<span class="coin-ico ${cls}">${ICON.coin}</span>`;
 }
 
+interface BossBarNodes {
+  fill: HTMLElement;
+  ghost: HTMLElement;
+  text: HTMLElement;
+  shown: number;
+  lastFillWidth: string;
+  lastGhostWidth: string;
+  lastText: string;
+}
+
 export class UI {
   private readonly root: HTMLElement;
   private current: Screen | null = null;
   private sheet: Sheet | null = null;
+
+  // Cached screen & overlay containers
+  private readonly screens: Record<Screen, HTMLElement>;
+  private readonly sheetWrapEl: HTMLElement;
+  private readonly sheetTitleEl: HTMLElement;
+  private readonly sheetBodyEl: HTMLElement;
+  private readonly toastEl: HTMLElement;
+  private readonly evolveEl: HTMLElement;
+
+  // Cached HUD nodes (zero per-frame querySelector)
+  private readonly hudTitleEl: HTMLElement;
+  private readonly hudPctEl: HTMLElement;
+  private readonly hudFillEl: HTMLElement;
+  private readonly hudMarksEl: HTMLElement;
+  private readonly hudCoinsEl: HTMLElement;
+  private readonly hudCoinsPill: HTMLElement;
+  private readonly hudCoinsIcon: HTMLElement;
+  private readonly hudGemsEl: HTMLElement;
+  private readonly hudGemsPill: HTMLElement;
+  private readonly hudGemsIcon: HTMLElement;
+  private readonly hudWeaponEl: HTMLElement;
+  private readonly hudWeaponGun: HTMLElement;
+  private readonly hudWeaponName: HTMLElement;
+  private readonly hudWeaponPips: HTMLElement[];
+  private readonly hudRateEl: HTMLElement;
+  private readonly hudRateText: HTMLElement;
+  private readonly hudAmmoEl: HTMLElement;
+  private readonly hudAmmoText: HTMLElement;
+  private readonly carnageHudEl: HTMLElement;
+  private readonly carnageComboEl: HTMLElement;
+  private readonly carnageCountEl: HTMLElement;
+  private readonly carnageShellsEl: HTMLElement;
+  private readonly btnNova: HTMLButtonElement;
+  private readonly novaTitleEl: HTMLElement;
+  private readonly novaChargeEl: HTMLElement;
+  private readonly novaFillEl: HTMLElement;
+  private readonly bossBarsEl: HTMLElement;
+  private readonly hudCueEl: HTMLElement;
+  private readonly resumeCountEl: HTMLElement;
+  private readonly bannerEl: HTMLElement;
+  private readonly tipEl: HTMLElement;
+  private readonly tipSpanEl: HTMLElement;
+  private readonly weaponUpEl: HTMLElement;
+  private readonly resultBalanceEl: HTMLElement;
+  private readonly resultTacticBtn: HTMLElement;
+
+  // Dirty-checking state for HUD
   private lastPct = -1;
   private lastTier = -1;
   private lastRate = -1;
   private lastCoins = -1;
   private lastGems = -1;
-  private bossBars: { fill: HTMLElement; text: HTMLElement; ghost: HTMLElement; shown: number }[] = [];
+  private lastAmmoName = '';
+  private lastCueText = '';
+  private lastCueDanger = false;
+  private lastCueVisible = false;
+  private lastResumeHidden = true;
+  private lastResumeText = '';
+  private lastCarnageCombo = -1;
+  private lastCarnageKills = -1;
+  private lastCarnageSquad = -1;
+  private lastCarnageShells = -1;
+  private lastCarnageBatteries = -1;
+  private lastNovaDisabled = true;
+  private lastNovaReady = false;
+  private lastNovaTitle = '';
+  private lastNovaCharge = -1;
+
+  private bossBars: BossBarNodes[] = [];
   private bossKey = '';
   private bossDead = new Map<number, number>();
+  private readonly activeBossScratch: Boss[] = [];
+
   private bannerTimer = 0;
   private tipTimer = 0;
   private countTimer = 0;
+  private resetArmTimer = 0;
+  private resultTimers: number[] = [];
   private marks: { el: HTMLElement; at: number }[] = [];
   /** 皮肤头像（用真模型渲染的图），没有就用 CSS 小人 */
   private portraits: Record<string, string> = {};
@@ -165,7 +248,7 @@ export class UI {
         <div class="boss-bars" id="boss-bars"></div>
         <div id="hud-cue" class="hud-cue"></div>
         <div id="resume-count" class="resume-count" hidden>准备 · 1</div>
-        <div class="banner" id="banner"></div>
+        <div class="banner" id="banner" role="status" aria-live="polite"></div>
         <div class="weapon-up" id="weapon-up">
           <div class="wu-rays"></div>
           <div class="wu-label">武器升级</div>
@@ -189,7 +272,8 @@ export class UI {
         <div class="menu-dock">
           <button class="panel mode-card" id="mode-card"></button>
           <div class="home-ups" id="home-ups"></div>
-          <div class="carnage-loadout" hidden>固定蓝军 · 36 人加特林 · 主线升级和皮肤不用于本模式</div><div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
+          <div class="carnage-loadout" hidden>固定蓝军 · 36 人加特林 · 主线升级和皮肤不用于本模式</div>
+          <div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
           <button class="btn btn-gold start-btn" id="btn-start">开始战斗<span class="sub" id="start-sub"></span></button>
         </div>
         <div class="nav">
@@ -200,9 +284,9 @@ export class UI {
         </div>
       </div>
 
-      <div class="toast" id="toast"></div>
+      <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-      <div class="evo-pop" id="evolve">
+      <div class="evo-pop" id="evolve" role="dialog" aria-modal="true" aria-label="进化提示">
         <div class="ev-rays"></div>
         <div class="ev-card">
           <div class="ev-label">进化！</div>
@@ -214,7 +298,7 @@ export class UI {
       </div>
 
       <div class="sheet-wrap" id="sheet-wrap">
-        <div class="sheet">
+        <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
           <div class="sheet-head">
             <h2 id="sheet-title"></h2>
             <div class="pill gem-pill"><span class="gem-ico">${ICON.gem}</span><span id="sheet-gems">0</span></div>
@@ -226,7 +310,7 @@ export class UI {
       </div>
 
       <div id="result" class="screen modal">
-        <div class="dialog panel">
+        <div class="dialog panel" role="dialog" aria-modal="true" aria-labelledby="result-ribbon">
           <div class="ribbon" id="result-ribbon">胜利</div>
           <div class="stars" id="result-stars"></div>
           <div class="result-sub" id="result-sub"></div>
@@ -243,8 +327,8 @@ export class UI {
       </div>
 
       <div id="pause" class="screen modal">
-        <div class="dialog panel">
-          <div class="ribbon">暂停</div>
+        <div class="dialog panel" role="dialog" aria-modal="true" aria-labelledby="pause-ribbon">
+          <div class="ribbon" id="pause-ribbon">暂停</div>
           <div class="result-sub" id="pause-sub"></div>
           <button class="btn btn-gold" id="btn-resume">继续战斗</button>
           <button class="btn btn-blue" id="btn-restart">保留战利品并重试</button>
@@ -253,6 +337,55 @@ export class UI {
       </div>
     `;
 
+    this.screens = {
+      hud: el(root, '#hud'),
+      menu: el(root, '#menu'),
+      result: el(root, '#result'),
+      pause: el(root, '#pause'),
+    };
+    this.sheetWrapEl = el(root, '#sheet-wrap');
+    this.sheetTitleEl = el(root, '#sheet-title');
+    this.sheetBodyEl = el(root, '#sheet-body');
+    this.toastEl = el(root, '#toast');
+    this.evolveEl = el(root, '#evolve');
+
+    this.hudTitleEl = el(root, '#hud-title');
+    this.hudPctEl = el(root, '#hud-pct');
+    this.hudFillEl = el(root, '#hud-fill');
+    this.hudMarksEl = el(root, '#hud-marks');
+    this.hudCoinsEl = el(root, '#hud-coins');
+    this.hudCoinsPill = el(root, '.hud-coins');
+    this.hudCoinsIcon = el(root, '.hud-coins .coin-ico');
+    this.hudGemsEl = el(root, '#hud-gems');
+    this.hudGemsPill = el(root, '#hud-gems-pill');
+    this.hudGemsIcon = el(root, '#hud-gems-pill .gem-ico');
+    this.hudWeaponEl = el(root, '#hud-weapon');
+    this.hudWeaponGun = el(this.hudWeaponEl, '.wb-gun');
+    this.hudWeaponName = el(this.hudWeaponEl, 'b');
+    this.hudWeaponPips = [...this.hudWeaponEl.querySelectorAll<HTMLElement>('.wb-pips i')];
+    this.hudRateEl = el(root, '#hud-rate');
+    this.hudRateText = el(this.hudRateEl, 'span');
+    this.hudAmmoEl = el(root, '#hud-ammo');
+    this.hudAmmoText = el(this.hudAmmoEl, 'span');
+    this.carnageHudEl = el(root, '#carnage-hud');
+    this.carnageComboEl = el(root, '#carnage-combo');
+    this.carnageCountEl = el(root, '#carnage-count');
+    this.carnageShellsEl = el(root, '#carnage-shells');
+    this.btnNova = el<HTMLButtonElement>(root, '#btn-nova');
+    this.novaTitleEl = el(root, '#nova-title');
+    this.novaChargeEl = el(root, '#nova-charge');
+    this.novaFillEl = el(root, '#nova-fill');
+    this.bossBarsEl = el(root, '#boss-bars');
+    this.hudCueEl = el(root, '#hud-cue');
+    this.resumeCountEl = el(root, '#resume-count');
+    this.bannerEl = el(root, '#banner');
+    this.tipEl = el(root, '#tip');
+    this.tipSpanEl = el(this.tipEl, 'span');
+    this.weaponUpEl = el(root, '#weapon-up');
+    this.resultBalanceEl = el(root, '#result-balance');
+    this.resultTacticBtn = el(root, '.result-tactic');
+
+    const btnNext = el(root, '#btn-next');
     const on = (sel: string, fn: () => void) => el(root, sel).addEventListener('click', fn);
     on('#btn-pause', () => h.pause());
     on('#btn-resume', () => h.resume());
@@ -265,11 +398,11 @@ export class UI {
     on('#sheet-close', () => this.closeSheet());
     on('#btn-home', () => h.home());
     on('#evolve', () => this.closeEvolve());
-    on('#btn-next', () => {
-      if (el(root, '#btn-next').dataset.mode === 'retry') h.retry();
+    btnNext.addEventListener('click', () => {
+      if (btnNext.dataset.mode === 'retry') h.retry();
       else h.next();
     });
-    el(root, '#sheet-wrap').addEventListener('click', (ev) => {
+    this.sheetWrapEl.addEventListener('click', (ev) => {
       if (ev.target === ev.currentTarget) this.closeSheet();
     });
     for (const b of root.querySelectorAll<HTMLElement>('[data-sheet]')) {
@@ -281,7 +414,7 @@ export class UI {
         if (up) h.upgrade(up.dataset.up as UpgradeId);
       });
     }
-    el(root, '#sheet-body').addEventListener('click', (ev) => {
+    this.sheetBodyEl.addEventListener('click', (ev) => {
       const t = ev.target as HTMLElement;
       const up = t.closest<HTMLElement>('[data-up]');
       if (up) h.upgrade(up.dataset.up as UpgradeId);
@@ -321,16 +454,13 @@ export class UI {
       if (reset) {
         // 第一次点变红提示，3 秒内再点一次才真的重置
         if (reset.classList.contains('armed')) {
-          reset.classList.remove('armed');
+          this.disarmReset();
           h.resetProgress();
         } else {
+          window.clearTimeout(this.resetArmTimer);
           reset.classList.add('armed');
           el(reset, '#reset-title').textContent = '再点一次确认重置';
-          window.setTimeout(() => {
-            reset.classList.remove('armed');
-            const title = reset.querySelector('#reset-title');
-            if (title) title.textContent = '重置全部进度';
-          }, 3000);
+          this.resetArmTimer = window.setTimeout(() => this.disarmReset(), 3000);
         }
       }
       const toggle = t.closest<HTMLElement>('[data-toggle]');
@@ -343,9 +473,26 @@ export class UI {
     });
   }
 
+  private disarmReset() {
+    window.clearTimeout(this.resetArmTimer);
+    this.resetArmTimer = 0;
+    const reset = this.sheetBodyEl.querySelector<HTMLElement>('[data-reset]');
+    if (!reset) return;
+    reset.classList.remove('armed');
+    const title = reset.querySelector('#reset-title');
+    if (title) title.textContent = '重置全部进度';
+  }
+
+  private clearResultTimers() {
+    window.clearInterval(this.countTimer);
+    this.countTimer = 0;
+    for (const id of this.resultTimers) window.clearTimeout(id);
+    this.resultTimers.length = 0;
+  }
+
   /** 屏幕中间偏上弹一条提示，两秒后消失 */
   toast(text: string) {
-    const t = el(this.root, '#toast');
+    const t = this.toastEl;
     t.textContent = text;
     t.classList.remove('show');
     void t.offsetWidth;
@@ -363,14 +510,13 @@ export class UI {
 
   setPortraits(p: Record<string, string>) {
     this.portraits = p;
-    if (this.sheet === 'skins') this.renderSheet();
+    if (this.sheet === 'skins') this.renderSheet(true);
   }
 
   setGunIcons(icons: string[]) {
     this.guns = icons;
     this.lastTier = -1;
     this.refreshMenu();
-    if (this.sheet === 'upgrades') this.renderSheet();
   }
 
   /** 一把枪的图（没渲染出来就用枪的图标） */
@@ -381,21 +527,21 @@ export class UI {
 
   /** 对局里换枪：卡片从队伍位置升起，短暂停留，再飞入底部武器牌。 */
   weaponUp(tier: number, from: number, origin?: { x: number; y: number }) {
-    const box = el(this.root, '#weapon-up');
+    const box = this.weaponUpEl;
     const visible = box.classList.contains('show');
     const leaving = box.classList.contains('leave');
     const returnFrom = leaving ? getComputedStyle(box).transform : '';
     const returnOpacity = leaving ? getComputedStyle(box).opacity : '';
-    const banner = el(this.root, '#banner');
-    if (banner.classList.contains('info')) banner.className = 'banner';
+    if (this.bannerEl.classList.contains('info')) this.bannerEl.className = 'banner';
     const w = WEAPONS[tier];
     const color = hex(w.color);
     box.style.setProperty('--wc', color);
     el(box, '.wu-gun').innerHTML = this.gunImg(tier);
     el(box, '.wu-name').textContent = w.name;
-    [...box.querySelectorAll<HTMLElement>('.wu-pips i')].forEach((p, i) => {
-      p.className = i < tier ? 'on' : i === tier ? 'on new' : '';
-    });
+    const pips = box.querySelectorAll<HTMLElement>('.wu-pips i');
+    for (let i = 0; i < pips.length; i++) {
+      pips[i].className = i < tier ? 'on' : i === tier ? 'on new' : '';
+    }
     const mult = soldierDps(tier) / Math.max(0.01, soldierDps(from));
     el(box, '.wu-stats').innerHTML = `<span>每人火力 <b>×${mult.toFixed(1)}</b></span><span>${w.trait}</span>`;
     window.clearTimeout(this.weaponUpTimer);
@@ -422,14 +568,13 @@ export class UI {
     }
     this.weaponUpTimer = window.setTimeout(() => {
       const card = box.getBoundingClientRect();
-      const badge = el(this.root, '#hud-weapon').getBoundingClientRect();
+      const badge = this.hudWeaponEl.getBoundingClientRect();
       box.style.setProperty('--wu-exit-x', `${badge.left + badge.width / 2 - (card.left + card.width / 2)}px`);
       box.style.setProperty('--wu-exit-y', `${badge.top + badge.height / 2 - (card.top + card.height / 2)}px`);
       box.classList.add('leave');
-      const weaponBadge = el(this.root, '#hud-weapon');
-      weaponBadge.classList.remove('charge');
-      void weaponBadge.offsetWidth;
-      weaponBadge.classList.add('charge');
+      this.hudWeaponEl.classList.remove('charge');
+      void this.hudWeaponEl.offsetWidth;
+      this.hudWeaponEl.classList.add('charge');
       this.weaponUpEndTimer = window.setTimeout(() => box.classList.remove('show', 'leave'), 300);
     }, 620);
   }
@@ -440,9 +585,8 @@ export class UI {
     const idx = u.evolutions.findIndex((e) => e.at === lvl);
     if (idx < 0) return;
     const evo = u.evolutions[idx];
-    const box = el(this.root, '#evolve');
+    const box = this.evolveEl;
     const look = UPGRADE_LOOK[id];
-    // 前后对比：左边进化前，右边进化后，下面写名字
     const side = (art: string, caption: string) => `${art}<small>${caption}</small>`;
     let from: string;
     let to: string;
@@ -484,7 +628,7 @@ export class UI {
 
   closeEvolve() {
     window.clearTimeout(this.evolveTimer);
-    el(this.root, '#evolve').classList.remove('show');
+    this.evolveEl.classList.remove('show');
   }
 
   get screen(): Screen | null {
@@ -496,37 +640,52 @@ export class UI {
   }
 
   get evolveOpen(): boolean {
-    return el(this.root, '#evolve').classList.contains('show');
+    return this.evolveEl.classList.contains('show');
   }
 
   show(screen: Screen) {
     this.current = screen;
     for (const id of ['hud', 'menu', 'result', 'pause'] as const) {
       const visible = id === screen || (id === 'hud' && (screen === 'pause' || screen === 'result'));
-      el(this.root, `#${id}`).classList.toggle('visible', visible);
+      this.screens[id].classList.toggle('visible', visible);
     }
-    if (screen !== 'result') window.clearInterval(this.countTimer);
+    if (screen !== 'result') {
+      this.clearResultTimers();
+      this.screens.result.querySelectorAll('.confetti').forEach((c) => c.remove());
+    }
     if (screen === 'hud' || screen === 'pause') this.closeEvolve();
-    if (screen !== 'menu') this.closeSheet();
-    if (screen === 'menu') this.refreshMenu();
+    if (screen !== 'menu' && screen !== 'result') this.closeSheet();
+    else if (screen === 'menu') {
+      this.closeSheet();
+      this.refreshMenu();
+    }
   }
 
   openSheet(sheet: Sheet) {
+    this.disarmReset();
     this.sheet = sheet;
-    el(this.root, '#sheet-title').textContent = SHEET_TITLES[sheet];
-    el(this.root, '#sheet-wrap').classList.add('visible');
-    this.renderSheet();
+    this.sheetTitleEl.textContent = SHEET_TITLES[sheet];
+    this.sheetWrapEl.classList.remove('updating');
+    this.sheetWrapEl.classList.add('visible');
+    this.renderSheet(false);
+    this.sheetBodyEl.scrollTop = 0;
   }
 
   closeSheet() {
+    this.disarmReset();
     this.sheet = null;
-    el(this.root, '#sheet-wrap').classList.remove('visible');
+    this.sheetWrapEl.classList.remove('visible', 'updating');
   }
 
   /** 存档变了以后刷新主页和打开的弹层 */
   refreshMenu() {
-    el(this.root, '#home-tactic').textContent = `战术 · ${TACTICS.find((t) => t.id === this.save.tactic)!.name}`;
+    const tacticName = (TACTICS.find((t) => t.id === this.save.tactic) ?? TACTICS[0]).name;
+    el(this.root, '#home-tactic').textContent = `战术 · ${tacticName}`;
+    this.resultTacticBtn.textContent = `调整战术 · ${tacticName}`;
     const s = this.save;
+    if (this.current === 'menu') {
+      this.root.classList.toggle('carnage-mode', s.mode === 'carnage');
+    }
     const coins = formatNumber(s.coins);
     el(this.root, '#menu-coins').textContent = coins;
     el(this.root, '#sheet-coins').textContent = coins;
@@ -538,7 +697,7 @@ export class UI {
     const cards = this.upgradeCards();
     el(this.root, '#home-ups').innerHTML = cards;
     el(this.root, '#result-ups').innerHTML = cards;
-    el(this.root, '#result-balance').textContent = coins;
+    this.resultBalanceEl.textContent = coins;
     el(this.root, '#menu-gems').textContent = String(s.gems);
     el(this.root, '#result-gems').textContent = String(s.gems);
     el(this.root, '.carnage-loadout').hidden = s.mode !== 'carnage';
@@ -550,7 +709,7 @@ export class UI {
       <div class="mode-text"><div class="mode-title">${def.name}<span class="tag">${tag}</span></div><div class="mode-desc">${desc}</div></div>
       <div class="mode-switch">切换${ICON.chevron}</div>`;
     el(this.root, '#start-sub').textContent = start;
-    if (this.sheet) this.renderSheet();
+    if (this.sheet) this.renderSheet(true);
   }
 
   /** 五张永久升级卡片（主页底部和结算弹窗共用）：角标是等级，下面一排点是离下一次进化还差几级，点满就进化 */
@@ -566,11 +725,12 @@ export class UI {
       const poor = !maxed && (gems ? s.gems : s.coins) < cost;
       const next = nextEvolution(u, lvl);
       const evolving = !!next && next.at === lvl + 1;
+      const gainText = maxed ? '' : upgradeGain(s.upgrades, u.id).text;
       // 火力线下一次进化是换枪：卡片太窄，直接放那把枪的图，不写字
       const label = next && u.id === 'damage' ? this.gunImg(u.evolutions.indexOf(next) + 1, 'card') : next ? `<span>${next.name}</span>` : '';
       const evo = next ? `<div class="up-evo">${evoPips(u, lvl)}<div class="up-next">${label}</div></div>` : '<div class="up-evo"></div>';
       const price = maxed ? '满级' : gems ? `<span class="gem-ico small">${ICON.gem}</span>${cost}` : `${coin('small')}${formatNumber(cost)}`;
-      return `<button class="up-card ${maxed || poor ? 'disabled' : 'ready'} ${evolving ? 'evolve' : ''} ${rec === u.id ? 'recommend' : ''} ${gems ? 'gems' : ''}" data-up="${u.id}" aria-label="${u.name} ${u.value(lvl)}${maxed ? ' 满级' : `，下级 ${upgradeGain(s.upgrades, u.id).text}，价格 ${cost} ${gems ? '钻石' : '金币'}`}" title="${maxed ? '已满级' : upgradeGain(s.upgrades, u.id).text}">
+      return `<button class="up-card ${maxed || poor ? 'disabled' : 'ready'} ${evolving ? 'evolve' : ''} ${rec === u.id ? 'recommend' : ''} ${gems ? 'gems' : ''}" data-up="${u.id}" aria-label="${u.name} ${u.value(lvl)}${maxed ? ' 满级' : `，下级 ${gainText}，价格 ${cost} ${gems ? '钻石' : '金币'}`}" title="${maxed ? '已满级' : gainText}">
         <div class="up-ico" style="background:${look.bg}">${look.icon}<i class="up-lv">${lvl}</i></div>
         <div class="up-name">${u.name}</div>
         <div class="up-val">${u.value(lvl)}</div>
@@ -597,12 +757,13 @@ export class UI {
     }
   }
 
-  private renderSheet() {
-    const body = el(this.root, '#sheet-body');
+  private renderSheet(preserveScroll = false) {
+    const body = this.sheetBodyEl;
+    const prevScroll = preserveScroll ? body.scrollTop : 0;
+    if (preserveScroll) this.sheetWrapEl.classList.add('updating');
     const s = this.save;
     switch (this.sheet) {
       case 'upgrades': {
-        // 军械库：每条升级线的效果和进化路线
         const rec = recommendUpgrade(s, s.upgrades);
         body.innerHTML = `${s.mode === 'carnage' ? '<div class="guide-note">狂潮使用固定军备，以下为主线升级；请切换模式后购买。</div>' : ''}<div class="guide-note">推荐按开局直伤 / 花费比较。穿透、溅射、养门和机动各有用途，请结合关卡选择。</div>` + UPGRADES.map((u) => {
           const lvl = s.upgrades[u.id];
@@ -612,9 +773,10 @@ export class UI {
           const gems = u.currency === 'gems';
           const poor = (gems ? s.gems : s.coins) < cost;
           const isRec = rec === u.id && !maxed;
-          const pips = nextEvolution(u, lvl) ? `<div class="evo-progress">${evoPips(u, lvl)}<span>再升 ${nextEvolution(u, lvl)!.at - lvl} 级：${nextEvolution(u, lvl)!.name}</span></div>` : '';
+          const nextEvo = nextEvolution(u, lvl);
+          const pips = nextEvo ? `<div class="evo-progress">${evoPips(u, lvl)}<span>再升 ${nextEvo.at - lvl} 级：${nextEvo.name}</span></div>` : '';
           const track = u.evolutions.length
-            ? `<div class="evo-track">${u.evolutions.map((e, i) => `<span class="evo ${lvl >= e.at ? 'done' : nextEvolution(u, lvl) === e ? 'next' : ''}"><b>Lv${e.at}</b>${u.id === 'damage' ? this.gunImg(i + 1, 'tiny') : ''}${e.name}</span>`).join('')}</div>`
+            ? `<div class="evo-track">${u.evolutions.map((e, i) => `<span class="evo ${lvl >= e.at ? 'done' : nextEvo === e ? 'next' : ''}"><b>Lv${e.at}</b>${u.id === 'damage' ? this.gunImg(i + 1, 'tiny') : ''}${e.name}</span>`).join('')}</div>`
             : '';
           return `<div class="row upgrade-row ${isRec ? 'recommend' : ''}">
             <div class="mode-tile" style="background:${look.bg};color:#fff">${look.icon}</div>
@@ -632,7 +794,7 @@ export class UI {
           const owned = s.owned.includes(k.id);
           const active = s.skin === k.id;
           const label = active ? '使用中' : owned ? '点击使用' : `${coin('small')}${k.price}`;
-          return `<button class="skin ${active ? 'active' : ''} ${!owned && s.coins < k.price ? 'poor' : ''}" data-skin="${k.id}">
+          return `<button class="skin ${active ? 'active' : ''} ${!owned && s.coins < k.price ? 'poor' : ''}" data-skin="${k.id}" aria-pressed="${active}">
             ${
               this.portraits[k.id]
                 ? `<img class="skin-portrait" src="${this.portraits[k.id]}" alt="${k.name}" draggable="false" />`
@@ -643,12 +805,12 @@ export class UI {
           </button>`;
         }).join('')}</div>`;
         break;
-      case 'modes':
-        body.innerHTML = MODES.map((m) => {
+      case 'modes': {
+        const modesHtml = MODES.map((m) => {
           const locked = !modeUnlocked(s, m.id);
           const style = MODE_STYLE[m.id];
           const { tag, desc } = this.modeSummary(m.id);
-          return `<button class="row ${s.mode === m.id ? 'active' : ''} ${locked ? 'locked' : ''}" data-mode="${m.id}" style="text-align:left">
+          return `<button class="row ${s.mode === m.id ? 'active' : ''} ${locked ? 'locked' : ''}" data-mode="${m.id}" aria-pressed="${s.mode === m.id}" style="text-align:left">
             <div class="mode-tile" style="background:${style.bg}">${locked ? ICON.lock : style.icon}</div>
             <div class="row-main">
               <div class="row-title">${m.name}<span class="lv">${locked ? (m.id === 'carnage' ? '通关第 30 关解锁' : `第 ${m.unlock} 关解锁`) : tag}</span></div>
@@ -656,12 +818,21 @@ export class UI {
             </div>
           </button>`;
         }).join('');
-        body.innerHTML += `<div class="guide-note carnage-note">火力狂潮：${s.carnageAdmin ? '管理员试玩已开启，可直接进入。' : '防线或冲锋通关第 30 关解锁。'}独立火力与击杀纪录，不发主线金币或钻石。</div>`;
-        body.innerHTML += `<div class="guide-note">已通关关卡可随时演练：使用当前升级和战术，不消耗资源，也不结算金币、钻石和战绩。</div>${(['defense', 'campaign'] as const).map((id) => {
-          const best = id === 'defense' ? s.defenseBest : s.best;
-          return best < 1 ? '' : `<div class="practice-row"><label for="practice-${id}">${id === 'defense' ? '防线' : '冲锋'}演练 · 1–${best} 关</label><div class="practice-stepper"><button type="button" class="step-btn" data-step-target="practice-${id}" data-step-delta="-1" aria-label="上一关">−</button><input id="practice-${id}" type="number" inputmode="numeric" min="1" max="${best}" step="1" value="${best}" /><button type="button" class="step-btn" data-step-target="practice-${id}" data-step-delta="1" aria-label="下一关">+</button></div><button class="btn btn-blue" data-practice="${id}">开始演练</button></div>`;
-        }).join('')}`;
+        const practiceHtml = (['defense', 'campaign'] as const)
+          .map((id) => {
+            const best = id === 'defense' ? s.defenseBest : s.best;
+            return best < 1
+              ? ''
+              : `<div class="practice-row"><label for="practice-${id}">${id === 'defense' ? '防线' : '冲锋'}演练 · 1–${best} 关</label><div class="practice-stepper"><button type="button" class="step-btn" data-step-target="practice-${id}" data-step-delta="-1" aria-label="上一关">−</button><input id="practice-${id}" type="number" inputmode="numeric" min="1" max="${best}" step="1" value="${best}" /><button type="button" class="step-btn" data-step-target="practice-${id}" data-step-delta="1" aria-label="下一关">+</button></div><button class="btn btn-blue" data-practice="${id}">开始演练</button></div>`;
+          })
+          .join('');
+        body.innerHTML =
+          modesHtml +
+          `<div class="guide-note carnage-note">火力狂潮：${s.carnageAdmin ? '管理员试玩已开启，可直接进入。' : '防线或冲锋通关第 30 关解锁。'}独立火力与击杀纪录，不发主线金币或钻石。</div>` +
+          `<div class="guide-note">已通关关卡可随时演练：使用当前升级和战术，不消耗资源，也不结算金币、钻石和战绩。</div>` +
+          practiceHtml;
         break;
+      }
       case 'records': {
         const stat = (icon: string, bg: string, label: string, value: string) =>
           `<div class="stat"><div class="stat-ico" style="background:${bg}">${icon}</div><div><span>${label}</span><b>${value}</b></div></div>`;
@@ -685,9 +856,9 @@ export class UI {
         break;
       case 'settings':
         body.innerHTML = `
-          <button class="row" data-toggle="sound" style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#4a5a80,#25304d)">${ICON.soundOn}</div><div class="row-main"><div class="row-title">音效</div><div class="row-sub">枪声、爆炸和提示音</div></div><span class="toggle ${s.sound ? 'on' : ''}"></span></button>
-          <button class="row" data-toggle="haptics" style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#4a5a80,#25304d)">${ICON.vibrate}</div><div class="row-main"><div class="row-title">振动</div><div class="row-sub">安卓有效，iOS 网页不支持</div></div><span class="toggle ${s.haptics ? 'on' : ''}"></span></button>
-          <button class="row" data-toggle="motion" style="text-align:left"><div class="row-main"><div class="row-title">动态效果：${s.motion === 'system' ? '跟随系统' : s.motion === 'reduced' ? '减少' : '完整'}</div><div class="row-sub">减少时关闭镜头震动、推近和全屏闪光</div></div></button>
+          <button class="row" data-toggle="sound" role="switch" aria-checked="${s.sound}" style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#4a5a80,#25304d)">${ICON.soundOn}</div><div class="row-main"><div class="row-title">音效</div><div class="row-sub">枪声、爆炸和提示音</div></div><span class="toggle ${s.sound ? 'on' : ''}"></span></button>
+          <button class="row" data-toggle="haptics" role="switch" aria-checked="${s.haptics}" style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#4a5a80,#25304d)">${ICON.vibrate}</div><div class="row-main"><div class="row-title">振动</div><div class="row-sub">安卓有效，iOS 网页不支持</div></div><span class="toggle ${s.haptics ? 'on' : ''}"></span></button>
+          <button class="row" data-toggle="motion" style="text-align:left"><div class="row-main"><div class="row-title">动态效果：${s.motion === 'system' ? '跟随系统' : s.motion === 'reduced' ? '减少' : '完整'}</div><div class="row-sub">减少时关闭镜头震动、推进和全屏闪光</div></div></button>
           <button class="row" data-toggle="sensitivity" style="text-align:left"><div class="row-main"><div class="row-title">拖动灵敏度：${s.sensitivity === 1 ? '标准' : s.sensitivity < 1 ? '精细' : '灵敏'}</div><div class="row-sub">切换精细 / 标准 / 灵敏，移动速度由机动升级决定</div></div></button>
           <button class="row danger-row" data-reset style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#ff6b6b,#b5121f)">${ICON.close}</div><div class="row-main"><div class="row-title" id="reset-title">重置全部进度</div><div class="row-sub">关卡、金币、钻石、升级、皮肤、战绩全部清零，从头开始</div></div></button>
           ${s.carnageAdmin ? '<button class="row" data-revoke-admin><div class="row-main"><div class="row-title">管理员试玩 · 已开启</div><div class="row-sub">点击关闭狂潮直通权限，正常通关解锁仍保留</div></div></button>' : ''}
@@ -696,6 +867,7 @@ export class UI {
       default:
         body.innerHTML = '';
     }
+    if (preserveScroll) body.scrollTop = prevScroll;
   }
 
   // ---------- 游戏内 ----------
@@ -707,138 +879,230 @@ export class UI {
     this.weaponUpReturn = null;
     window.clearTimeout(this.bannerTimer);
     window.clearTimeout(this.tipTimer);
-    el(this.root, '#weapon-up').classList.remove('show', 'leave');
-    for (const coin of this.root.querySelectorAll<HTMLElement>('.fly-coin')) {
-      for (const animation of coin.getAnimations()) animation.cancel();
-      coin.remove();
+    this.clearResultTimers();
+    this.weaponUpEl.classList.remove('show', 'leave');
+    for (const coinNode of this.root.querySelectorAll<HTMLElement>('.fly-coin')) {
+      for (const animation of coinNode.getAnimations()) animation.cancel();
+      coinNode.remove();
     }
     this.flying = 0;
-    el(this.root, '#hud-title').textContent = title;
-    el(this.root, '#carnage-hud').hidden = !title.startsWith('火力狂潮');
-    this.root.classList.toggle('carnage-mode', title.startsWith('火力狂潮'));
-    const box = el(this.root, '#hud-marks');
-    box.innerHTML = marks.map((f) => `<i class="hud-mark" style="left:${(f * 100).toFixed(1)}%">${ICON.skull}</i>`).join('');
-    this.marks = [...box.querySelectorAll<HTMLElement>('.hud-mark')].map((e, i) => ({ el: e, at: marks[i] * 100 }));
-    el(this.root, '#hud-cue').textContent = '';
+    this.hudTitleEl.textContent = title;
+    const isCarnage = title.startsWith('火力狂潮');
+    this.carnageHudEl.hidden = !isCarnage;
+    this.root.classList.toggle('carnage-mode', isCarnage);
+    this.hudMarksEl.innerHTML = marks.map((f) => `<i class="hud-mark" style="left:${(f * 100).toFixed(1)}%">${ICON.skull}</i>`).join('');
+    this.marks = [...this.hudMarksEl.querySelectorAll<HTMLElement>('.hud-mark')].map((e, i) => ({ el: e, at: marks[i] * 100 }));
+    this.hudCueEl.textContent = '';
+    this.hudCueEl.className = 'hud-cue';
+    this.lastCueText = '';
+    this.lastCueDanger = false;
+    this.lastCueVisible = false;
     this.lastPct = -1;
     this.lastTier = -1;
     this.lastRate = -1;
     this.lastCoins = -1;
     this.lastGems = -1;
+    this.lastAmmoName = '';
+    this.lastCarnageCombo = -1;
+    this.lastCarnageKills = -1;
+    this.lastCarnageSquad = -1;
+    this.lastCarnageShells = -1;
+    this.lastCarnageBatteries = -1;
+    this.lastNovaDisabled = true;
+    this.lastNovaReady = false;
+    this.lastNovaTitle = '';
+    this.lastNovaCharge = -1;
+    this.btnNova.disabled = true;
+    this.btnNova.classList.remove('ready');
     this.bossKey = '';
+    this.bossBars.length = 0;
     this.bossDead.clear();
-    el(this.root, '#boss-bars').innerHTML = '';
-    el(this.root, '#boss-bars').classList.remove('visible');
-    el(this.root, '#hud-rate').style.display = 'none';
-    el(this.root, '#banner').className = 'banner';
-    el(this.root, '#tip').classList.remove('visible');
+    this.bossBarsEl.innerHTML = '';
+    this.bossBarsEl.classList.remove('visible', 'multi');
+    this.hudRateEl.style.display = 'none';
+    this.hudAmmoEl.style.display = 'none';
+    this.hudGemsPill.classList.remove('visible', 'bump');
+    this.bannerEl.className = 'banner';
+    this.tipEl.classList.remove('visible');
+    this.resumeCountEl.hidden = true;
+    this.lastResumeHidden = true;
+    this.lastResumeText = '';
   }
 
   /** 开局提示，几秒后消失 */
   tip(mode: GameMode, extra?: string) {
     const text = extra ?? MODE_TIPS[mode];
     if (!text) return;
-    const t = el(this.root, '#tip');
-    el(t, 'span').textContent = text;
-    t.classList.add('visible');
+    this.tipSpanEl.textContent = text;
+    this.tipEl.classList.add('visible');
     window.clearTimeout(this.tipTimer);
-    this.tipTimer = window.setTimeout(() => t.classList.remove('visible'), 3600);
+    this.tipTimer = window.setTimeout(() => this.tipEl.classList.remove('visible'), 3600);
   }
 
   updateHud(w: World, best: number) {
     if (w.spec.mode === 'carnage') {
       const c = w.carnage;
-      el(this.root, '#carnage-combo').textContent = `${c.combo} 连击`;
-      el(this.root, '#carnage-count').textContent = `击杀 ${formatNumber(w.kills)} · 军团 ${w.squad.count}`;
-      el(this.root, '#carnage-shells').textContent = `火箭弹 ${c.shells} · 炮架 ${c.batteries}`;
-      const nova = el<HTMLButtonElement>(this.root, '#btn-nova');
-      nova.disabled = c.charge < 100 || !['run', 'boss'].includes(w.state);
-      nova.classList.toggle('ready', c.charge >= 100);
-      el(this.root, '#nova-title').textContent = w.time < c.burstUntil ? `超载 ${(c.burstUntil - w.time).toFixed(1)}s` : c.charge >= 100 ? '释放超载' : '超载蓄能';
-      el(this.root, '#nova-charge').textContent = `${Math.floor(c.charge)}%`;
-      el(this.root, '#nova-fill').style.width = `${c.charge}%`;
+      if (c.combo !== this.lastCarnageCombo) {
+        this.lastCarnageCombo = c.combo;
+        this.carnageComboEl.textContent = `${c.combo} 连击`;
+      }
+      if (w.kills !== this.lastCarnageKills || w.squad.count !== this.lastCarnageSquad) {
+        this.lastCarnageKills = w.kills;
+        this.lastCarnageSquad = w.squad.count;
+        this.carnageCountEl.textContent = `击杀 ${formatNumber(w.kills)} · 军团 ${w.squad.count}`;
+      }
+      if (c.shells !== this.lastCarnageShells || c.batteries !== this.lastCarnageBatteries) {
+        this.lastCarnageShells = c.shells;
+        this.lastCarnageBatteries = c.batteries;
+        this.carnageShellsEl.textContent = `火箭弹 ${c.shells} · 炮架 ${c.batteries}`;
+      }
+      const disabled = c.charge < 100 || (w.state !== 'run' && w.state !== 'boss');
+      if (disabled !== this.lastNovaDisabled) {
+        this.lastNovaDisabled = disabled;
+        this.btnNova.disabled = disabled;
+      }
+      const ready = c.charge >= 100;
+      if (ready !== this.lastNovaReady) {
+        this.lastNovaReady = ready;
+        this.btnNova.classList.toggle('ready', ready);
+      }
+      const novaTitle = w.time < c.burstUntil ? `超载 ${(c.burstUntil - w.time).toFixed(1)}s` : ready ? '释放超载' : '超载蓄能';
+      if (novaTitle !== this.lastNovaTitle) {
+        this.lastNovaTitle = novaTitle;
+        this.novaTitleEl.textContent = novaTitle;
+      }
+      const chargePct = Math.floor(c.charge);
+      if (chargePct !== this.lastNovaCharge) {
+        this.lastNovaCharge = chargePct;
+        this.novaChargeEl.textContent = `${chargePct}%`;
+        this.novaFillEl.style.width = `${chargePct}%`;
+      }
     }
+
     const endless = w.spec.mode === 'endless';
     const pct = endless ? Math.floor(w.squad.d) : Math.round(w.progress * 100);
     if (pct !== this.lastPct) {
       this.lastPct = pct;
       if (endless) {
         const goal = Math.max(500, Math.ceil((Math.max(best, pct) + 1) / 500) * 500);
-        el(this.root, '#hud-fill').style.width = `${Math.min(100, (pct / goal) * 100)}%`;
-        el(this.root, '#hud-pct').textContent = `${pct} 米${best > 0 ? ` / ${best}` : ''}`;
+        this.hudFillEl.style.width = `${Math.min(100, (pct / goal) * 100)}%`;
+        this.hudPctEl.textContent = `${pct} 米${best > 0 ? ` / ${best}` : ''}`;
       } else {
-        el(this.root, '#hud-fill').style.width = `${pct}%`;
-        el(this.root, '#hud-pct').textContent = `${pct}%`;
-        for (const m of this.marks) m.el.classList.toggle('past', pct >= m.at);
+        this.hudFillEl.style.width = `${pct}%`;
+        this.hudPctEl.textContent = `${pct}%`;
+        for (let i = 0; i < this.marks.length; i++) {
+          const m = this.marks[i];
+          m.el.classList.toggle('past', pct >= m.at);
+        }
       }
     }
+
     if (w.squad.tier !== this.lastTier) {
       this.lastTier = w.squad.tier;
       const tier = w.squad.tier;
-      const badge = el(this.root, '#hud-weapon');
-      badge.style.setProperty('--wc', hex(WEAPONS[tier].color));
-      el(badge, '.wb-gun').innerHTML = this.gunImg(tier);
-      el(badge, 'b').textContent = WEAPONS[tier].name;
-      [...badge.querySelectorAll<HTMLElement>('.wb-pips i')].forEach((p, i) => p.classList.toggle('on', i <= tier));
+      this.hudWeaponEl.style.setProperty('--wc', hex(WEAPONS[tier].color));
+      this.hudWeaponGun.innerHTML = this.gunImg(tier);
+      this.hudWeaponName.textContent = WEAPONS[tier].name;
+      for (let i = 0; i < this.hudWeaponPips.length; i++) {
+        this.hudWeaponPips[i].classList.toggle('on', i <= tier);
+      }
     }
-    const ammo = el(this.root, '#hud-ammo');
-    if (ammo.dataset.name !== w.ammo.name) {
-      ammo.dataset.name = w.ammo.name;
-      ammo.style.display = w.ammo.pierce || w.ammo.splash ? '' : 'none';
-      el(ammo, 'span').textContent = w.ammo.name;
-      if (w.ammo.color !== null) ammo.style.setProperty('--ammo', `#${w.ammo.color.toString(16).padStart(6, '0')}`);
+
+    if (w.ammo.name !== this.lastAmmoName) {
+      this.lastAmmoName = w.ammo.name;
+      this.hudAmmoEl.style.display = w.ammo.pierce || w.ammo.splash ? '' : 'none';
+      this.hudAmmoText.textContent = w.ammo.name;
+      if (w.ammo.color !== null) this.hudAmmoEl.style.setProperty('--ammo', hex(w.ammo.color));
     }
+
     const rate = Math.round(w.squad.rate * 100);
     if (rate !== this.lastRate) {
       this.lastRate = rate;
-      const chip = el(this.root, '#hud-rate');
-      chip.style.display = rate === 100 ? 'none' : '';
-      el(chip, 'span').textContent = `射速 ${rate}%`;
+      this.hudRateEl.style.display = rate === 100 ? 'none' : '';
+      this.hudRateText.textContent = `射速 ${rate}%`;
     }
+
     if (w.gems !== this.lastGems) {
       const gained = w.gems > this.lastGems && this.lastGems >= 0;
       this.lastGems = w.gems;
-      el(this.root, '#hud-gems').textContent = String(w.gems);
-      el(this.root, '#hud-gems-pill').classList.toggle('visible', w.gems > 0);
+      this.hudGemsEl.textContent = String(w.gems);
+      this.hudGemsPill.classList.toggle('visible', w.gems > 0);
       if (gained) {
-        const pill = el(this.root, '#hud-gems-pill');
-        pill.classList.remove('bump');
-        void pill.offsetWidth;
-        pill.classList.add('bump');
+        this.hudGemsPill.classList.remove('bump');
+        void this.hudGemsPill.offsetWidth;
+        this.hudGemsPill.classList.add('bump');
       }
     }
+
     const shown = Math.floor(w.coins);
     if (shown !== this.lastCoins) {
       const gained = shown > this.lastCoins && this.lastCoins >= 0;
       this.lastCoins = shown;
-      el(this.root, '#hud-coins').textContent = formatNumber(Math.floor(w.coins));
+      this.hudCoinsEl.textContent = formatNumber(shown);
       if (gained) {
-        const pill = el(this.root, '.hud-coins');
-        pill.classList.remove('bump');
-        void pill.offsetWidth;
-        pill.classList.add('bump');
+        this.hudCoinsPill.classList.remove('bump');
+        void this.hudCoinsPill.offsetWidth;
+        this.hudCoinsPill.classList.add('bump');
       }
     }
+
     this.updateBossBars(w);
-    const cue = el(this.root, '#hud-cue');
-    const boss = w.bosses.find((b) => b.active && b.alive && b.attacking);
-    const released = w.spec.mode !== 'carnage' && w.defense && w.gates.some((g) => !g.consumed && g.d > w.squad.d && g.d < 16);
-    const danger = w.projectiles.length > 0 || !!boss;
-    const text = w.projectiles.length ? '油桶将落地 · 整队移出红圈' : boss ? `${boss.comboStep < 2 ? '蓄力重击' : '快速连击'} ${boss.comboStep + 1}/5 · 移出危险带`
-      : released ? '补给已放行 · 回门道接门' : '';
-    if (cue.textContent !== text) cue.textContent = text;
-    cue.classList.toggle('danger', danger);
-    cue.classList.toggle('visible', !!text);
+
+    let attackingBoss: Boss | null = null;
+    for (let i = 0; i < w.bosses.length; i++) {
+      const b = w.bosses[i];
+      if (b.active && b.alive && b.attacking) {
+        attackingBoss = b;
+        break;
+      }
+    }
+    let released = false;
+    if (w.spec.mode !== 'carnage' && w.defense) {
+      for (let i = 0; i < w.gates.length; i++) {
+        const g = w.gates[i];
+        if (!g.consumed && g.d > w.squad.d && g.d < 16) {
+          released = true;
+          break;
+        }
+      }
+    }
+    const danger = w.projectiles.length > 0 || attackingBoss !== null;
+    const text = w.projectiles.length
+      ? '油桶将落地 · 整队移出红圈'
+      : attackingBoss
+        ? `${attackingBoss.comboStep < 2 ? '蓄力重击' : '快速连击'} ${attackingBoss.comboStep + 1}/5 · 移出危险带`
+        : released
+          ? '补给已放行 · 回门道接门'
+          : '';
+    if (text !== this.lastCueText) {
+      this.lastCueText = text;
+      this.hudCueEl.textContent = text;
+    }
+    if (danger !== this.lastCueDanger) {
+      this.lastCueDanger = danger;
+      this.hudCueEl.classList.toggle('danger', danger);
+    }
+    const cueVisible = text.length > 0;
+    if (cueVisible !== this.lastCueVisible) {
+      this.lastCueVisible = cueVisible;
+      this.hudCueEl.classList.toggle('visible', cueVisible);
+    }
   }
 
   resumeCountdown(remainingMs: number | boolean) {
-    const node = el(this.root, '#resume-count');
     const ms = typeof remainingMs === 'boolean' ? (remainingMs ? 300 : 0) : remainingMs;
-    node.hidden = ms <= 0;
-    if (ms > 0) {
+    const hidden = ms <= 0;
+    if (hidden !== this.lastResumeHidden) {
+      this.lastResumeHidden = hidden;
+      this.resumeCountEl.hidden = hidden;
+    }
+    if (!hidden) {
       const sec = Math.max(1, Math.min(3, Math.ceil(ms / 300)));
       const label = `准备 · ${sec}`;
-      if (node.textContent !== label) node.textContent = label;
+      if (label !== this.lastResumeText) {
+        this.lastResumeText = label;
+        this.resumeCountEl.textContent = label;
+      }
     }
   }
 
@@ -854,7 +1118,15 @@ export class UI {
     if (this.root.classList.contains('reduced-motion')) return;
     if (this.flying >= 8 && !force) return;
     if (!force && this.current !== 'hud') return;
-    const target = el(this.root, to).getBoundingClientRect();
+    const targetNode =
+      to === '.hud-coins .coin-ico'
+        ? this.hudCoinsIcon
+        : to === '#hud-gems-pill .gem-ico'
+          ? this.hudGemsIcon
+          : to === '#result-balance'
+            ? this.resultBalanceEl
+            : el(this.root, to);
+    const target = targetNode.getBoundingClientRect();
     const tx = target.left + target.width / 2;
     const ty = target.top + target.height / 2;
     const c = document.createElement('div');
@@ -862,7 +1134,6 @@ export class UI {
     c.innerHTML = icon;
     this.root.appendChild(c);
     this.flying++;
-    // 先往上一弹，再划弧线飞过去
     const mx = x + (tx - x) * 0.3 + (Math.random() - 0.5) * 60;
     const my = Math.min(y, ty) + (y - ty) * 0.25 - 40;
     const anim = c.animate(
@@ -873,52 +1144,76 @@ export class UI {
       ],
       { duration: 620, easing: 'cubic-bezier(0.45, 0, 0.75, 0.6)' },
     );
-    anim.onfinish = () => {
+    const cleanup = () => {
+      if (!c.isConnected) return;
       c.remove();
-      this.flying--;
+      this.flying = Math.max(0, this.flying - 1);
     };
+    anim.onfinish = cleanup;
+    anim.oncancel = cleanup;
   }
 
   private updateBossBars(w: World) {
-    const box = el(this.root, '#boss-bars');
-    // 打死的 Boss 血条留 1.5 秒显示“击败！”再收起
+    if (w.spec.mode === 'carnage') return;
     const now = performance.now();
-    for (const b of w.bosses) if (!b.alive && !this.bossDead.has(b.id)) this.bossDead.set(b.id, now);
-    const active = w.bosses.filter((b) => b.active && (b.alive || now - (this.bossDead.get(b.id) ?? now) < 1500));
-    const key = active.map((b) => b.id).join(',');
+    const active = this.activeBossScratch;
+    active.length = 0;
+    let key = '';
+    for (let i = 0; i < w.bosses.length; i++) {
+      const b = w.bosses[i];
+      if (!b.alive && !this.bossDead.has(b.id)) this.bossDead.set(b.id, now);
+      if (b.active && (b.alive || now - (this.bossDead.get(b.id) ?? now) < 1500)) {
+        active.push(b);
+        key = key ? `${key},${b.id}` : String(b.id);
+      }
+    }
     if (key !== this.bossKey) {
       this.bossKey = key;
-      box.innerHTML = active
+      this.bossBarsEl.innerHTML = active
         .map(
           (b) => `<div class="boss-bar"><div class="boss-face">${ICON.skull}</div><div class="boss-info">
             <div class="boss-name">${BOSSES[b.kind].name}<small>${BOSSES[b.kind].desc}</small></div>
             <div class="boss-hp"><div class="ghost"></div><div class="fill"></div><div class="seg"></div><span></span></div></div></div>`,
         )
         .join('');
-      this.bossBars = [...box.querySelectorAll<HTMLElement>('.boss-bar')].map((n) => ({
+      this.bossBars = [...this.bossBarsEl.querySelectorAll<HTMLElement>('.boss-bar')].map((n) => ({
         fill: n.querySelector<HTMLElement>('.fill')!,
         ghost: n.querySelector<HTMLElement>('.ghost')!,
         text: n.querySelector<HTMLElement>('span')!,
         shown: 1,
+        lastFillWidth: '',
+        lastGhostWidth: '',
+        lastText: '',
       }));
-      box.classList.toggle('visible', active.length > 0);
-      // 两个 Boss 时并排放两条窄的，少挡一点画面
-      box.classList.toggle('multi', active.length > 1);
+      this.bossBarsEl.classList.toggle('visible', active.length > 0);
+      this.bossBarsEl.classList.toggle('multi', active.length > 1);
     }
-    active.forEach((b, i) => {
+    for (let i = 0; i < active.length; i++) {
+      const b = active[i];
       const bar = this.bossBars[i];
-      if (!bar) return;
+      if (!bar) continue;
       const p = Math.max(0, b.hp / b.maxHp);
-      bar.fill.style.width = `${p * 100}%`;
-      // 浅色残影慢慢跟上，显得打得很痛
+      const fillWidth = `${(p * 100).toFixed(1)}%`;
+      if (fillWidth !== bar.lastFillWidth) {
+        bar.lastFillWidth = fillWidth;
+        bar.fill.style.width = fillWidth;
+      }
       bar.shown += (p - bar.shown) * 0.08;
-      bar.ghost.style.width = `${Math.max(p, bar.shown) * 100}%`;
-      bar.text.textContent = b.alive ? formatNumber(Math.ceil(b.hp)) : '击败！';
-    });
+      const ghostWidth = `${(Math.max(p, bar.shown) * 100).toFixed(1)}%`;
+      if (ghostWidth !== bar.lastGhostWidth) {
+        bar.lastGhostWidth = ghostWidth;
+        bar.ghost.style.width = ghostWidth;
+      }
+      const text = b.alive ? formatNumber(Math.ceil(b.hp)) : '击败！';
+      if (text !== bar.lastText) {
+        bar.lastText = text;
+        bar.text.textContent = text;
+      }
+    }
   }
 
   banner(text: string, tone: 'info' | 'danger' | 'boss') {
-    const b = el(this.root, '#banner');
+    const b = this.bannerEl;
     b.textContent = text;
     b.className = 'banner';
     void b.offsetWidth;
@@ -929,10 +1224,11 @@ export class UI {
 
   /** 胜利彩带：从屏幕上方撒一把，三秒后清掉 */
   private confetti() {
-    const box = el(this.root, '#result');
+    const box = this.screens.result;
     if (this.root.classList.contains('reduced-motion')) return;
     box.querySelectorAll('.confetti').forEach((c) => c.remove());
     const colors = ['#ffd34d', '#ff6b6b', '#4da3ff', '#3ddc84', '#c39bff', '#ffffff'];
+    const frag = document.createDocumentFragment();
     for (let i = 0; i < 46; i++) {
       const c = document.createElement('i');
       c.className = 'confetti';
@@ -943,12 +1239,14 @@ export class UI {
       c.style.animationDelay = `${Math.random() * 0.5}s`;
       c.style.animationDuration = `${1.8 + Math.random() * 1.2}s`;
       if (i % 3 === 0) c.style.borderRadius = '50%';
-      box.appendChild(c);
+      frag.appendChild(c);
     }
-    window.setTimeout(() => box.querySelectorAll('.confetti').forEach((c) => c.remove()), 3500);
+    box.appendChild(frag);
+    this.resultTimers.push(window.setTimeout(() => box.querySelectorAll('.confetti').forEach((c) => c.remove()), 3500));
   }
 
   showResult(info: ResultInfo) {
+    this.clearResultTimers();
     const ribbon = el(this.root, '#result-ribbon');
     ribbon.textContent = info.title;
     ribbon.className = `ribbon ${info.won ? 'win' : 'lose'}`;
@@ -960,9 +1258,12 @@ export class UI {
     el(this.root, '#result-sub').textContent = info.sub;
     el(this.root, '#result-advice').textContent = info.advice ?? '';
     el(this.root, '#result-detail').textContent = info.detail ?? '';
-    for (const sel of ['.reward', '.result-ups-title', '#result-ups']) el(this.root, sel).style.display = info.practice || info.mode === 'carnage' ? 'none' : '';
-    el(this.root, '.result-tactic').style.display = info.mode === 'carnage' ? 'none' : '';
-    el(this.root, '#result').classList.toggle('practice', !!info.practice);
+    for (const sel of ['.reward', '.result-ups-title', '#result-ups']) {
+      el(this.root, sel).style.display = info.practice || info.mode === 'carnage' ? 'none' : '';
+    }
+    this.resultTacticBtn.style.display = info.mode === 'carnage' ? 'none' : '';
+    this.screens.result.classList.toggle('practice', !!info.practice);
+    this.root.classList.toggle('carnage-mode', info.mode === 'carnage');
     el(this.root, '#result-stats').innerHTML = info.stats.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
     const next = el(this.root, '#btn-next');
     next.style.display = info.next ? '' : 'none';
@@ -972,27 +1273,38 @@ export class UI {
     this.refreshMenu();
     this.show('result');
     if (info.won) this.confetti();
-    // 金币数字滚上去
     const out = el(this.root, '#r-coins');
+    if (info.coins <= 0) {
+      out.textContent = '+0';
+      return;
+    }
     const start = performance.now();
-    window.clearInterval(this.countTimer);
     this.countTimer = window.setInterval(() => {
       const k = Math.min(1, (performance.now() - start) / 800);
       out.textContent = `+${formatNumber(Math.round(info.coins * (1 - Math.pow(1 - k, 3))))}`;
       if (k >= 1) {
         window.clearInterval(this.countTimer);
-        // 数完了金币飞进余额，余额框跳一下
+        this.countTimer = 0;
         const from = out.getBoundingClientRect();
         if (info.coins > 0 && from.width > 0) {
           for (let i = 0; i < 6; i++) {
-            window.setTimeout(() => this.flyCoin(from.left + from.width / 2 + (Math.random() - 0.5) * 40, from.top + from.height / 2, '#result-balance', true), i * 60);
+            this.resultTimers.push(
+              window.setTimeout(() => {
+                if (this.current === 'result') {
+                  this.flyCoin(from.left + from.width / 2 + (Math.random() - 0.5) * 40, from.top + from.height / 2, '#result-balance', true);
+                }
+              }, i * 60),
+            );
           }
-          window.setTimeout(() => {
-            const pill = el(this.root, '#result-balance').parentElement!;
-            pill.classList.remove('bump');
-            void pill.offsetWidth;
-            pill.classList.add('bump');
-          }, 600);
+          this.resultTimers.push(
+            window.setTimeout(() => {
+              if (this.current !== 'result') return;
+              const pill = this.resultBalanceEl.parentElement!;
+              pill.classList.remove('bump');
+              void pill.offsetWidth;
+              pill.classList.add('bump');
+            }, 600),
+          );
         }
       }
     }, 30);

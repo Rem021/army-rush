@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import type { AgentPose } from './crowd';
+import { commitInstances } from './dispose';
 
 /**
- * 顶点动画贴图（VAT）：把带骨骼动画的模型预先“烘”成每一帧的顶点位置和法线，存进浮点贴图。
- * 渲染时几百个实例共用一个 InstancedMesh，顶点着色器按每个实例自己的帧号去贴图里取位置，
- * 一次绘制调用就能画出几百个各自在跑、在开枪的小人，CPU 不用逐个算骨骼。
+ * 顶点动画贴图（VAT）：把带骨骼动画的模型预先“烘”成每一帧的顶点位置，存进半精度浮点贴图（RGBA16F）。
+ * 渲染时几百个实例共用一个 InstancedMesh，顶点着色器利用 gl_VertexID 按实例帧号取位置，
+ * 一次绘制调用就能画出几百个各自在跑、在开枪的小人，CPU 不用逐个算骨骼，显存与带宽也省一半。
  */
 
 export interface VatClip {
@@ -186,7 +187,7 @@ function samplePositions(parts: Part[], out: Float32Array) {
 }
 
 /**
- * 烘焙：采样每个动画的每一帧，算出所有顶点的位置和法线，合并成一个几何体 + 两张浮点贴图。
+ * 烘焙：采样每个动画的每一帧，算出所有顶点的位置，合并成一个几何体 + 一张 RGBA16F 半精度浮点贴图。
  * source 不会被修改（内部会克隆一份带骨骼的场景）。
  */
 export function bakeModel(source: THREE.Object3D, animations: THREE.AnimationClip[], opts: BakeOptions): BakedModel {
@@ -241,9 +242,13 @@ export function bakeModel(source: THREE.Object3D, animations: THREE.AnimationCli
     }
     action?.stop();
   }
+  mixer.stopAllAction();
+  mixer.uncacheRoot(root);
 
   // 以第一帧定大小：脚踩 y=0，水平居中，缩放到目标高度，再转向
-  const fix = opts.fix?.clone() ?? normalizeMatrix(frames[0], vertexCount, opts.height, opts.yaw ?? 0);
+  const safeVertices = Math.max(1, vertexCount);
+  const firstFrame = frames[0] ?? new Float32Array(safeVertices * 3);
+  const fix = opts.fix?.clone() ?? normalizeMatrix(firstFrame, vertexCount, opts.height, opts.yaw ?? 0);
   for (const buf of frames) {
     for (let i = 0; i < vertexCount; i++) {
       _v.set(buf[i * 3], buf[i * 3 + 1], buf[i * 3 + 2]).applyMatrix4(fix);
@@ -255,22 +260,23 @@ export function bakeModel(source: THREE.Object3D, animations: THREE.AnimationCli
 
   // 法线不烘：渲染时用平面着色，片元着色器按屏幕导数自己算（低多边形风格，还省一半贴图读取）
 
-  // 写贴图：每行最多 1024 个顶点，一帧占 rows 行
-  const width = Math.min(1024, vertexCount);
-  const rows = Math.ceil(vertexCount / width);
-  const height = rows * frames.length;
-  const posData = new Float32Array(width * height * 4);
+  // 写半精度浮点贴图（RGBA16F）：每行最多 2048 个顶点，显存与带宽减半
+  const width = Math.min(2048, safeVertices);
+  const rows = Math.max(1, Math.ceil(safeVertices / width));
+  const height = Math.max(1, rows * Math.max(1, frames.length));
+  const posData = new Uint16Array(width * height * 4);
+  const halfOne = THREE.DataUtils.toHalfFloat(1);
   frames.forEach((buf, f) => {
     for (let i = 0; i < vertexCount; i++) {
       const texel = (f * rows + Math.floor(i / width)) * width + (i % width);
-      posData[texel * 4] = buf[i * 3];
-      posData[texel * 4 + 1] = buf[i * 3 + 1];
-      posData[texel * 4 + 2] = buf[i * 3 + 2];
-      posData[texel * 4 + 3] = 1;
+      posData[texel * 4] = THREE.DataUtils.toHalfFloat(buf[i * 3]);
+      posData[texel * 4 + 1] = THREE.DataUtils.toHalfFloat(buf[i * 3 + 1]);
+      posData[texel * 4 + 2] = THREE.DataUtils.toHalfFloat(buf[i * 3 + 2]);
+      posData[texel * 4 + 3] = halfOne;
     }
   });
-  const makeTex = (data: Float32Array) => {
-    const t = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.FloatType);
+  const makeTex = (data: Uint16Array) => {
+    const t = new THREE.DataTexture(data, width, height, THREE.RGBAFormat, THREE.HalfFloatType);
     t.minFilter = THREE.NearestFilter;
     t.magFilter = THREE.NearestFilter;
     t.generateMipmaps = false;
@@ -278,15 +284,14 @@ export function bakeModel(source: THREE.Object3D, animations: THREE.AnimationCli
     return t;
   };
 
-  // 合并后的几何体：位置/法线放第一帧（只用于包围盒），颜色、UV、顶点编号
+  // 合并后的几何体：位置/法线放第一帧（只用于包围盒），颜色、UV、贴图权重（无需 aVid，直接用 gl_VertexID）
   const geometry = new THREE.BufferGeometry();
   geometry.setIndex(indices);
-  geometry.setAttribute('position', new THREE.BufferAttribute(frames[0].slice(), 3));
+  geometry.setAttribute('position', new THREE.BufferAttribute(firstFrame.slice(), 3));
   geometry.computeVertexNormals();
   const color = new Float32Array(vertexCount * 3);
   const tex = new Float32Array(vertexCount);
   const uv = new Float32Array(vertexCount * 2);
-  const vid = new Float32Array(vertexCount);
   let o = 0;
   for (const p of parts) {
     const n = p.geometry.attributes.position.count;
@@ -296,18 +301,17 @@ export function bakeModel(source: THREE.Object3D, animations: THREE.AnimationCli
     if (puv) for (let i = 0; i < n; i++) (uv[(o + i) * 2] = puv.getX(i)), (uv[(o + i) * 2 + 1] = puv.getY(i));
     o += n;
   }
-  for (let i = 0; i < vertexCount; i++) vid[i] = i;
   geometry.setAttribute('color', new THREE.BufferAttribute(color, 3));
   geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
   geometry.setAttribute('aTex', new THREE.BufferAttribute(tex, 1));
-  geometry.setAttribute('aVid', new THREE.BufferAttribute(vid, 1));
   geometry.computeBoundingSphere();
 
   const bounds = new THREE.Box3().setFromBufferAttribute(geometry.attributes.position as THREE.BufferAttribute);
-  return { geometry, map, pos: makeTex(posData), width, rows, clips, height: bounds.max.y, fix };
+  return { geometry, map, pos: makeTex(posData), width, rows, clips, height: vertexCount > 0 ? bounds.max.y : opts.height, fix };
 }
 
 function normalizeMatrix(f0: Float32Array, count: number, height: number, yaw: number): THREE.Matrix4 {
+  if (count <= 0) return new THREE.Matrix4();
   const box = new THREE.Box3();
   for (let i = 0; i < count; i++) box.expandByPoint(_v.set(f0[i * 3], f0[i * 3 + 1], f0[i * 3 + 2]));
   const size = box.getSize(new THREE.Vector3());
@@ -365,16 +369,15 @@ export function staticGeometry(source: THREE.Object3D, fit: number, opts: { reco
 
 const VAT_HEAD = /* glsl */ `
 uniform sampler2D uVatPos;
-uniform float uVatWidth;
-uniform float uVatRows;
+uniform int uVatWidth;
+uniform int uVatRows;
 attribute vec3 aAnim;
-attribute float aVid;
 attribute float aTex;
 varying float vTex;
 vec3 vatRead(sampler2D tex, float frame) {
-  float row = frame * uVatRows + floor(aVid / uVatWidth);
-  float col = mod(aVid, uVatWidth);
-  return texelFetch(tex, ivec2(int(col), int(row)), 0).xyz;
+  int row = int(frame) * uVatRows + (gl_VertexID / uVatWidth);
+  int col = gl_VertexID % uVatWidth;
+  return texelFetch(tex, ivec2(col, row), 0).xyz;
 }
 `;
 
@@ -403,10 +406,13 @@ export class VatCrowd {
   readonly mesh: THREE.InstancedMesh;
   readonly capacity: number;
   private n = 0;
+  private prevCount = 0;
   private model: BakedModel;
-  private anim: THREE.InstancedBufferAttribute;
+  private readonly anim: THREE.InstancedBufferAttribute;
+  private readonly animAttrs: readonly [THREE.InstancedBufferAttribute];
   private readonly uniforms: Record<string, THREE.IUniform>;
   private readonly material: THREE.MeshLambertMaterial;
+  private readonly geoCache = new WeakMap<BakedModel, THREE.BufferGeometry>();
 
   constructor(scene: THREE.Scene, capacity: number, model: BakedModel, opts: { shadow?: boolean } = {}) {
     this.capacity = capacity;
@@ -437,9 +443,10 @@ export class VatCrowd {
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.94, 0.8), vFlash);`,
       );
     };
-    this.material.customProgramCacheKey = () => `vat-${model.map ? 1 : 0}`;
+    this.material.customProgramCacheKey = () => `vat-${this.material.map ? 1 : 0}`;
     this.anim = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
     this.anim.setUsage(THREE.DynamicDrawUsage);
+    this.animAttrs = [this.anim];
     this.mesh = new THREE.InstancedMesh(this.instanceGeometry(model), this.material, capacity);
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
@@ -460,21 +467,24 @@ export class VatCrowd {
     scene.add(this.mesh);
   }
 
-  /** 每个 InstancedMesh 要自己的帧号属性，其他属性和烘焙结果共用 */
+  /** 每个 InstancedMesh 复用按 BakedModel 缓存的包装几何体，避免 dispose 误删共享 VBO */
   private instanceGeometry(model: BakedModel): THREE.BufferGeometry {
-    const g = new THREE.BufferGeometry();
-    g.setIndex(model.geometry.index);
-    for (const [k, v] of Object.entries(model.geometry.attributes)) g.setAttribute(k, v);
-    g.setAttribute('aAnim', this.anim);
-    g.boundingSphere = model.geometry.boundingSphere;
+    let g = this.geoCache.get(model);
+    if (!g) {
+      g = new THREE.BufferGeometry();
+      g.setIndex(model.geometry.index);
+      for (const [k, v] of Object.entries(model.geometry.attributes)) g.setAttribute(k, v);
+      g.setAttribute('aAnim', this.anim);
+      g.boundingSphere = model.geometry.boundingSphere;
+      this.geoCache.set(model, g);
+    }
     return g;
   }
 
-  /** 换模型（比如换枪）：几何体和贴图一起换 */
+  /** 换模型（比如换枪、换皮肤）：切换缓存的包装几何体和贴图，不销毁共享属性缓冲 */
   setModel(model: BakedModel) {
     if (model === this.model) return;
     this.model = model;
-    this.mesh.geometry.dispose();
     this.mesh.geometry = this.instanceGeometry(model);
     this.uniforms.uVatPos.value = model.pos;
     this.uniforms.uVatWidth.value = model.width;
@@ -500,20 +510,28 @@ export class VatCrowd {
     _m.compose(_p, _q, _s);
     this.mesh.setMatrixAt(i, _m);
     const clips = this.model.clips;
-    const clip = clips[a.clip ?? (a.stride > 0.3 ? 'run' : 'idle')] ?? clips.run ?? Object.values(clips)[0];
+    const clipName = a.clip ?? (a.stride > 0.3 ? 'run' : 'idle');
+    const clip = clips[clipName] ?? clips.run ?? Object.values(clips)[0];
     const cycle = a.cycle ?? a.phase / (Math.PI * 2);
-    const t = (((cycle % 1) + 1) % 1) * clip.frames;
-    const f0 = Math.floor(t);
-    this.anim.setXYZ(i, clip.start + f0, clip.start + ((f0 + 1) % clip.frames), t - f0);
+    const nonLoop = clipName === 'death';
+    const u = nonLoop ? Math.max(0, Math.min(0.9999, cycle)) : ((cycle % 1) + 1) % 1;
+    const t = u * (nonLoop ? Math.max(0, clip.frames - 1) : clip.frames);
+    const f0 = Math.min(clip.frames - 1, Math.floor(t));
+    const f1 = nonLoop ? Math.min(clip.frames - 1, f0 + 1) : (f0 + 1) % clip.frames;
+    this.anim.setXYZ(i, clip.start + f0, clip.start + f1, t - f0);
     const f = 1 + a.flash * 2.2;
     if (a.tint) this.mesh.setColorAt(i, _col.setRGB(a.tint[0] * f, a.tint[1] * f, a.tint[2] * f));
     else this.mesh.setColorAt(i, _col.setRGB(f, f, f));
   }
 
   end() {
-    this.mesh.count = this.n;
-    this.mesh.instanceMatrix.needsUpdate = true;
-    this.mesh.instanceColor!.needsUpdate = true;
-    this.anim.needsUpdate = true;
+    this.prevCount = commitInstances(this.mesh, this.n, this.prevCount, this.animAttrs, true);
+  }
+
+  dispose() {
+    this.mesh.removeFromParent();
+    this.mesh.dispose();
+    this.material.dispose();
+    this.mesh.customDepthMaterial?.dispose();
   }
 }

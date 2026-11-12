@@ -4,9 +4,11 @@ const far = new THREE.Vector3(), rear = new THREE.Vector3(), nearHead = new THRE
 
 /** Keep the squad clear of the controls. Landscape focuses on the bridgehead. */
 export function configureCarnageCamera(camera: THREE.PerspectiveCamera, width: number, height: number, back: number) {
-  const wide = width / height > 1.2;
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  const wide = w / h > 1.2;
   const backPush = Math.max(0, -back - 2.2) * (wide ? 0.56 : 0.88);
-  camera.aspect = width / height;
+  camera.aspect = w / h;
   camera.fov = wide ? 52 : 56;
   camera.position.set(0, (wide ? 8.8 : 15.6) + backPush * 0.46, (wide ? 10.2 : 18.4) + backPush);
   camera.lookAt(0, wide ? 0.5 : 0.65, wide ? -6.4 : -11.8);
@@ -19,8 +21,8 @@ export function configureCarnageCamera(camera: THREE.PerspectiveCamera, width: n
   rear.set(0, 0, -back + .4).project(camera);
   const top = Math.max(far.y, nearHead.y);
   const bottom = rear.y;
-  const topLimit = 1 - (2 * 82) / height;
-  const bottomLimit = 1 - (2 * (height - (wide ? 130 : 150))) / height;
+  const topLimit = 1 - (2 * 82) / h;
+  const bottomLimit = 1 - (2 * (h - (wide ? 130 : 150))) / h;
   const scale = Math.min(1, (topLimit - bottomLimit) / Math.max(.001, top - bottom));
   const minShift = bottomLimit - bottom * scale;
   const maxShift = topLimit - top * scale;

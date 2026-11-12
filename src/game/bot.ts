@@ -1,8 +1,10 @@
+import { CARNAGE_LANES } from './carnage';
 import { BOSS_STRIKE_HALF, HALVES, LANES, THROW_RADIUS, WEAPONS, soldierDps } from './config';
 import type { Rng } from './rng';
 import type { Gate, World } from './world';
 
 const THREAT: Record<string, number> = { walker: 1, runner: 1, brute: 4, exploder: 5, giant: 18 };
+const RUN_CANDIDATES = [...LANES, ...HALVES] as const;
 
 /**
  * 自动驾驶：给几个候选站位打分（前方门的收益、尸潮威胁、陷阱、武器桶），挑最高的。
@@ -12,6 +14,9 @@ const THREAT: Record<string, number> = { walker: 1, runner: 1, brute: 4, explode
 export class Bot {
   private choice: number | null = null;
   private choiceUntil = -1;
+  private readonly threats: { x: number; r: number }[] = [];
+  private readonly candidates: number[] = [];
+  private readonly scratchSt = { n: 0, tier: 0, rate: 1 };
 
   constructor(
     private readonly rng: Rng,
@@ -19,9 +24,32 @@ export class Bot {
   ) {}
 
   target(w: World): number {
+    if (w.spec.mode === 'carnage') return this.dodge(w, this.carnageTarget(w));
     // 红圈里的兵全死，看到就躲（防线里就是换到另一条道）
     if (w.defense) return this.dodge(w, this.defenseTarget(w));
     return w.state === 'boss' ? this.dodge(w, this.bossTarget(w)) : this.runTarget(w);
+  }
+
+  /** 狂潮自动驾驶：兼顾左侧蓝门增兵、中央弹药牌、右侧火箭炮架拆解与终局巨人集火 */
+  private carnageTarget(w: World): number {
+    const boss = w.bosses.find((b) => b.alive && b.active);
+    if (boss && w.time > 90) return boss.x;
+    if (w.squad.count < 96) {
+      for (let i = 0; i < w.gates.length; i++) {
+        const g = w.gates[i];
+        if (!g.consumed && g.carnage === 'recruit' && g.d > 0 && g.d < 10) return CARNAGE_LANES.recruit;
+      }
+    }
+    if (w.carnage.shells < 80) {
+      for (let i = 0; i < w.gates.length; i++) {
+        const g = w.gates[i];
+        if (!g.consumed && g.carnage === 'ammo' && g.d > 0 && g.d < 14) return CARNAGE_LANES.ammo;
+      }
+    }
+    const battery = w.barrels.find((b) => b.alive && b.carnage === 'battery' && b.d <= 22);
+    if (battery) return CARNAGE_LANES.ammo;
+    if (w.carnage.batteries < 4 && Math.floor(w.time / 4) % 2 === 0) return CARNAGE_LANES.rockets;
+    return boss ? boss.x : CARNAGE_LANES.horde;
   }
 
   /** 防线：Boss 进射程就集火；放出来的好门快到了就站门道；尸潮压得太近就去清；其余时间打门道的障碍和门 */
@@ -38,74 +66,174 @@ export class Bot {
       return this.choice;
     }
     let gate: Gate | null = null;
-    for (const g of w.gates) if (!g.consumed && g.d > sq.d && (!gate || g.d < gate.d)) gate = g;
-    const blocker = w.barrels.find((b) => b.alive && b.block && b.armed);
-    const released = gate && (!blocker || gate.d < blocker.d);
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
+      if (!g.consumed && g.d > sq.d && (!gate || g.d < gate.d)) gate = g;
+    }
+    let blockerD = Infinity;
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
+      if (b.alive && b.block && b.armed && b.d < blockerD) blockerD = b.d;
+    }
+    const released = gate !== null && gate.d < blockerD;
     const arrive = gate && released ? (gate.d - sq.d) / def.conveyor : Infinity;
-    const st = { n: count, tier: sq.tier, rate: sq.rate };
+    const st = this.scratchSt;
+    st.n = count;
+    st.tier = sq.tier;
+    st.rate = sq.rate;
     if (gate) this.applyGate(gate, st);
     const good = gate && this.power(st.n, st.tier, st.rate) > this.power(count, sq.tier, sq.rate);
-    const boss = w.bosses.find((b) => b.alive && b.active && b.d < sq.d + 44);
-    if (boss && !(good && arrive < 1.0)) return boss.x;
+    let bossX: number | null = null;
+    for (let i = 0; i < w.bosses.length; i++) {
+      const b = w.bosses[i];
+      if (b.alive && b.active && b.d < sq.d + 44) {
+        bossX = b.x;
+        break;
+      }
+    }
+    if (bossX !== null && !(good && arrive < 1.0)) return bossX;
     if (arrive < 1.4) return good ? gateX : enemyX;
     let threat = 0;
-    for (const z of w.zombies) if (z.alive && z.d < sq.d + 20) threat += THREAT[z.kind] ?? 1;
+    for (let i = 0; i < w.zombies.length; i++) {
+      const z = w.zombies[i];
+      if (z.alive && z.d < sq.d + 20) threat += THREAT[z.kind] ?? 1;
+    }
     if (threat > count * 0.15 + 2) return enemyX;
     return gateX;
   }
 
-  /** 按地面预警选择安全站位，同时尽量保持原来的攻击目标。 */
+  /** 按地面预警选择安全站位，同时尽量保持原来的攻击目标。零热路径数组分配。 */
   private dodge(w: World, x: number): number {
     const sq = w.squad;
     const lo = w.lo + w.halfWidth;
     const hi = w.hi - w.halfWidth;
-    const clamp = (v: number) => Math.max(lo, Math.min(hi, v));
-    const threats = [
-      ...w.projectiles.filter((p) => p.T - p.t <= 1.1).map((p) => ({ x: p.tx, r: THROW_RADIUS + w.halfWidth + 0.2 })),
-      ...w.bosses.filter((b) => b.alive && b.active && b.attacking).map((b) => ({ x: b.attackX, r: BOSS_STRIKE_HALF + w.halfWidth + 0.2 })),
-    ];
-    if (!threats.length) return clamp(x);
-    const candidates = [clamp(x), lo, hi, ...threats.flatMap((t) => [clamp(t.x - t.r), clamp(t.x + t.r)])];
-    return candidates.reduce((best, v) => {
-      const score = (at: number) =>
-        threats.reduce((s, t) => s + (Math.abs(at - t.x) < t.r ? 100 + (t.r - Math.abs(at - t.x)) * 10 : 0), 0) +
-        Math.abs(at - x) + Math.abs(at - sq.x) * 0.1;
-      return score(v) < score(best) ? v : best;
-    }, candidates[0]);
+    const clamp = (v: number) => (lo <= hi ? Math.max(lo, Math.min(hi, v)) : (w.lo + w.hi) * 0.5);
+
+    let threatCount = 0;
+    const projPad = THROW_RADIUS + w.halfWidth + 0.2;
+    for (let i = 0; i < w.projectiles.length; i++) {
+      const p = w.projectiles[i];
+      if (p.T - p.t <= 1.1) {
+        const slot = this.threats[threatCount] ?? (this.threats[threatCount] = { x: 0, r: 0 });
+        slot.x = p.tx;
+        slot.r = projPad;
+        threatCount++;
+      }
+    }
+    const strikePad = BOSS_STRIKE_HALF + w.halfWidth + 0.2;
+    for (let i = 0; i < w.bosses.length; i++) {
+      const b = w.bosses[i];
+      if (b.alive && b.active && b.attacking) {
+        const slot = this.threats[threatCount] ?? (this.threats[threatCount] = { x: 0, r: 0 });
+        slot.x = b.attackX;
+        slot.r = strikePad;
+        threatCount++;
+      }
+    }
+    if (threatCount === 0) return clamp(x);
+
+    const cands = this.candidates;
+    cands.length = 0;
+    cands.push(clamp(x), lo, hi);
+    for (let i = 0; i < threatCount; i++) {
+      const t = this.threats[i];
+      cands.push(clamp(t.x - t.r), clamp(t.x + t.r));
+    }
+
+    const evalAt = (at: number) => {
+      let s = Math.abs(at - x) + Math.abs(at - sq.x) * 0.1;
+      for (let i = 0; i < threatCount; i++) {
+        const t = this.threats[i];
+        const dx = Math.abs(at - t.x);
+        if (dx < t.r) s += 100 + (t.r - dx) * 10;
+      }
+      return s;
+    };
+
+    let best = cands[0];
+    let bestScore = evalAt(best);
+    for (let i = 1; i < cands.length; i++) {
+      const v = cands[i];
+      const sc = evalAt(v);
+      if (sc < bestScore) {
+        bestScore = sc;
+        best = v;
+      }
+    }
+    return best;
   }
 
   private bossTarget(w: World): number {
     const sq = w.squad;
-    const alive = w.bosses.filter((b) => b.alive);
-    let x = sq.x;
-    if (alive.length) {
-      const focus = alive.find((b) => b.kind === 'hive') ?? alive.reduce((a, b) => (b.hp < a.hp ? b : a));
-      x = focus.x;
+    let hiveX: number | null = null;
+    let lowBossX: number | null = null;
+    let lowHp = Infinity;
+    for (let i = 0; i < w.bosses.length; i++) {
+      const b = w.bosses[i];
+      if (!b.alive) continue;
+      if (b.kind === 'hive' && hiveX === null) hiveX = b.x;
+      if (b.hp < lowHp) {
+        lowHp = b.hp;
+        lowBossX = b.x;
+      }
     }
-    return x;
+    return hiveX ?? lowBossX ?? sq.x;
   }
 
   private runTarget(w: World): number {
     const sq = w.squad;
     if (this.choice !== null && sq.d < this.choiceUntil) return this.choice;
-    let candidates: number[];
-    let scoreFn: (x: number) => number;
-    const wallAhead = w.walls.find((wl) => wl.d0 > sq.d && wl.d0 < sq.d + 30);
-    const gateBeforeWall = wallAhead && w.gates.some((g) => !g.consumed && g.d > sq.d && g.d < wallAhead.d0);
+    const cands = this.candidates;
+    cands.length = 0;
+
+    let wallAhead = null;
+    for (let i = 0; i < w.walls.length; i++) {
+      const wl = w.walls[i];
+      if (wl.d0 > sq.d && wl.d0 < sq.d + 30) {
+        wallAhead = wl;
+        break;
+      }
+    }
+    let gateBeforeWall = false;
+    if (wallAhead) {
+      for (let i = 0; i < w.gates.length; i++) {
+        const g = w.gates[i];
+        if (!g.consumed && g.d > sq.d && g.d < wallAhead.d0) {
+          gateBeforeWall = true;
+          break;
+        }
+      }
+    }
+
+    let best = 0;
+    let bestScore = -Infinity;
     if (wallAhead && !gateBeforeWall && sq.side === 0) {
       // 进墙前：把墙里每一边的门、尸潮、桶都算一遍，选一边
-      candidates = [...HALVES];
-      scoreFn = (x) => this.sideScore(w, x, wallAhead.d0, wallAhead.d1);
+      cands.push(HALVES[0], HALVES[1]);
+      for (let i = 0; i < cands.length; i++) {
+        const sc = this.sideScore(w, cands[i], wallAhead.d0, wallAhead.d1);
+        if (sc > bestScore) {
+          bestScore = sc;
+          best = i;
+        }
+      }
     } else {
-      candidates = [...LANES, ...HALVES].filter((x) => x >= w.lo - 0.01 && x <= w.hi + 0.01);
-      if (candidates.length === 0) candidates = [(w.lo + w.hi) / 2];
-      scoreFn = (x) => this.score(w, x);
+      for (let i = 0; i < RUN_CANDIDATES.length; i++) {
+        const cx = RUN_CANDIDATES[i];
+        if (cx >= w.lo - 0.01 && cx <= w.hi + 0.01) cands.push(cx);
+      }
+      if (cands.length === 0) cands.push((w.lo + w.hi) / 2);
+      for (let i = 0; i < cands.length; i++) {
+        const sc = this.score(w, cands[i]);
+        if (sc > bestScore) {
+          bestScore = sc;
+          best = i;
+        }
+      }
     }
-    const scores = candidates.map(scoreFn);
-    let best = 0;
-    for (let i = 1; i < scores.length; i++) if (scores[i] > scores[best]) best = i;
-    if (this.mistake > 0 && this.rng() < this.mistake) best = Math.floor(this.rng() * candidates.length);
-    this.choice = candidates[best];
+
+    if (this.mistake > 0 && this.rng() < this.mistake) best = Math.floor(this.rng() * cands.length);
+    this.choice = cands[best];
     this.choiceUntil = sq.d + 3;
     return this.choice;
   }
@@ -124,7 +252,8 @@ export class Bot {
 
   private threat(w: World, x: number, d0: number, d1: number, band: number): number {
     let threat = 0;
-    for (const z of w.zombies) {
+    for (let i = 0; i < w.zombies.length; i++) {
+      const z = w.zombies[i];
       if (!z.alive || z.d < d0 || z.d > d1) continue;
       if (Math.abs(z.x - x) < band) threat += THREAT[z.kind] ?? 1;
     }
@@ -134,19 +263,26 @@ export class Bot {
   private score(w: World, x: number): number {
     const sq = w.squad;
     const count = Math.max(1, sq.count);
-    const st = { n: count, tier: sq.tier, rate: sq.rate };
+    const st = this.scratchSt;
+    st.n = count;
+    st.tier = sq.tier;
+    st.rate = sq.rate;
     // 只看最近一组门
     let firstD = Infinity;
-    for (const g of w.gates) if (!g.consumed && g.d > sq.d && g.d < sq.d + 46 && g.d < firstD) firstD = g.d;
-    for (const g of w.gates) {
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
+      if (!g.consumed && g.d > sq.d && g.d < sq.d + 46 && g.d < firstD) firstD = g.d;
+    }
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
       if (g.consumed || Math.abs(g.d - firstD) > 0.5 || x < g.x0 || x > g.x1) continue;
       this.applyGate(g, st);
     }
     if (st.n <= 0) return -100;
     let score = Math.log(this.power(st.n, st.tier, st.rate) / this.power(count, sq.tier, sq.rate)) * 3;
-    // 护送时躲开尸潮等于放它们去撞车，所以几乎不躲
     score -= (this.threat(w, x, sq.d, sq.d + 32, w.halfWidth + 1.5) / count) * 1.2;
-    for (const h of w.hazards) {
+    for (let i = 0; i < w.hazards.length; i++) {
+      const h = w.hazards[i];
       if (h.d1 < sq.d || h.d0 > sq.d + 26) continue;
       if (x + w.halfWidth > h.x0 && x - w.halfWidth < h.x1) score -= 0.6;
     }
@@ -156,7 +292,8 @@ export class Bot {
 
   private barrelScore(w: World, x: number, d0: number, d1: number): number {
     let score = 0;
-    for (const b of w.barrels) {
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
       if (!b.alive || b.d < d0 || b.d > d1 || Math.abs(b.x - x) > 1.8) continue;
       if (b.reward.kind === 'weapon' && b.reward.tier > w.squad.tier) score += 0.5;
       else if (b.reward.kind === 'soldiers') score += 0.2;
@@ -165,14 +302,21 @@ export class Bot {
     return score;
   }
 
-  /** 隔离墙一侧整段的收益 */
+  /** 隔离墙一侧整段的收益（w.gates 已按 d 升序排列） */
   private sideScore(w: World, x: number, d0: number, d1: number): number {
     const sq = w.squad;
     const count = Math.max(1, sq.count);
-    const st = { n: count, tier: sq.tier, rate: sq.rate };
+    const st = this.scratchSt;
+    st.n = count;
+    st.tier = sq.tier;
+    st.rate = sq.rate;
     const side = Math.sign(x);
-    const gates = w.gates.filter((g) => !g.consumed && g.d >= d0 && g.d <= d1 && Math.sign(g.x0 + g.x1) === side).sort((a, b) => a.d - b.d);
-    for (const g of gates) this.applyGate(g, st);
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
+      if (!g.consumed && g.d >= d0 && g.d <= d1 && Math.sign(g.x0 + g.x1) === side) {
+        this.applyGate(g, st);
+      }
+    }
     const threat = this.threat(w, x, d0 - 6, d1, 3);
     st.n -= threat * 0.35;
     if (st.n <= 0) return -100;

@@ -1,5 +1,5 @@
 import { TACTICS, type TacticId } from './game/tactics';
-import { MODES, SKINS, type GameMode, type UpgradeId } from './game/config';
+import { MODES, SKINS, UPGRADES, type GameMode, type UpgradeId } from './game/config';
 
 export interface SaveData {
   /** 冲锋当前关 */
@@ -31,6 +31,14 @@ export interface SaveData {
 
 const KEY = 'army-rush.save.v1';
 
+const UPGRADE_MAX: Record<UpgradeId, number> = UPGRADES.reduce(
+  (acc, u) => {
+    acc[u.id] = u.max;
+    return acc;
+  },
+  {} as Record<UpgradeId, number>,
+);
+
 function defaults(): SaveData {
   return {
     level: 1,
@@ -56,44 +64,57 @@ function defaults(): SaveData {
   };
 }
 
+function isPlainObject(val: unknown): val is Record<string, unknown> {
+  return typeof val === 'object' && val !== null && !Array.isArray(val);
+}
+
 export function loadSave(): SaveData {
   const base = defaults();
   try {
     const raw = localStorage.getItem(KEY);
     if (!raw) return base;
-    const data = JSON.parse(raw) as Partial<SaveData>;
-    // 护送、Boss 连战、每日挑战已经合并掉了，老存档停在那些模式的回到防线
-    if (!MODES.some((m) => m.id === data.mode)) delete data.mode;
-    const cleanInt = (val: unknown, fallback: number, min = 0) =>
-      typeof val === 'number' && Number.isFinite(val) ? Math.max(min, Math.floor(val)) : fallback;
-    const rawUp = (data.upgrades ?? {}) as Partial<Record<UpgradeId, number>>;
+    const parsed: unknown = JSON.parse(raw);
+    if (!isPlainObject(parsed)) return base;
+    const data = parsed as Partial<SaveData>;
+    const cleanInt = (val: unknown, fallback: number, min = 0, max = Number.MAX_SAFE_INTEGER) =>
+      typeof val === 'number' && Number.isFinite(val) ? Math.min(max, Math.max(min, Math.floor(val))) : fallback;
+    const rawUp = isPlainObject(data.upgrades) ? (data.upgrades as Partial<Record<UpgradeId, number>>) : {};
     const upgrades: Record<UpgradeId, number> = {
-      soldiers: cleanInt(rawUp.soldiers, 0),
-      damage: cleanInt(rawUp.damage, 0),
-      rate: cleanInt(rawUp.rate, 0),
-      income: cleanInt(rawUp.income, 0),
-      agility: cleanInt(rawUp.agility, 0),
+      soldiers: cleanInt(rawUp.soldiers, 0, 0, UPGRADE_MAX.soldiers),
+      damage: cleanInt(rawUp.damage, 0, 0, UPGRADE_MAX.damage),
+      rate: cleanInt(rawUp.rate, 0, 0, UPGRADE_MAX.rate),
+      income: cleanInt(rawUp.income, 0, 0, UPGRADE_MAX.income),
+      agility: cleanInt(rawUp.agility, 0, 0, UPGRADE_MAX.agility),
     };
+    const rawOwned = Array.isArray(data.owned)
+      ? [...new Set(data.owned.filter((s): s is string => typeof s === 'string' && s.trim().length > 0))]
+      : [];
+    const owned = rawOwned.length > 0 ? rawOwned : base.owned;
+    const rawSkin = typeof data.skin === 'string' && data.skin.trim().length > 0 ? data.skin : '';
+    const skin = rawSkin && owned.includes(rawSkin) ? rawSkin : owned[0];
+    // 护送、Boss 连战、每日挑战已经合并掉了，老存档停在那些模式的回到防线
+    const mode = MODES.some((m) => m.id === data.mode) ? (data.mode as GameMode) : base.mode;
     return {
-      ...base,
-      ...data,
-      level: cleanInt(data.level, base.level, 1),
-      defenseLevel: cleanInt(data.defenseLevel, base.defenseLevel, 1),
-      defenseBest: cleanInt(data.defenseBest, base.defenseBest, 0),
+      level: cleanInt(data.level, base.level, 1, 9999),
+      defenseLevel: cleanInt(data.defenseLevel, base.defenseLevel, 1, 9999),
+      defenseBest: cleanInt(data.defenseBest, base.defenseBest, 0, 9999),
       endlessBest: cleanInt(data.endlessBest, base.endlessBest, 0),
       carnageBest: cleanInt(data.carnageBest, base.carnageBest, 0),
+      carnageAdmin: data.carnageAdmin === true,
+      mode,
       coins: cleanInt(data.coins, base.coins, 0),
       gems: cleanInt(data.gems, base.gems, 0),
-      best: cleanInt(data.best, base.best, 0),
+      upgrades,
+      skin,
+      owned,
+      best: cleanInt(data.best, base.best, 0, 9999),
       kills: cleanInt(data.kills, base.kills, 0),
       wins: cleanInt(data.wins, base.wins, 0),
-      carnageAdmin: data.carnageAdmin === true,
-      tactic: TACTICS.some((t) => t.id === data.tactic) ? data.tactic! : base.tactic,
-      motion: ['system', 'reduced', 'full'].includes(data.motion ?? '') ? data.motion! : base.motion,
-      sensitivity: [0.75, 1, 1.3].includes(data.sensitivity ?? 0) ? data.sensitivity! : base.sensitivity,
-      upgrades,
-      skin: typeof data.skin === 'string' && data.skin ? data.skin : base.skin,
-      owned: Array.isArray(data.owned) && data.owned.length ? data.owned : base.owned,
+      sound: typeof data.sound === 'boolean' ? data.sound : base.sound,
+      haptics: typeof data.haptics === 'boolean' ? data.haptics : base.haptics,
+      tactic: TACTICS.some((t) => t.id === data.tactic) ? (data.tactic as TacticId) : base.tactic,
+      motion: data.motion === 'system' || data.motion === 'reduced' || data.motion === 'full' ? data.motion : base.motion,
+      sensitivity: data.sensitivity === 0.75 || data.sensitivity === 1 || data.sensitivity === 1.3 ? data.sensitivity : base.sensitivity,
     };
   } catch {
     return base;

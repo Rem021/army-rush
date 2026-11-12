@@ -19,6 +19,7 @@ import {
   MAX_SOLDIERS_SIM,
   SQUAD_SPEED,
   SQUAD_STEER,
+  THROWER_MELEE_TIME,
   THROW_FLIGHT,
   THROW_INTERVAL,
   THROW_RADIUS,
@@ -35,6 +36,8 @@ import {
   type BossKind,
   type ZombieKind,
 } from './config';
+import { segCircle, SpatialBins } from './collision';
+import { computeFormation, formationLaneCap, slotX, slotZ, type FormationParams } from './formation';
 import {
   DEFENSE_TUNING,
   expectedDefenseDps,
@@ -58,16 +61,14 @@ import { mulberry32, randRange, type Rng } from './rng';
 
 /** 每秒最多生成的子弹数，超出时把伤害合并到少量子弹上 */
 const MAX_SHOTS_PER_SEC = 600;
-const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5));
 const STEP = 1 / 60;
 /** 子弹碰撞时丧尸纵向分桶的宽度（米） */
 const Z_BIN = 2;
-/** 地刺：在上面待够这么久的士兵，有一半会死 */
+/** 地刺：在上面待够这么久的士兵，按概率判定伤亡；每块地刺每名士兵独立判定一次 */
 const SPIKE_EXPOSURE = 0.12;
 const SPIKE_LETHALITY = 0.3;
 const SAW_RADIUS = 0.8;
 const STRIKE_RADIUS = 2.8;
-/** 射速门叠加上限 */
 /** 本局射速加成（射速门、射速箱）最多到 180%，不会一局就翻好几倍 */
 const MAX_RATE_BONUS = 1.8;
 /** 防线门道堵车时，前后两样东西之间至少隔多远 */
@@ -76,7 +77,13 @@ const JAM_GAP = 7;
 const DEFENSE_ZOMBIE_SPEED = 1.7;
 
 export interface CarnageRocket {
-  x0: number; d0: number; x: number; d: number; t: number; T: number; damage: number;
+  x0: number;
+  d0: number;
+  x: number;
+  d: number;
+  t: number;
+  T: number;
+  damage: number;
 }
 
 export interface Soldier {
@@ -86,9 +93,11 @@ export interface Soldier {
   phase: number;
   /** 0→1 出生弹出动画 */
   spawn: number;
-  /** 0..1，过地刺时决定生死 */
+  /** 0..1，随机种子特征 */
   luck: number;
   spike: number;
+  /** 上一次触发判定的地刺 id，防止首块地刺幸存者在后续地刺上永久免疫 */
+  lastSpikeId?: number;
 }
 
 export interface Bullet {
@@ -148,7 +157,6 @@ export interface Zombie {
   reward?: Reward;
   /** 尸巢孵出来的，记录母体 id */
   owner: number;
-  /** 已经从队伍身边漏过去（护送模式会去追大巴） */
   /** 一只顶几只（超大尸潮折算），影响杀伤 */
   weight: number;
 }
@@ -188,6 +196,8 @@ export interface Boss {
   pair: boolean;
   /** 半血以后狂暴：出手更快、走得更快 */
   enraged: boolean;
+  /** 投弹屠夫切近战是否已弹提示 */
+  meleeWarned?: boolean;
 }
 
 export interface Projectile {
@@ -211,7 +221,6 @@ export interface Wall extends WallSpec {
   id: number;
 }
 
-
 export interface Strike {
   id: number;
   x: number;
@@ -228,8 +237,9 @@ export type GameEvent =
   | { type: 'gem'; x: number; d: number; amount: number }
   /** Boss 半血狂暴 */
   | { type: 'bossEnrage'; boss: Boss }
-  /** 爆裂弹/电磁弹溅射 */
+  /** 狂潮火箭/超载轰炸 */
   | { type: 'carnageBlast'; x: number; d: number; r: number; nova: boolean }
+  /** 爆裂弹/电磁弹溅射 */
   | { type: 'splash'; x: number; d: number; r: number }
   | { type: 'gateUp'; gate: Gate }
   | { type: 'gatePass'; gate: Gate; before: number; after: number }
@@ -277,6 +287,12 @@ export interface WorldOptions {
 
 export type WorldState = 'run' | 'boss' | 'won' | 'lost';
 
+interface QueueEntry {
+  d: number;
+  r: number;
+  item: Gate | Barrel;
+}
+
 export class World {
   readonly spec: LevelSpec;
   state: WorldState = 'run';
@@ -307,18 +323,17 @@ export class World {
   front = 0;
   back = 0;
   /** 平滑后的阵型参数 */
-  private form = { sx: 0, sz: 1, shift: 0, gap: FORMATION_SPACING };
+  private form: FormationParams = { sx: 0, sz: 1, shift: 0, gap: FORMATION_SPACING };
+  private readonly formScratch: FormationParams = { sx: 0, sz: 1, shift: 0, gap: FORMATION_SPACING };
   /** 当前队伍中心可去的范围 */
   lo = -TRACK_HALF;
   hi = TRACK_HALF;
 
   private readonly opts: WorldOptions;
   /** 子弹碰撞的预筛：这一步射程内的门和桶、按纵向 2 米分桶的丧尸 */
-  private hitGates: Gate[] = [];
-  private hitBarrels: Barrel[] = [];
-  private zBins: Zombie[][] = [];
-  private zBinLo = 0;
-  private zMaxR = 1;
+  private readonly hitGates: Gate[] = [];
+  private readonly hitBarrels: Barrel[] = [];
+  private readonly zSpatial = new SpatialBins<Zombie>(Z_BIN);
   /** 用完的子弹对象，下次开枪直接复用，少给垃圾回收添活 */
   private readonly bulletPool: Bullet[] = [];
   /** 子弹种类（局外射速升级进化） */
@@ -326,8 +341,15 @@ export class World {
   private readonly rng: Rng;
   private shotAcc = 0;
   private nextId = 1;
+  private readonly banners: BannerSpec[] = [];
   private bannerIdx = 0;
-  private near: Zombie[] = [];
+  private readonly near: Zombie[] = [];
+  private readonly nearHazards: Hazard[] = [];
+  private readonly gateGroups = new Map<number, Gate[]>();
+  private readonly gateListPool: Gate[][] = [];
+  private readonly queuePool: QueueEntry[] = [];
+  private readonly queueScratch: QueueEntry[] = [];
+  private readonly carnageTargets: Zombie[] = [];
   private pruneT = 0;
   private readonly zombieSpeed: number;
   private damage: number;
@@ -339,114 +361,22 @@ export class World {
   private queueV = 0;
   private streamAcc = 0;
   readonly rockets: CarnageRocket[] = [];
-  readonly carnage = { shells: 120, batteries: 0, recruits: 0, ammoPickups: 0, charge: 0, combo: 0, bestCombo: 0, lastKill: -10, burstUntil: 0, clears: 0 };
+  readonly carnage = {
+    shells: 120,
+    batteries: 0,
+    recruits: 0,
+    ammoPickups: 0,
+    charge: 0,
+    combo: 0,
+    bestCombo: 0,
+    lastKill: -10,
+    burstUntil: 0,
+    clears: 0,
+  };
   private rocketAt = 3;
   private novaActive = false;
   private carnageStage = 0;
-  private carnageBlast(x: number, d: number, r: number, damage: number, nova = false) {
-    this.events.push({ type: 'carnageBlast', x, d, r, nova });
-    for (const z of this.zombies) {
-      if (z.alive && Math.hypot(z.x - x, z.d - d) < r + z.r) this.damageZombie(z, damage);
-    }
-    for (const b of this.bosses) {
-      if (b.alive && Math.hypot(b.x - x, b.d - d) < r + b.r) this.damageBoss(b, damage * 2);
-    }
-  }
 
-  /** 蓄满后手动释放，不能在结算中刷连击或重复释放。 */
-  releaseNova(): boolean {
-    if (this.spec.mode !== 'carnage' || !['run', 'boss'].includes(this.state) || this.carnage.charge < 100) return false;
-    this.carnage.charge = 0;
-    this.carnage.clears++;
-    this.carnage.burstUntil = this.time + 6;
-    this.novaActive = true;
-    this.carnageBlast(0, 24, 50, 4500, true);
-    this.novaActive = false;
-    this.events.push({ type: 'banner', text: '超载 6 秒 · 双倍弹幕！', tone: 'info' });
-    return true;
-  }
-
-  private runCarnage(dt: number) {
-    const def = this.defense!;
-    const stage = Math.min(2, Math.floor(this.time / 30));
-    if (stage > this.carnageStage) {
-      this.carnageStage = stage;
-      this.squad.tier = 4;
-      this.events.push({ type: 'banner', text: stage === 1 ? '重炮增援 · 火箭连发' : '红潮压境 · 全弹装填', tone: 'boss' });
-    }
-    let alive = this.zombies.reduce((n, z) => n + Number(z.alive), 0);
-    const spawnWave = (count: number) => {
-      const n = Math.min(count, Math.max(0, 650 - alive));
-      for (let i = 0; i < n; i++) {
-        const kind: ZombieKind = 'walker';
-        const z = this.makeZombie({ kind, x: -3.7 + (i % 10) * 0.35,
-          d: def.spawnD + Math.floor(i / 10) * 0.54, hp: (9 + stage * 5) * ZOMBIES[kind].hp });
-        z.active = true;
-        this.zombies.push(z);
-      }
-      alive += n;
-      if (n) this.version++;
-    };
-    while (this.spawnIdx < def.spawns.length && def.spawns[this.spawnIdx].t <= this.time) {
-      const sp = def.spawns[this.spawnIdx++];
-      if (sp.wave) spawnWave(sp.wave);
-      if (sp.boss) {
-        const b = this.makeBoss(sp.boss, sp.t === 0 ? 28 : 30);
-        b.final = sp.t >= def.duration;
-        b.active = true;
-        this.bosses.push(b);
-        this.events.push({ type: 'bossStart', bosses: [b] });
-        this.version++;
-      }
-    }
-    if (this.time < def.duration) {
-      this.streamAcc += dt * (10 + stage * 4);
-      if (this.streamAcc >= 8) { spawnWave(8); this.streamAcc -= 8; }
-    }
-    if (this.time > this.carnage.lastKill + 2.5) this.carnage.combo = 0;
-    // 弹药来自黄色 +99 牌和多管炮架；实体火箭飞行后才结算爆炸。
-    for (let i = this.rockets.length - 1; i >= 0; i--) {
-      const rocket = this.rockets[i];
-      rocket.t += dt;
-      if (rocket.t >= rocket.T) {
-        this.carnageBlast(rocket.x, rocket.d, 4, rocket.damage);
-        this.rockets.splice(i, 1);
-      }
-    }
-    if (this.time >= this.rocketAt && this.carnage.shells > 0) {
-      this.rocketAt = this.time + (this.time < this.carnage.burstUntil ? 0.32 : 1.5);
-      const boss = this.bosses.find((b) => b.alive);
-      const targets = this.zombies.filter((z) => z.alive && z.d < 43);
-      const count = Math.min(3 + Math.min(3, this.carnage.batteries), this.carnage.shells);
-      if (targets.length || boss) for (let i = 0; i < count; i++) {
-        const target = i === 0 && boss ? boss : targets[Math.floor(this.rng() * targets.length)] ?? boss!;
-        this.rockets.push({ x0: this.squad.x + (i - count / 2) * 0.18, d0: this.squad.d + this.front,
-          x: target.x, d: target.d, t: 0, T: 0.55 + i * 0.04, damage: 280 + stage * 140 });
-        this.carnage.shells--;
-      }
-    }
-    this.moveCarnageQueue(dt);
-  }
-
-  private moveCarnageQueue(dt: number) {
-    // 蓝色增兵门独立流动；黄色弹药牌由中央 504 炮组挡住。
-    const battery = this.barrels.find((b) => b.alive && b.carnage === 'battery');
-    const gold = this.gates.filter((g) => !g.consumed && g.carnage === 'ammo');
-    let floor = battery ? battery.d + 3.4 : -Infinity;
-    for (const g of gold) {
-      g.d = Math.max(floor, g.d - dt * 3.4);
-      floor = g.d + 3.4;
-    }
-    for (const g of this.gates) if (g.carnage === 'recruit') g.d -= dt * 3.4;
-    // 右列炮架在桥头排队，前一个打碎后下一个补位。
-    let podFloor = 18;
-    for (const b of this.barrels) {
-      if (!b.alive) continue;
-      b.d = Math.max(b.carnage === 'battery' ? 18 : podFloor, b.d - dt * 3.4);
-      if (b.carnage === 'pod') podFloor = b.d + 3;
-    }
-
-  }
   constructor(spec: LevelSpec, opts: WorldOptions) {
     this.spec = spec;
     this.opts = opts;
@@ -454,7 +384,10 @@ export class World {
     // 防线里丧尸跑得快得多，直接冲到脸上
     this.zombieSpeed = spec.mode === 'carnage' ? 0.72 : spec.defense ? DEFENSE_ZOMBIE_SPEED : 1;
     this.damage = opts.damageMult;
-    this.ammo = spec.mode === 'carnage' ? { name: '黄金穿透弹', pierce: 4, splash: 1.6, splashDmg: 0.8, color: 0xffcd3e } : AMMO[Math.max(0, Math.min(AMMO.length - 1, opts.ammo ?? 0))];
+    this.ammo =
+      spec.mode === 'carnage'
+        ? { name: '黄金穿透弹', pierce: 4, splash: 1.6, splashDmg: 0.8, color: 0xffcd3e }
+        : AMMO[Math.max(0, Math.min(AMMO.length - 1, opts.ammo ?? 0))];
     this.endless = opts.endless ?? null;
     this.defense = spec.defense;
     this.gates = [];
@@ -475,7 +408,7 @@ export class World {
     this.layout(1);
   }
 
-  /** 把一段关卡内容加进世界（开局和无尽模式续生成都用） */
+  /** 把一段关卡内容加进世界（开局和无尽模式续生成都用），不污染传入的 LevelSpec */
   private addContent(spec: Pick<LevelSpec, 'gates' | 'barrels' | 'zombies' | 'hazards' | 'walls' | 'banners'>) {
     // 局外升级：加人门按兵力进化放大；开局枪已经比武器箱给的好，这个箱子改成给兵（不白打，也不越过本关的武器上限）
     const bonus = this.opts.gateBonus ?? 1;
@@ -485,18 +418,178 @@ export class World {
       this.gates.push({ ...g, value, id: this.nextId++, hits: 0, consumed: false, taken: false, bump: 0 });
     }
     for (const b of spec.barrels) {
-      const reward: Reward = b.reward.kind === 'weapon' && b.reward.tier <= start ? { kind: 'soldiers', amount: 1 + Math.ceil(this.spec.level / 3) } : b.reward;
+      const reward: Reward =
+        b.reward.kind === 'weapon' && b.reward.tier <= start ? { kind: 'soldiers', amount: 1 + Math.ceil(this.spec.level / 3) } : b.reward;
       const look = reward !== b.reward && b.look === 'tires' ? 'armor' : b.look;
       this.barrels.push({ ...b, reward, look, id: this.nextId++, maxHp: b.hp, alive: true, bump: 0, armed: false, priced: false });
     }
     for (const z of spec.zombies) this.zombies.push(this.makeZombie(z));
     for (const h of spec.hazards) this.hazards.push({ ...h, id: this.nextId++, phase: this.rng() * 6, x: (h.x0 + h.x1) / 2 });
     for (const w of spec.walls) this.walls.push({ ...w, id: this.nextId++ });
-    if (spec !== this.spec) {
-      this.spec.banners.push(...spec.banners);
-      this.spec.banners.sort((a, b) => a.d - b.d);
+    if (spec.banners.length > 0) {
+      this.banners.push(...spec.banners);
+      this.banners.sort((a, b) => a.d - b.d);
     }
     this.version++;
+  }
+
+  private carnageBlast(x: number, d: number, r: number, damage: number, nova = false) {
+    this.events.push({ type: 'carnageBlast', x, d, r, nova });
+    for (let i = 0; i < this.zombies.length; i++) {
+      const z = this.zombies[i];
+      if (!z.alive) continue;
+      const dx = z.x - x;
+      const dd = z.d - d;
+      const lim = r + z.r;
+      if (dx * dx + dd * dd < lim * lim) this.damageZombie(z, damage);
+    }
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
+      if (!b.alive) continue;
+      const dx = b.x - x;
+      const dd = b.d - d;
+      const lim = r + b.r;
+      if (dx * dx + dd * dd < lim * lim) this.damageBoss(b, damage * 2);
+    }
+  }
+
+  /** 蓄满后手动释放，不能在结算中刷连击或重复释放。 */
+  releaseNova(): boolean {
+    if (this.spec.mode !== 'carnage' || (this.state !== 'run' && this.state !== 'boss') || this.carnage.charge < 100) return false;
+    this.carnage.charge = 0;
+    this.carnage.clears++;
+    this.carnage.burstUntil = this.time + 6;
+    this.novaActive = true;
+    this.carnageBlast(0, 24, 50, 4500, true);
+    this.novaActive = false;
+    this.events.push({ type: 'banner', text: '超载 6 秒 · 双倍弹幕！', tone: 'info' });
+    return true;
+  }
+
+  private spawnCarnageWave(count: number, stage: number, alive: number): number {
+    const def = this.defense!;
+    const n = Math.min(count, Math.max(0, 650 - alive));
+    if (n <= 0) return alive;
+    const hp = (9 + stage * 5) * ZOMBIES.walker.hp;
+    for (let i = 0; i < n; i++) {
+      const z = this.makeZombie({
+        kind: 'walker',
+        x: -3.7 + (i % 10) * 0.35,
+        d: def.spawnD + Math.floor(i / 10) * 0.54,
+        hp,
+      });
+      z.active = true;
+      this.zombies.push(z);
+    }
+    this.version++;
+    return alive + n;
+  }
+
+  private runCarnage(dt: number) {
+    const def = this.defense!;
+    const stage = Math.min(2, Math.floor(this.time / 30));
+    if (stage > this.carnageStage) {
+      this.carnageStage = stage;
+      this.squad.tier = 4;
+      if (stage === 2) this.carnage.shells = Math.min(9999, this.carnage.shells + 99);
+      this.events.push({ type: 'banner', text: stage === 1 ? '重炮增援 · 火箭连发' : '红潮压境 · 全弹装填', tone: 'boss' });
+    }
+    let alive = 0;
+    for (let i = 0; i < this.zombies.length; i++) if (this.zombies[i].alive) alive++;
+
+    while (this.spawnIdx < def.spawns.length && def.spawns[this.spawnIdx].t <= this.time) {
+      const sp = def.spawns[this.spawnIdx++];
+      if (sp.wave) alive = this.spawnCarnageWave(sp.wave, stage, alive);
+      if (sp.boss) {
+        const b = this.makeBoss(sp.boss, sp.t === 0 ? 28 : 30);
+        b.final = sp.t >= def.duration;
+        b.active = true;
+        this.bosses.push(b);
+        this.events.push({ type: 'bossStart', bosses: [b] });
+        this.version++;
+      }
+    }
+    if (this.time < def.duration) {
+      this.streamAcc += dt * (10 + stage * 4);
+      if (this.streamAcc >= 8) {
+        alive = this.spawnCarnageWave(8, stage, alive);
+        this.streamAcc -= 8;
+      }
+    }
+    if (this.time > this.carnage.lastKill + 2.5) this.carnage.combo = 0;
+    // 弹药来自黄色 +99 牌和多管炮架；实体火箭飞行后才结算爆炸。
+    for (let i = this.rockets.length - 1; i >= 0; i--) {
+      const rocket = this.rockets[i];
+      rocket.t += dt;
+      if (rocket.t >= rocket.T) {
+        this.carnageBlast(rocket.x, rocket.d, 4, rocket.damage);
+        this.rockets[i] = this.rockets[this.rockets.length - 1];
+        this.rockets.pop();
+      }
+    }
+    if (this.time >= this.rocketAt && this.carnage.shells > 0) {
+      this.rocketAt = this.time + (this.time < this.carnage.burstUntil ? 0.32 : 1.5);
+      let boss: Boss | null = null;
+      for (let i = 0; i < this.bosses.length; i++) {
+        if (this.bosses[i].alive) {
+          boss = this.bosses[i];
+          break;
+        }
+      }
+      const targets = this.carnageTargets;
+      targets.length = 0;
+      for (let i = 0; i < this.zombies.length; i++) {
+        const z = this.zombies[i];
+        if (z.alive && z.d < 43) targets.push(z);
+      }
+      const count = Math.min(3 + Math.min(3, this.carnage.batteries), this.carnage.shells);
+      if (targets.length > 0 || boss) {
+        for (let i = 0; i < count; i++) {
+          const target = i === 0 && boss ? boss : targets.length > 0 ? targets[Math.floor(this.rng() * targets.length)] : boss!;
+          this.rockets.push({
+            x0: this.squad.x + (i - count / 2) * 0.18,
+            d0: this.squad.d + this.front,
+            x: target.x,
+            d: target.d,
+            t: 0,
+            T: 0.55 + i * 0.04,
+            damage: 280 + stage * 140,
+          });
+          this.carnage.shells--;
+        }
+      }
+    }
+    this.moveCarnageQueue(dt);
+  }
+
+  private moveCarnageQueue(dt: number) {
+    const step = dt * 3.4;
+    // 右列炮架在桥头排队，前一个打碎后下一个补位；同时记录中央 504 炮组位置。
+    let battery: Barrel | null = null;
+    let podFloor = 18;
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
+      if (!b.alive) continue;
+      if (b.carnage === 'battery') {
+        b.d = Math.max(18, b.d - step);
+        if (!battery) battery = b;
+      } else {
+        b.d = Math.max(podFloor, b.d - step);
+        if (b.carnage === 'pod') podFloor = b.d + 3;
+      }
+    }
+    // 蓝色增兵门独立流动；黄色弹药牌由中央 504 炮组挡住（gates 按 d 递增生成，单趟遍历零分配）。
+    let floor = battery ? battery.d + 3.4 : -Infinity;
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
+      if (g.consumed) continue;
+      if (g.carnage === 'ammo') {
+        g.d = Math.max(floor, g.d - step);
+        floor = g.d + 3.4;
+      } else if (g.carnage === 'recruit') {
+        g.d -= step;
+      }
+    }
   }
 
   private makeBoss(b: BossSpec, d: number): Boss {
@@ -530,6 +623,7 @@ export class World {
       final: !this.defense,
       pair: false,
       enraged: false,
+      meleeWarned: false,
     };
   }
 
@@ -617,8 +711,8 @@ export class World {
       }
     }
     if (this.endless && sq.d + 170 > this.endless.until) this.extend();
-    while (this.bannerIdx < this.spec.banners.length && this.spec.banners[this.bannerIdx].d <= sq.d) {
-      const b = this.spec.banners[this.bannerIdx++];
+    while (this.bannerIdx < this.banners.length && this.banners[this.bannerIdx].d <= sq.d) {
+      const b = this.banners[this.bannerIdx++];
       this.events.push({ type: 'banner', text: b.text, tone: b.tone });
     }
 
@@ -656,8 +750,7 @@ export class World {
     const def = this.defense!;
     const L = this.spec.level;
     const p = at ?? Math.min(1, this.time / def.duration);
-    const expected = expectedDefenseDps(L, p);
-    return expected;
+    return expectedDefenseDps(L, p);
   }
 
   private runDefense(dt: number) {
@@ -690,7 +783,12 @@ export class World {
           const row = Math.floor(i / cols);
           const col = i % cols;
           const kind = this.streamKind(p);
-          const z = this.makeZombie({ kind, x: w0 + (col + 0.5 + (row % 2) * 0.3) * ((w1 - w0) / cols), d: d + row * 0.9, hp: hp * ZOMBIES[kind].hp });
+          const z = this.makeZombie({
+            kind,
+            x: w0 + (col + 0.5 + (row % 2) * 0.3) * ((w1 - w0) / cols),
+            d: d + row * 0.9,
+            hp: hp * ZOMBIES[kind].hp,
+          });
           z.active = true;
           this.zombies.push(z);
         }
@@ -699,7 +797,11 @@ export class World {
         // 落在刷新点前面一截，从天而降时镜头看得见（不被顶上的血条挡住）
         const b = this.makeBoss(sp.boss, d - 22);
         const final = sp.t >= def.duration - 0.01;
-        const pair = spawns.filter((x) => x.boss && Math.abs(x.t - sp.t) <= 2).length > 1;
+        let bossSiblings = 0;
+        for (let i = 0; i < spawns.length; i++) {
+          if (spawns[i].boss && Math.abs(spawns[i].t - sp.t) <= 2) bossSiblings++;
+        }
+        const pair = bossSiblings > 1;
         b.final = final;
         b.pair = pair;
         const pairFactor = pair ? Math.max(0.3, 0.6 - 0.06 * Math.max(0, L - 5)) : 1;
@@ -716,8 +818,14 @@ export class World {
     }
 
     // 尸潮道：源源不断。每秒刷出的总血量 = 压力 × 参考火力，Boss 在场时减弱一些
-    const bossAlive = this.bosses.some((b) => b.alive);
-    const finalBossAlive = this.bosses.some((b) => b.alive && b.final);
+    let bossAlive = false;
+    let finalBossAlive = false;
+    for (let i = 0; i < this.bosses.length; i++) {
+      if (this.bosses[i].alive) {
+        bossAlive = true;
+        if (this.bosses[i].final) finalBossAlive = true;
+      }
+    }
     if (this.time > DEFENSE_TUNING.streamDelay && !(this.time > def.duration && !bossAlive)) {
       const rate = DEFENSE_TUNING.streamRate(L, p);
       this.streamAcc += rate * dt;
@@ -725,7 +833,12 @@ export class World {
       while (this.streamAcc >= 1) {
         this.streamAcc -= 1;
         const kind = this.streamKind(p);
-        const z = this.makeZombie({ kind, x: ex + randRange(this.rng, -TRACK_HALF / 2 + 0.6, TRACK_HALF / 2 - 0.6), d: def.spawnD + randRange(this.rng, 0, 2), hp: hp * ZOMBIES[kind].hp });
+        const z = this.makeZombie({
+          kind,
+          x: ex + randRange(this.rng, -TRACK_HALF / 2 + 0.6, TRACK_HALF / 2 - 0.6),
+          d: def.spawnD + randRange(this.rng, 0, 2),
+          hp: hp * ZOMBIES[kind].hp,
+        });
         z.active = true;
         this.zombies.push(z);
         added = true;
@@ -762,7 +875,8 @@ export class World {
     if (this.time > 1) this.queueV += (def.conveyor - this.queueV) * Math.min(1, dt * 6);
     const v = this.queueV * dt;
     let blocker: Barrel | null = null;
-    for (const b of this.barrels) {
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
       if (!b.alive || !b.block) continue;
       if (!blocker || b.d < blocker.d) blocker = b;
       // 血量在关卡里已经写好（一个比一个高很多），出现时看到的数字之后不会再跳
@@ -778,24 +892,43 @@ export class World {
       }
     }
     if (!blocker) {
-      for (const g of this.gates) g.d -= v;
-      for (const b of this.barrels) if (b.alive) b.d -= v;
+      for (let i = 0; i < this.gates.length; i++) this.gates[i].d -= v;
+      for (let i = 0; i < this.barrels.length; i++) if (this.barrels[i].alive) this.barrels[i].d -= v;
       return;
     }
-    // 障碍前面的东西照常往前；后面的继续滑，挤到障碍身后排成一串（像堵车），放行时一起冲过来
-    const queue: { d: number; r: number; item: Gate | Barrel }[] = [];
-    for (const g of this.gates) {
+    // 障碍前面的东西照常往前；后面的继续滑，挤到障碍身后排成一串（像堵车），复用池对象零分配
+    const queue = this.queueScratch;
+    queue.length = 0;
+    let poolIdx = 0;
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
       if (g.d < blocker.d) g.d -= v;
-      else queue.push({ d: g.d, r: 0, item: g });
+      else {
+        const entry = this.queuePool[poolIdx] ?? (this.queuePool[poolIdx] = { d: 0, r: 0, item: g });
+        entry.d = g.d;
+        entry.r = 0;
+        entry.item = g;
+        queue.push(entry);
+        poolIdx++;
+      }
     }
-    for (const b of this.barrels) {
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
       if (!b.alive || b === blocker) continue;
       if (b.d < blocker.d) b.d -= v;
-      else queue.push({ d: b.d, r: b.r, item: b });
+      else {
+        const entry = this.queuePool[poolIdx] ?? (this.queuePool[poolIdx] = { d: 0, r: 0, item: b });
+        entry.d = b.d;
+        entry.r = b.r;
+        entry.item = b;
+        queue.push(entry);
+        poolIdx++;
+      }
     }
     queue.sort((a, b) => a.d - b.d);
     let floor = blocker.d + blocker.r + JAM_GAP;
-    for (const q of queue) {
+    for (let i = 0; i < queue.length; i++) {
+      const q = queue[i];
       const d = Math.max(floor + q.r, q.d - v);
       q.item.d = d;
       floor = d + q.r + JAM_GAP;
@@ -832,30 +965,83 @@ export class World {
     if (this.pruneT < 2) return;
     this.pruneT = 0;
     const cut = this.squad.d - 40;
-    const n = this.gates.length + this.barrels.length + this.zombies.length + this.hazards.length + this.walls.length;
+    const beforeTotal = this.gates.length + this.barrels.length + this.zombies.length + this.hazards.length + this.walls.length;
     const stationary = !!this.defense || this.spec.mode === 'carnage';
-    let deadGates = 0;
-    for (let i = this.gates.length - 1; i >= 0; i--) {
+
+    // O(N) 原地压缩：保留最新死亡动画实体的同时零 splice 搬移
+    let totalConsumedGates = 0;
+    if (stationary) {
+      for (let i = 0; i < this.gates.length; i++) if (this.gates[i].consumed && this.gates[i].d > cut) totalConsumedGates++;
+    }
+    let dropGates = Math.max(0, totalConsumedGates - 6);
+    let gw = 0;
+    for (let i = 0; i < this.gates.length; i++) {
       const g = this.gates[i];
-      if (g.d <= cut || (stationary && g.consumed && ++deadGates > 6)) this.gates.splice(i, 1);
-    }
-    let deadBarrels = 0;
-    for (let i = this.barrels.length - 1; i >= 0; i--) {
-      const b = this.barrels[i];
-      if (b.d <= cut || (stationary && !b.alive && ++deadBarrels > 6)) this.barrels.splice(i, 1);
-    }
-    if (this.defense) {
-      let deadZombies = 0;
-      for (let i = this.zombies.length - 1; i >= 0; i--) {
-        if (!this.zombies[i].alive && ++deadZombies > 24) this.zombies.splice(i, 1);
+      if (g.d <= cut) continue;
+      if (stationary && g.consumed && dropGates > 0) {
+        dropGates--;
+        continue;
       }
-    } else {
-      this.zombies = this.zombies.filter((z) => z.alive || (this.spec.mode !== 'carnage' && z.d > cut));
-      this.zombies = this.zombies.filter((z) => z.d > cut - 20);
+      this.gates[gw++] = g;
     }
-    this.hazards = this.hazards.filter((h) => h.d1 > cut);
-    this.walls = this.walls.filter((w) => w.d1 > cut);
-    if (n !== this.gates.length + this.barrels.length + this.zombies.length + this.hazards.length + this.walls.length) this.version++;
+    this.gates.length = gw;
+
+    let totalDeadBarrels = 0;
+    if (stationary) {
+      for (let i = 0; i < this.barrels.length; i++) if (!this.barrels[i].alive && this.barrels[i].d > cut) totalDeadBarrels++;
+    }
+    let dropBarrels = Math.max(0, totalDeadBarrels - 6);
+    let bw = 0;
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
+      if (b.d <= cut) continue;
+      if (stationary && !b.alive && dropBarrels > 0) {
+        dropBarrels--;
+        continue;
+      }
+      this.barrels[bw++] = b;
+    }
+    this.barrels.length = bw;
+
+    if (this.defense) {
+      let totalDeadZombies = 0;
+      for (let i = 0; i < this.zombies.length; i++) if (!this.zombies[i].alive) totalDeadZombies++;
+      let dropZombies = Math.max(0, totalDeadZombies - 24);
+      let zw = 0;
+      for (let i = 0; i < this.zombies.length; i++) {
+        const z = this.zombies[i];
+        if (!z.alive && dropZombies > 0) {
+          dropZombies--;
+          continue;
+        }
+        this.zombies[zw++] = z;
+      }
+      this.zombies.length = zw;
+    } else {
+      let zw = 0;
+      for (let i = 0; i < this.zombies.length; i++) {
+        const z = this.zombies[i];
+        if (z.d <= cut - 20) continue;
+        if (!z.alive && (this.spec.mode === 'carnage' || z.d <= cut)) continue;
+        this.zombies[zw++] = z;
+      }
+      this.zombies.length = zw;
+    }
+
+    let hw = 0;
+    for (let i = 0; i < this.hazards.length; i++) {
+      if (this.hazards[i].d1 > cut) this.hazards[hw++] = this.hazards[i];
+    }
+    this.hazards.length = hw;
+
+    let ww = 0;
+    for (let i = 0; i < this.walls.length; i++) {
+      if (this.walls[i].d1 > cut) this.walls[ww++] = this.walls[i];
+    }
+    this.walls.length = ww;
+
+    const afterTotal = this.gates.length + this.barrels.length + this.zombies.length + this.hazards.length + this.walls.length;
+    if (beforeTotal !== afterTotal) this.version++;
   }
 
   // ---------- 队伍 ----------
@@ -876,23 +1062,27 @@ export class World {
   }
 
   wallAt(d0: number, d1: number): Wall | null {
-    for (const w of this.walls) if (w.d0 <= d1 && w.d1 >= d0) return w;
+    for (let i = 0; i < this.walls.length; i++) {
+      const w = this.walls[i];
+      if (w.d0 <= d1 && w.d1 >= d0) return w;
+    }
     return null;
   }
 
   private syncSoldiers(emitLoss = true) {
     const target = Math.min(this.squad.count, MAX_SOLDIERS_SIM);
-    const form = this.formation(target);
+    const form = computeFormation(target, this.spec.mode, !!this.defense, this.lo, this.hi, this.formScratch);
     while (this.soldiers.length < target) {
+      const idx = this.soldiers.length;
       // 新兵直接出现在自己的位置上（原地冒出来），不从中间飞出去
-      const slot = this.slot(this.soldiers.length, form);
       this.soldiers.push({
-        ox: slot.x,
-        oz: slot.z,
+        ox: slotX(idx, form),
+        oz: slotZ(idx, form),
         phase: this.rng() * Math.PI * 2,
         spawn: 0,
         luck: this.rng(),
         spike: 0,
+        lastSpikeId: -1,
       });
     }
     let emitted = 0;
@@ -902,66 +1092,55 @@ export class World {
     }
   }
 
-  /** 阵型参数：n 个人时的横向压缩、纵向拉长和整体后移 */
-  private formation(n: number): { sx: number; sz: number; shift: number; gap: number } {
-    // 防线里人多时站得更密，不然一条道上的纵队会拉到几十米长
-    const gap = this.spec.mode === 'carnage' ? 0.25 : FORMATION_SPACING * (this.defense ? Math.max(0.78, 1 - n / 900) : 1);
-    const R = gap * Math.sqrt(Math.max(1, n));
-    // 防线里阵型最宽只占一条道：人再多也是往后排，站哪条道就只打哪条道
-    const laneCap = this.defense ? TRACK_HALF / 2 - 0.25 : 2.0;
-    const maxR = Math.max(0.6, Math.min(laneCap, (this.hi - this.lo) / 2 - 0.35));
-    const sx = R > maxR ? maxR / R : 1;
-    const sz = this.spec.mode === 'carnage' ? Math.min(1.15, 1 / sx) : 1 / sx;
-    // 防线里队伍往后排，最前排始终在桥头
-    return { sx, sz, shift: this.defense ? -R * sz + 0.6 : 0, gap };
-  }
-
-  /** 第 i 个人在阵型里的位置（向日葵排法：编号越大越靠外，加人不会挪动里面的人） */
-  private slot(i: number, f: { sx: number; sz: number; shift: number; gap: number }): { x: number; z: number } {
-    const r = f.gap * Math.sqrt(i + 0.5);
-    const a = i * GOLDEN_ANGLE;
-    return { x: Math.cos(a) * r * f.sx, z: Math.sin(a) * r * f.sz + f.shift };
-  }
-
   private layout(dt: number) {
     const n = this.soldiers.length;
-    // 人数变化时阵型的整体缩放和后移慢慢跟上，不要一下子跳
-    const f = this.formation(n);
+    // 人数变化时阵型的整体缩放和后移慢慢跟上，不要一下子跳（零对象分配 + 预计算极坐标表）
+    const f = computeFormation(n, this.spec.mode, !!this.defense, this.lo, this.hi, this.formScratch);
     const smooth = Math.min(1, 4 * dt);
-    if (this.form.sx === 0) this.form = f;
-    else {
+    if (this.form.sx === 0) {
+      this.form.sx = f.sx;
+      this.form.sz = f.sz;
+      this.form.shift = f.shift;
+      this.form.gap = f.gap;
+    } else {
       this.form.sx += (f.sx - this.form.sx) * smooth;
       this.form.sz += (f.sz - this.form.sz) * smooth;
       this.form.shift += (f.shift - this.form.shift) * smooth;
       this.form.gap += (f.gap - this.form.gap) * smooth;
     }
     const k = Math.min(1, 9 * dt);
+    const maxStep = Math.max(0.02, 7 * dt);
     let front = 0;
     let back = 0;
     let half = 0;
     const walk = this.squad.moving ? 11 : 0;
     const cx = this.squad.x;
-    const formationHalf = this.defense ? TRACK_HALF / 2 - 0.25 : 2.0;
+    const formationHalf = formationLaneCap(this.spec.mode, !!this.defense);
+    const loLim = this.lo + 0.2 - cx;
+    const hiLim = this.hi - 0.2 - cx;
     for (let i = 0; i < n; i++) {
       const s = this.soldiers[i];
-      const t = this.slot(i, this.form);
+      const tx = slotX(i, this.form);
+      const tz = slotZ(i, this.form);
       // 补位的人走过去（限速），其余的人只做很小的调整
-      const dx = t.x - s.ox;
-      const dz = t.z - s.oz;
-      const dist = Math.hypot(dx, dz);
-      const step = Math.min(dist * k, Math.max(0.02, 7 * dt));
-      if (dist > 1e-4) {
-        s.ox += (dx / dist) * step;
-        s.oz += (dz / dist) * step;
+      const dx = tx - s.ox;
+      const dz = tz - s.oz;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > 1e-8) {
+        const dist = Math.sqrt(d2);
+        const step = Math.min(dist * k, maxStep);
+        const inv = step / dist;
+        s.ox += dx * inv;
+        s.oz += dz * inv;
       }
       // 乘法门瞬间加人时，平滑中的阵型也不能暂时撑满桥面，否则整队无法横移躲 Boss。
-      s.ox = Math.max(-formationHalf, Math.min(formationHalf, s.ox));
+      if (s.ox < -formationHalf) s.ox = -formationHalf;
+      else if (s.ox > formationHalf) s.ox = formationHalf;
       // 不穿墙、不出桥
-      const ax = cx + s.ox;
-      if (ax < this.lo + 0.2) s.ox = this.lo + 0.2 - cx;
-      else if (ax > this.hi - 0.2) s.ox = this.hi - 0.2 - cx;
-      s.spawn = Math.min(1, s.spawn + dt * 4);
-      s.phase += dt * walk;
+      if (s.ox < loLim) s.ox = loLim;
+      else if (s.ox > hiLim) s.ox = hiLim;
+      if (s.spawn < 1) s.spawn = Math.min(1, s.spawn + dt * 4);
+      if (walk > 0) s.phase += dt * walk;
       if (s.oz > front) front = s.oz;
       if (s.oz < back) back = s.oz;
       const aox = Math.abs(s.ox);
@@ -1040,21 +1219,42 @@ export class World {
   private passGates(prevD: number) {
     const sq = this.squad;
     if (!this.defense && sq.d <= prevD) return;
-    const groups = new Map<number, Gate[]>();
-    for (const g of this.gates) {
+    let hasCrossed = false;
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
+      if (g.consumed) continue;
+      if (this.defense ? g.d <= sq.d : g.d > prevD && g.d <= sq.d) {
+        hasCrossed = true;
+        break;
+      }
+    }
+    if (!hasCrossed) return;
+
+    const groups = this.gateGroups;
+    groups.clear();
+    let poolIdx = 0;
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
       if (g.consumed) continue;
       // 冲锋：队伍走过门；防线：门滑到队伍脚下
       if (this.defense ? g.d > sq.d : g.d <= prevD || g.d > sq.d) continue;
-      const list = groups.get(g.group);
-      if (list) list.push(g);
-      else groups.set(g.group, [g]);
+      let list = groups.get(g.group);
+      if (!list) {
+        list = this.gateListPool[poolIdx] ?? (this.gateListPool[poolIdx] = []);
+        list.length = 0;
+        poolIdx++;
+        groups.set(g.group, list);
+      }
+      list.push(g);
     }
+
     for (const list of groups.values()) {
       let chosen: Gate | null = null;
       let bestDist = Infinity;
       let bestOverlap = 0;
       let wide: Gate | null = null;
-      for (const g of list) {
+      for (let i = 0; i < list.length; i++) {
+        const g = list[i];
         g.consumed = true;
         if (sq.x >= g.x0 - 0.01 && sq.x <= g.x1 + 0.01) {
           const dist = Math.abs((g.x0 + g.x1) / 2 - sq.x);
@@ -1072,7 +1272,14 @@ export class World {
       }
       if (!chosen && wide && bestOverlap >= Math.min(this.halfWidth, (wide.x1 - wide.x0) / 2) * 0.9) chosen = wide;
       if (!chosen) {
-        if (list.some((g) => g.kind !== 'add' || g.value > 0)) this.stats.gatesMissed++;
+        let hadGood = false;
+        for (let i = 0; i < list.length; i++) {
+          if (list[i].kind !== 'add' || list[i].value > 0) {
+            hadGood = true;
+            break;
+          }
+        }
+        if (hadGood) this.stats.gatesMissed++;
         continue;
       }
       this.stats.gatesTaken++;
@@ -1111,7 +1318,10 @@ export class World {
   }
 
   private gateHit(g: Gate, hits = 1) {
-    if (g.carnage) { g.bump = 1; return; }
+    if (g.carnage) {
+      g.bump = 1;
+      return;
+    }
     g.hits += hits;
     g.bump = 1;
     const L = this.spec.level;
@@ -1133,11 +1343,12 @@ export class World {
   private collectNear() {
     const lo = this.squad.d + this.back - (this.defense ? 14 : 4);
     const hi = this.defense ? this.defense.spawnD + 12 : this.squad.d + BULLET_RANGE + 10;
-    const near: Zombie[] = [];
-    for (const z of this.zombies) {
+    const near = this.near;
+    near.length = 0;
+    for (let i = 0; i < this.zombies.length; i++) {
+      const z = this.zombies[i];
       if (z.alive && z.d > lo && z.d < hi) near.push(z);
     }
-    this.near = near;
   }
 
   private fire(dt: number) {
@@ -1167,7 +1378,8 @@ export class World {
       if (aim) {
         let target: Boss | null = null;
         let best = Infinity;
-        for (const b of this.bosses) {
+        for (let i = 0; i < this.bosses.length; i++) {
+          const b = this.bosses[i];
           if (!b.alive || !b.active) continue;
           const dx = Math.abs(b.x - x);
           if (dx < b.r + 2.5 && dx < best) {
@@ -1201,28 +1413,22 @@ export class World {
     const lo = this.squad.d + this.back - 3;
     const hi = this.squad.d + BULLET_RANGE + 6;
     this.hitGates.length = 0;
-    for (const g of this.gates) if (!g.consumed && g.kind !== 'mul' && g.d >= lo && g.d <= hi) this.hitGates.push(g);
-    this.hitBarrels.length = 0;
-    for (const br of this.barrels) if (br.alive && br.d + br.r >= lo && br.d - br.r <= hi) this.hitBarrels.push(br);
-    const n = Math.ceil((hi - lo) / Z_BIN) + 1;
-    while (this.zBins.length < n) this.zBins.push([]);
-    for (let i = 0; i < n; i++) this.zBins[i].length = 0;
-    let maxR = 0.5;
-    for (const z of this.near) {
-      if (!z.alive) continue;
-      const i = Math.floor((z.d - lo) / Z_BIN);
-      if (i < 0 || i >= n) continue;
-      this.zBins[i].push(z);
-      if (z.r > maxR) maxR = z.r;
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
+      if (!g.consumed && g.kind !== 'mul' && g.d >= lo && g.d <= hi) this.hitGates.push(g);
     }
-    this.zBinLo = lo;
-    this.zMaxR = maxR;
+    this.hitBarrels.length = 0;
+    for (let i = 0; i < this.barrels.length; i++) {
+      const br = this.barrels[i];
+      if (br.alive && br.d + br.r >= lo && br.d - br.r <= hi) this.hitBarrels.push(br);
+    }
+    this.zSpatial.build(this.near, lo, hi);
   }
 
   private updateBullets(dt: number) {
     const bullets = this.bullets;
     const fighting = this.state === 'run' || this.state === 'boss';
-    if (fighting && bullets.length) this.prepareHits();
+    if (fighting && bullets.length > 0) this.prepareHits();
     for (let i = bullets.length - 1; i >= 0; i--) {
       const b = bullets[i];
       const nx = b.x + b.vx * dt;
@@ -1254,9 +1460,9 @@ export class World {
     const dmax = Math.max(b.d, nd);
 
     // 乘法门是玻璃，子弹穿过；其他门会挡子弹并被抬高（hitGates 已经去掉了乘法门和射程外的门）
-    for (const g of this.hitGates) {
-      if (g.consumed) continue;
-      if (g.d <= b.d || g.d > nd) continue;
+    for (let i = 0; i < this.hitGates.length; i++) {
+      const g = this.hitGates[i];
+      if (g.consumed || g.d <= b.d || g.d > nd) continue;
       const t = (g.d - b.d) / dd;
       const x = b.x + dx * t;
       if (x >= g.x0 && x <= g.x1 && t < bestT) {
@@ -1265,7 +1471,8 @@ export class World {
         target = g;
       }
     }
-    for (const br of this.hitBarrels) {
+    for (let i = 0; i < this.hitBarrels.length; i++) {
+      const br = this.hitBarrels[i];
       if (!br.alive || br.d + br.r < dmin || br.d - br.r > dmax) continue;
       const t = segCircle(b.x, b.d, dx, dd, br.x, br.d, br.r);
       if (t >= 0 && t < bestT) {
@@ -1275,10 +1482,12 @@ export class World {
       }
     }
     // 只看子弹这一步路径附近的几个桶
-    const b0 = Math.max(0, Math.floor((dmin - this.zMaxR - this.zBinLo) / Z_BIN));
-    const b1 = Math.min(this.zBins.length - 1, Math.floor((dmax + this.zMaxR - this.zBinLo) / Z_BIN));
+    const [b0, b1] = this.zSpatial.range(dmin, dmax);
+    const bins = this.zSpatial.bins;
     for (let bi = b0; bi <= b1; bi++) {
-      for (const z of this.zBins[bi]) {
+      const bin = bins[bi];
+      for (let k = 0; k < bin.length; k++) {
+        const z = bin[k];
         if (!z.alive || z.id === b.lastHit || z.d + z.r < dmin || z.d - z.r > dmax) continue;
         const t = segCircle(b.x, b.d, dx, dd, z.x, z.d, z.r);
         if (t >= 0 && t < bestT) {
@@ -1288,7 +1497,8 @@ export class World {
         }
       }
     }
-    for (const boss of this.bosses) {
+    for (let i = 0; i < this.bosses.length; i++) {
+      const boss = this.bosses[i];
       if (!boss.alive || !boss.active) continue;
       const t = segCircle(b.x, b.d, dx, dd, boss.x, boss.d, boss.r);
       if (t >= 0 && t < bestT) {
@@ -1341,7 +1551,8 @@ export class World {
     if (a.splash <= 0) return;
     const r2 = a.splash * a.splash;
     let hit = false;
-    for (const z of this.near) {
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
       if (!z.alive || z.id === skip) continue;
       const dx = z.x - x;
       const dd = z.d - d;
@@ -1389,7 +1600,8 @@ export class World {
 
   private collideBarrels() {
     const sq = this.squad;
-    for (const br of this.barrels) {
+    for (let k = 0; k < this.barrels.length; k++) {
+      const br = this.barrels[k];
       if (!br.alive) continue;
       if (br.d - br.r > sq.d + this.front + 0.4 || br.d + br.r < sq.d + this.back - 0.4) continue;
       const rr = (br.r + 0.25) * (br.r + 0.25);
@@ -1444,7 +1656,8 @@ export class World {
     const event: GameEvent = { type: 'explode', x, d, r: radius, source, killed: 0 };
     this.events.push(event);
     const rr = radius * radius;
-    for (const z of this.near) {
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
       if (!z.alive) continue;
       const dx = z.x - x;
       const dd = z.d - d;
@@ -1453,7 +1666,8 @@ export class World {
       else if (z.kind === 'brute') this.damageZombie(z, z.maxHp * 0.6);
       else this.killZombie(z);
     }
-    for (const b of this.bosses) {
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
       if (!b.alive || !b.active) continue;
       const dx = b.x - x;
       const dd = b.d - d;
@@ -1461,16 +1675,30 @@ export class World {
     }
     if (source === 'impact') {
       // 投弹：红圈里的士兵全部炸死——看到红圈就得躲。
-      // 人数超过模拟上限时，场上每个兵代表好几个人，按比例一起算
-      const per = this.squad.count / Math.max(1, this.soldiers.length);
-      const bodies = this.killNear(x, d, radius, Infinity, 'bomb');
-      const extra = Math.round(bodies * (per - 1));
-      if (extra > 0) {
-        this.stats.lose('bomb', Math.min(extra, this.squad.count));
-        this.squad.count = Math.max(0, this.squad.count - extra);
-        this.syncSoldiers(false);
+      // 单趟扫描避免边杀边 syncSoldiers 把溢出兵补进来重复炸死。
+      const beforeSim = Math.max(1, this.soldiers.length);
+      const per = this.squad.count / beforeSim;
+      let bodies = 0;
+      const sx = this.squad.x;
+      const sd = this.squad.d;
+      for (let i = this.soldiers.length - 1; i >= 0; i--) {
+        const s = this.soldiers[i];
+        const dx = sx + s.ox - x;
+        const dd = sd + s.oz - d;
+        if (dx * dx + dd * dd < rr) {
+          this.events.push({ type: 'soldierDie', x: sx + s.ox, d: sd + s.oz });
+          const last = this.soldiers.pop()!;
+          if (i < this.soldiers.length) this.soldiers[i] = last;
+          bodies++;
+        }
       }
-      event.killed = bodies + extra;
+      const totalKilled = Math.min(this.squad.count, Math.round(bodies * per));
+      if (totalKilled > 0) {
+        this.stats.lose('bomb', totalKilled);
+        this.squad.count = Math.max(0, this.squad.count - totalKilled);
+        if (this.squad.count > this.soldiers.length) this.syncSoldiers(false);
+      }
+      event.killed = totalKilled;
     } else if (source === 'exploder') {
       // 自爆：贴脸引爆至少带走 3 人（最多 6%）；被玩家远程点爆时波及半径缩至 55%、伤亡减半
       const friendRadius = byPlayer ? radius * 0.55 : radius;
@@ -1485,7 +1713,8 @@ export class World {
     const back = sq.d + this.back;
     const left = sq.x - this.halfWidth;
     const right = sq.x + this.halfWidth;
-    for (const z of this.near) {
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
       if (!z.alive) continue;
       const def = ZOMBIES[z.kind];
       if (!z.active && z.d - sq.d < ENEMY_ACTIVATE) z.active = true;
@@ -1556,33 +1785,64 @@ export class World {
 
   private updateHazards(dt: number) {
     const sq = this.squad;
-    for (const h of this.hazards) {
+    const nearH = this.nearHazards;
+    nearH.length = 0;
+    const loD = sq.d + this.back - 1.5;
+    const hiD = sq.d + this.front + 1.5;
+    for (let i = 0; i < this.hazards.length; i++) {
+      const h = this.hazards[i];
       h.phase += dt;
       if (h.kind === 'saw') {
         const mid = (h.x0 + h.x1) / 2;
         const amp = (h.x1 - h.x0) / 2;
         h.x = mid + Math.sin(h.phase * 1.8) * amp;
       }
-      const near = h.d1 + 1.5 >= sq.d + this.back && h.d0 - 1.5 <= sq.d + this.front;
-      if (!near) continue;
-      for (let i = this.soldiers.length - 1; i >= 0; i--) {
+      if (h.d1 >= loD && h.d0 <= hiD) nearH.push(h);
+    }
+    if (nearH.length === 0) {
+      for (let i = 0; i < this.soldiers.length; i++) {
         const s = this.soldiers[i];
-        const x = sq.x + s.ox;
-        const d = sq.d + s.oz;
+        if (s.spike > 0) s.spike = Math.max(0, s.spike - dt * 2);
+      }
+      return;
+    }
+
+    for (let i = this.soldiers.length - 1; i >= 0; i--) {
+      const s = this.soldiers[i];
+      const x = sq.x + s.ox;
+      const d = sq.d + s.oz;
+      let inSpike = false;
+      let killed = false;
+      for (let k = 0; k < nearH.length; k++) {
+        const h = nearH[k];
         if (h.kind === 'saw') {
           const dx = x - h.x;
           const dd = d - h.d0;
           if (dx * dx + dd * dd < SAW_RADIUS * SAW_RADIUS) {
             this.events.push({ type: 'trap', x, d });
             this.killSoldier(i, 'hazard');
+            killed = true;
+            break;
           }
         } else if (x >= h.x0 && x <= h.x1 && d >= h.d0 && d <= h.d1) {
-          s.spike += dt;
-          if (s.spike >= SPIKE_EXPOSURE && s.luck < SPIKE_LETHALITY) {
-            this.events.push({ type: 'trap', x, d });
-            this.killSoldier(i, 'hazard');
+          inSpike = true;
+          if (s.lastSpikeId !== h.id) {
+            s.spike += dt;
+            if (s.spike >= SPIKE_EXPOSURE) {
+              s.lastSpikeId = h.id;
+              s.spike = 0;
+              if (this.rng() < SPIKE_LETHALITY) {
+                this.events.push({ type: 'trap', x, d });
+                this.killSoldier(i, 'hazard');
+                killed = true;
+                break;
+              }
+            }
           }
         }
+      }
+      if (!killed && !inSpike && s.spike > 0) {
+        s.spike = Math.max(0, s.spike - dt * 2);
       }
     }
   }
@@ -1600,9 +1860,14 @@ export class World {
       this.coins += bounty;
       this.addGems(bossGems(b.final, this.rng()), b.x, b.d);
       this.events.push({ type: 'bossDie', boss: b, bounty });
-      // 防线中途 Boss 只补少量援军，避免多轮 Boss 后兵力滚雪球。
-      if (this.defense && !b.final) this.applyReward({ kind: 'soldiers', amount: Math.max(2, Math.round(this.squad.count * 0.025)) }, b.x, b.d);
-      for (const z of this.zombies) if (z.alive && z.owner === b.id) this.killZombie(z);
+      // 防线中途 Boss 只补少量援军（狂潮模式为独立兵备，不发主线防线援军奖励）。
+      if (this.defense && this.spec.mode !== 'carnage' && !b.final) {
+        this.applyReward({ kind: 'soldiers', amount: Math.max(2, Math.round(this.squad.count * 0.025)) }, b.x, b.d);
+      }
+      for (let i = 0; i < this.zombies.length; i++) {
+        const z = this.zombies[i];
+        if (z.alive && z.owner === b.id) this.killZombie(z);
+      }
       // 防线模式要等全部刷完、清干净才算赢（在 step 里判断）
       if (!this.defense && this.bosses.every((x) => !x.alive)) this.win();
     }
@@ -1617,7 +1882,10 @@ export class World {
   private win() {
     if (this.state === 'won' || this.state === 'lost') return;
     this.state = 'won';
-    for (const z of this.near) if (z.alive && z.active) this.killZombie(z, false, false);
+    for (let i = 0; i < this.zombies.length; i++) {
+      const z = this.zombies[i];
+      if (z.alive) this.killZombie(z, false, false);
+    }
     this.projectiles.length = 0;
     this.rockets.length = 0;
     this.events.push({ type: 'won' });
@@ -1628,18 +1896,19 @@ export class World {
     const sq = this.squad;
     const front = sq.d + this.front;
     const double = this.bosses.length > 1;
-    for (const b of this.bosses) {
+    for (let idx = 0; idx < this.bosses.length; idx++) {
+      const b = this.bosses[idx];
       if (!b.alive || !b.active) continue;
       const def = BOSSES[b.kind];
       b.fightTime += dt;
       if (!b.enraged && b.hp < b.maxHp * 0.5) {
-        // 半血狂暴：出手快三成、走得快三成，吼一声变红
+        // 半血狂暴：出手快三成、走得快三成；投弹手同步缩放当前蓄力秒数，避免瞬间零前摇连丢两桶
         b.enraged = true;
+        if (b.kind === 'thrower' && b.fightTime < THROWER_MELEE_TIME) b.timer *= 0.7;
         this.events.push({ type: 'bossEnrage', boss: b });
       }
       const rage = b.enraged ? 1.3 : 1;
-      // 横向跟着队伍，双 Boss 时各守一边
-      // 防线：还在隔离墙那一段时守在自己的道上
+      // 横向跟着队伍，双 Boss 时各守一边；防线还在隔离墙那一段时守在自己的道上
       const inLane = this.defense && b.d > DEFENSE_WALL_D + b.r;
       const lim = inLane ? 0.8 : double && !this.defense ? 0.9 : 4.5;
       const tx = Math.max(b.homeX - lim, Math.min(b.homeX + lim, sq.x));
@@ -1647,8 +1916,8 @@ export class World {
       if (!b.attacking) b.x += Math.max(-1, Math.min(1, tx - b.x)) * 0.9 * dt;
       const reach = front + b.r + 0.5;
 
-      if (b.kind === 'thrower' && b.fightTime < 22) {
-        // 远程：停在 15 外扔油桶，22 秒后狂暴冲过来
+      if (b.kind === 'thrower' && b.fightTime < THROWER_MELEE_TIME) {
+        // 远程：停在 15 外扔油桶，超时后弃桶冲锋近战
         const keep = front + 15;
         if (b.d > keep) {
           b.d = Math.max(keep, b.d - def.speed * (this.defense ? 2.2 : 1) * dt);
@@ -1665,6 +1934,11 @@ export class World {
           for (let i = 0; i < n; i++) this.throwAt(b, i);
         }
         continue;
+      }
+      if (b.kind === 'thrower' && !b.meleeWarned) {
+        b.meleeWarned = true;
+        b.windup = 0;
+        this.events.push({ type: 'banner', text: `${def.name} 逼近肉搏！`, tone: 'danger' });
       }
 
       if (b.kind === 'hive') {
@@ -1700,10 +1974,10 @@ export class World {
           continue;
         }
         if (!b.attacking) {
-          // 每一下起手时锁定队伍站位，红色危险带留在原地。
+          // 每一下起手时锁定近身可达范围内的危险带，防止 Boss 隔着半座桥凭空落锤。
           b.attacking = true;
           b.windup = 0;
-          b.attackX = this.spec.mode === 'carnage' ? b.x : sq.x;
+          b.attackX = this.spec.mode === 'carnage' ? b.x : Math.max(b.x - 2.2, Math.min(b.x + 2.2, sq.x));
           b.attackD = this.spec.mode === 'carnage' ? b.d - b.r - 2.4 : sq.d + (this.front + this.back) / 2;
           b.attackLength = this.spec.mode === 'carnage' ? 4.8 : Math.max(2.4, this.front - this.back + 1.2);
         }
@@ -1713,9 +1987,22 @@ export class World {
           b.windup = 0;
           b.slam = 1;
           b.smashes++;
-          const frac = b.kind === 'hive' ? 0.05 : this.defense ? Math.min(0.28, 0.06 + 0.012 * b.smashes) : Math.min(0.38, 0.08 + 0.015 * b.smashes);
-          const killed = this.killBossLane(b.attackX, b.attackD, BOSS_STRIKE_HALF, b.attackLength, Math.max(2, Math.ceil(sq.count * frac * step.damage)));
-          if (killed === 0) this.stats.dodges++;
+          const frac =
+            b.kind === 'hive' ? 0.05 : this.defense ? Math.min(0.28, 0.06 + 0.012 * b.smashes) : Math.min(0.38, 0.08 + 0.015 * b.smashes);
+          const killed = this.killBossLane(
+            b.attackX,
+            b.attackD,
+            BOSS_STRIKE_HALF,
+            b.attackLength,
+            Math.max(2, Math.ceil(sq.count * frac * step.damage)),
+          );
+          if (
+            killed === 0 &&
+            b.d <= reach + 3 &&
+            Math.abs(sq.x - b.attackX) <= BOSS_STRIKE_HALF + this.halfWidth + 2.5
+          ) {
+            this.stats.dodges++;
+          }
           this.events.push({ type: 'bossSmash', boss: b, x: b.attackX, d: b.attackD, killed, combo: b.comboStep });
           b.attacking = false;
           b.recover = step.recover;
@@ -1729,7 +2016,8 @@ export class World {
   private zombieHpHint(): number {
     let sum = 0;
     let n = 0;
-    for (const z of this.zombies) {
+    for (let i = 0; i < this.zombies.length; i++) {
+      const z = this.zombies[i];
       if (z.kind === 'walker') {
         sum += z.maxHp;
         if (++n > 20) break;
@@ -1753,8 +2041,9 @@ export class World {
       const p = this.projectiles[i];
       p.t += dt;
       if (p.t >= p.T) {
-        this.projectiles.splice(i, 1);
-        // 冲锋的 Boss 战和防线里都会炸（以前防线里油桶落地不炸，是个 bug）
+        this.projectiles[i] = this.projectiles[this.projectiles.length - 1];
+        this.projectiles.pop();
+        // 冲锋的 Boss 战和防线里都会炸
         if (this.state === 'boss' || (this.state === 'run' && this.defense)) this.explode(p.tx, p.td, THROW_RADIUS, 'impact');
       }
     }
@@ -1765,19 +2054,33 @@ export class World {
   private launchAirstrike() {
     const sq = this.squad;
     const targets: { x: number; d: number }[] = [];
-    const ahead = this.zombies
-      .filter((z) => z.alive && z.d > sq.d + 4 && z.d < sq.d + 48)
-      .sort((a, b) => (b.kind === 'giant' ? 1 : 0) - (a.kind === 'giant' ? 1 : 0) || a.d - b.d);
-    for (const z of ahead) {
+    const ahead: Zombie[] = [];
+    for (let i = 0; i < this.zombies.length; i++) {
+      const z = this.zombies[i];
+      if (z.alive && z.d > sq.d + 4 && z.d < sq.d + 48) ahead.push(z);
+    }
+    ahead.sort((a, b) => (b.kind === 'giant' ? 1 : 0) - (a.kind === 'giant' ? 1 : 0) || a.d - b.d);
+    for (let i = 0; i < ahead.length; i++) {
       if (targets.length >= 8) break;
-      if (targets.every((t) => Math.hypot(t.x - z.x, t.d - z.d) > 2.2)) targets.push({ x: z.x, d: z.d });
+      const z = ahead[i];
+      let farEnough = true;
+      for (let k = 0; k < targets.length; k++) {
+        const dx = targets[k].x - z.x;
+        const dd = targets[k].d - z.d;
+        if (dx * dx + dd * dd <= 4.84) {
+          farEnough = false;
+          break;
+        }
+      }
+      if (farEnough) targets.push({ x: z.x, d: z.d });
     }
     while (targets.length < 6) targets.push({ x: randRange(this.rng, -TRACK_HALF + 1, TRACK_HALF - 1), d: sq.d + randRange(this.rng, 12, 40) });
-    targets.forEach((t, i) => {
+    for (let i = 0; i < targets.length; i++) {
+      const t = targets[i];
       const s: Strike = { id: this.nextId++, x: t.x, d: t.d, t: -i * 0.12, T: 0.75 };
       this.strikes.push(s);
       this.events.push({ type: 'strike', strike: s });
-    });
+    }
   }
 
   private updateStrikes(dt: number) {
@@ -1785,21 +2088,33 @@ export class World {
       const s = this.strikes[i];
       s.t += dt;
       if (s.t >= s.T) {
-        this.strikes.splice(i, 1);
-        // 目标在这段时间里往前走了，按落点附近炸
-        this.collectNear();
+        this.strikes[i] = this.strikes[this.strikes.length - 1];
+        this.strikes.pop();
+        // step() 已经刚跑过 collectNear，直接复用避免重复遍历全部丧尸
         this.explode(s.x, s.d - 1.5, STRIKE_RADIUS, 'strike');
       }
     }
   }
 
   private decay(dt: number) {
-    for (const g of this.gates) g.bump = Math.max(0, g.bump - dt * 6);
-    for (const b of this.barrels) b.bump = Math.max(0, b.bump - dt * 6);
-    for (const z of this.near) z.flash = Math.max(0, z.flash - dt * 8);
-    for (const b of this.bosses) {
-      b.flash = Math.max(0, b.flash - dt * 8);
-      b.slam = Math.max(0, b.slam - dt * 2.5);
+    const gStep = dt * 6;
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
+      if (g.bump > 0) g.bump = Math.max(0, g.bump - gStep);
+    }
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
+      if (b.bump > 0) b.bump = Math.max(0, b.bump - gStep);
+    }
+    const zStep = dt * 8;
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
+      if (z.flash > 0) z.flash = Math.max(0, z.flash - zStep);
+    }
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
+      if (b.flash > 0) b.flash = Math.max(0, b.flash - zStep);
+      if (b.slam > 0) b.slam = Math.max(0, b.slam - dt * 2.5);
     }
   }
 
@@ -1808,19 +2123,4 @@ export class World {
     this.events = [];
     return e;
   }
-}
-
-/** 线段 p + t*v（t∈[0,1]）第一次进入圆的参数 t，没碰到返回 -1 */
-function segCircle(px: number, pz: number, vx: number, vz: number, cx: number, cz: number, r: number): number {
-  const fx = px - cx;
-  const fz = pz - cz;
-  const c = fx * fx + fz * fz - r * r;
-  if (c <= 0) return 0;
-  const a = vx * vx + vz * vz;
-  if (a < 1e-9) return -1;
-  const b = 2 * (fx * vx + fz * vz);
-  const disc = b * b - 4 * a * c;
-  if (disc < 0) return -1;
-  const t = (-b - Math.sqrt(disc)) / (2 * a);
-  return t >= 0 && t <= 1 ? t : -1;
 }

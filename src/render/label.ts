@@ -159,6 +159,8 @@ export class HpBar {
   readonly texture: THREE.CanvasTexture;
   private readonly ctx: CanvasRenderingContext2D;
   private key = '';
+  private styleKey = '';
+  private lastDrawAt = -Infinity;
 
   constructor(width = 320, height = 64) {
     this.canvas = document.createElement('canvas');
@@ -169,11 +171,18 @@ export class HpBar {
     this.texture.colorSpace = THREE.SRGBColorSpace;
   }
 
-  set(ratio: number, text: string, fill = '#e3262f', name = '') {
+  set(ratio: number, text: string, fill = '#e3262f', name = '', minIntervalMs = 45) {
     const r = Math.max(0, Math.min(1, ratio));
     const key = `${Math.round(r * 200)}|${text}|${fill}|${name}`;
     if (key === this.key) return;
+    const sKey = `${fill}|${name}`;
+    const now = typeof performance !== 'undefined' ? performance.now() : 0;
+    if (this.key !== '' && sKey === this.styleKey && r > 0 && r < 1 && now - this.lastDrawAt < minIntervalMs) {
+      return;
+    }
     this.key = key;
+    this.styleKey = sKey;
+    this.lastDrawAt = now;
     const { ctx, canvas } = this;
     const W = canvas.width;
     const H = canvas.height;

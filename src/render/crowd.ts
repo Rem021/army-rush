@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { commitInstances } from './dispose';
 import { HIP_Y, LEG_X } from './models';
 
 export interface AgentPose {
@@ -33,6 +34,7 @@ export class Crowd {
   readonly legs: THREE.InstancedMesh;
   readonly capacity: number;
   private n = 0;
+  private prevCount = 0;
   private readonly material: THREE.MeshLambertMaterial;
 
   constructor(scene: THREE.Scene, capacity: number, body: THREE.BufferGeometry, legs: THREE.BufferGeometry) {
@@ -52,8 +54,8 @@ export class Crowd {
   }
 
   setGeometry(body: THREE.BufferGeometry, legs: THREE.BufferGeometry) {
-    this.body.geometry.dispose();
-    this.legs.geometry.dispose();
+    if (!this.body.geometry.userData?.shared) this.body.geometry.dispose();
+    if (!this.legs.geometry.userData?.shared) this.legs.geometry.dispose();
     this.body.geometry = body;
     this.legs.geometry = legs;
   }
@@ -87,10 +89,7 @@ export class Crowd {
   }
 
   end() {
-    this.body.count = this.n;
-    this.legs.count = this.n * 2;
-    this.body.instanceMatrix.needsUpdate = true;
-    this.legs.instanceMatrix.needsUpdate = true;
-    this.body.instanceColor!.needsUpdate = true;
+    commitInstances(this.legs, this.n * 2, this.prevCount * 2);
+    this.prevCount = commitInstances(this.body, this.n, this.prevCount, undefined, true);
   }
 }

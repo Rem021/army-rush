@@ -28,9 +28,9 @@ export const ECON = {
   progressSupply: 0.35,
 };
 
-/** 关卡越往后，金币数额越大 */
+/** 关卡越往后，金币数额越大（封顶指数防止极端关卡溢出为 Infinity） */
 export function coinScale(level: number): number {
-  return Math.pow(ECON.growth, Math.max(0, level - 1));
+  return Math.pow(ECON.growth, Math.max(0, Math.min(250, level - 1)));
 }
 
 /** 每 5 关一个 Boss 关（双 Boss、更难、奖励翻倍） */
@@ -97,6 +97,84 @@ export type UpgradeLevels = Record<UpgradeId, number>;
 export interface Wallet {
   coins: number;
   gems: number;
+}
+
+export interface RunSettleTarget {
+  level: number;
+  defenseLevel: number;
+  best: number;
+  defenseBest: number;
+  endlessBest: number;
+  carnageBest: number;
+  coins: number;
+  gems: number;
+  kills: number;
+  wins: number;
+  upgrades: UpgradeLevels;
+}
+
+export interface RunSettleInput {
+  mode: 'defense' | 'campaign' | 'endless' | 'carnage';
+  level: number;
+  won: boolean;
+  retreated: boolean;
+  practice: boolean;
+  runCoins: number;
+  runGems: number;
+  kills: number;
+  progress: number;
+  distance: number;
+}
+
+export interface RunSettlement {
+  coins: number;
+  bonusCoins: number;
+  bonusGems: number;
+  dist: number;
+  record: boolean;
+}
+
+/**
+ * 统一结算当局收益与主线进度（结束弹窗与暂停页直接重开共用，保证不丢账、不弹多余窗口，且演练/狂潮严格隔离）。
+ * 无尽模式主动撤退/重开仅保留已打出的击杀金币，不发距离里程补贴、不刷“新纪录”标题。
+ */
+export function settleRun(save: RunSettleTarget, input: RunSettleInput): RunSettlement {
+  const { mode, level, won, retreated, practice, runCoins, runGems, kills, progress, distance } = input;
+  const dist = Math.max(0, Math.floor(distance));
+  if (practice) {
+    return { coins: 0, bonusCoins: 0, bonusGems: 0, dist, record: false };
+  }
+  if (mode === 'carnage') {
+    save.carnageBest = Math.max(save.carnageBest, kills);
+    return { coins: 0, bonusCoins: 0, bonusGems: 0, dist, record: false };
+  }
+  save.gems += Math.max(0, Math.floor(runGems));
+  save.kills += Math.max(0, Math.floor(kills));
+  if (mode === 'endless') {
+    const record = !retreated && dist > save.endlessBest;
+    save.endlessBest = Math.max(save.endlessBest, dist);
+    const bonusCoins = retreated ? 0 : Math.floor(dist / 20);
+    const coins = Math.max(0, Math.floor(runCoins)) + bonusCoins;
+    save.coins += coins;
+    return { coins, bonusCoins, bonusGems: 0, dist, record };
+  }
+  const reward = retreated
+    ? { total: Math.max(0, Math.floor(runCoins)), bonus: 0 }
+    : levelReward(level, won, runCoins, upgradeEffects(save.upgrades).coinMult, progress);
+  const bonusGems = won ? clearGems(level) : 0;
+  save.gems += bonusGems;
+  if (won) {
+    save.wins += 1;
+    if (mode === 'campaign') {
+      save.best = Math.max(save.best, level);
+      save.level = level + 1;
+    } else if (mode === 'defense') {
+      save.defenseBest = Math.max(save.defenseBest, level);
+      save.defenseLevel = level + 1;
+    }
+  }
+  save.coins += reward.total;
+  return { coins: reward.total, bonusCoins: reward.bonus, bonusGems, dist, record: false };
 }
 
 /** 自动驾驶和平衡脚本用的“玩家”花钱策略：钻石全买兵力；金币一直买当前最便宜的那项，直到买不起 */

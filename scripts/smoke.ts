@@ -1,7 +1,8 @@
 // 冒烟测试：用本机 Chrome 打开游戏，截几张图，检查控制台报错。
 // 先 `npm run dev`，再 `npm run smoke -- [url] [输出目录]`
 import { mkdirSync } from 'node:fs';
-import { chromium, type Page } from 'playwright-core';
+import type { Page } from 'playwright-core';
+import { launchHeadlessBrowser } from './browser';
 
 const base = process.argv[2] ?? 'http://localhost:5173/';
 const out = process.argv[3] ?? 'work/shots';
@@ -26,7 +27,7 @@ async function fps(page: Page): Promise<number> {
 }
 
 async function main() {
-  const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--enable-unsafe-swiftshader', '--ignore-gpu-blocklist'] });
+  const browser = await launchHeadlessBrowser();
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true });
   const page = await context.newPage();
   page.on('console', (m) => {

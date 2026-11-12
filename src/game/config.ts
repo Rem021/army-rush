@@ -36,8 +36,9 @@ export function gateStep(level: number, value: number): number {
   return gateBaseStep(level) * (value > 0 ? Math.pow(GATE_GROWTH, value) : 1);
 }
 /** 射速门每次只 +1%，要打的发数比加人门多得多，越往上越难打 */
+export const RATE_GATE_GROWTH = 1.1;
 export function rateGateStep(level: number, value: number): number {
-  return gateBaseStep(level) * 4 * (value > 0 ? Math.pow(1.1, value) : 1);
+  return gateBaseStep(level) * 4 * (value > 0 ? Math.pow(RATE_GATE_GROWTH, value) : 1);
 }
 /** 射速门最多打到 +25% */
 export const RATE_GATE_MAX = 25;
@@ -115,6 +116,8 @@ export const BOSS_STRIKE_HALF = 1.15;
 export const THROW_INTERVAL = 2.3;
 export const THROW_FLIGHT = 1.35;
 export const THROW_RADIUS = 2.1;
+/** 投弹屠夫远程投弹持续秒数，超时后切换近战冲锋 */
+export const THROWER_MELEE_TIME = 22;
 export const HIVE_INTERVAL = 3.2;
 
 export interface WeaponDef {
@@ -144,7 +147,8 @@ export const WEAPONS: WeaponDef[] = [
 ];
 
 export function soldierDps(tier: number): number {
-  return WEAPONS[tier].rate * WEAPONS[tier].damage;
+  const w = WEAPONS[Math.max(0, Math.min(WEAPONS.length - 1, tier))];
+  return w.rate * w.damage;
 }
 
 

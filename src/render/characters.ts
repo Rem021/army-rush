@@ -2,8 +2,8 @@ import * as THREE from 'three';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import { BOSSES, type BossKind, type SkinDef, type ZombieKind } from '../game/config';
 import type { Boss } from '../game/world';
-import { bossMotion } from './bossMotion';
 import type { LoadedModel, Models } from './assets';
+import { bossMotion } from './bossMotion';
 import { HpBar, formatNumber } from './label';
 import { bakeModel, staticGeometry, type BakedModel } from './vat';
 
@@ -36,7 +36,6 @@ export interface SoldierKit {
   muzzles: { x: number; y: number; z: number }[];
 }
 
-/** 士兵身体（按皮肤换衣服颜色）；换皮肤时只重烘这个 */
 /** 衣服和裤子颜色：深色皮肤（黑金）裤子用点缀色，不然全身一片黑 */
 function skinColors(skin: SkinDef): { team: THREE.Color; pants: THREE.Color } {
   const team = new THREE.Color(skin.team);
@@ -71,7 +70,6 @@ export function buildSoldier(model: LoadedModel, skin: SkinDef): SoldierKit {
       recolor: gunPaint(tier),
     });
     guns.push(gun);
-    // 枪口：开枪那一帧里最靠前的顶点
     const pos = gun.geometry.attributes.position;
     let best = 0;
     for (let i = 1; i < pos.count; i++) if (pos.getZ(i) < pos.getZ(best)) best = i;
@@ -100,62 +98,134 @@ export function gunStatic(model: LoadedModel, tier: number, length: number): THR
 }
 
 /**
- * 皮肤选择页用的头像：用真模型按皮肤上色，摆待机姿势，正面拍一张。
- * 单独开一个小画布渲染，拍完就释放。
+ * 复用主 WebGLRenderer 的离屏 RenderTarget 批量拍缩略图，避免启动时额外创建/销毁多个 WebGL 上下文。
+ * 若未传入共享渲染器则回退到临时离屏渲染器。
  */
-export function renderPortraits(model: LoadedModel, skins: SkinDef[], size = { w: 180, h: 220 }): Record<string, string> {
-  const out: Record<string, string> = {};
+function withSnapshotter(
+  size: { w: number; h: number },
+  glRenderer: THREE.WebGLRenderer | undefined,
+  run: (capture: (scene: THREE.Scene, camera: THREE.Camera) => string) => void,
+) {
   const canvas = document.createElement('canvas');
   canvas.width = size.w;
   canvas.height = size.h;
-  let renderer: THREE.WebGLRenderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
-  } catch {
-    return out;
+
+  if (glRenderer) {
+    const ctx2d = canvas.getContext('2d');
+    if (!ctx2d) return;
+    const rt = new THREE.WebGLRenderTarget(size.w, size.h, {
+      type: THREE.UnsignedByteType,
+      colorSpace: THREE.SRGBColorSpace,
+    });
+    const prevTarget = glRenderer.getRenderTarget();
+    const prevClearColor = glRenderer.getClearColor(new THREE.Color());
+    const prevClearAlpha = glRenderer.getClearAlpha();
+    const prevAutoClear = glRenderer.autoClear;
+    const prevShadow = glRenderer.shadowMap.enabled;
+    const pixels = new Uint8Array(size.w * size.h * 4);
+    const img = ctx2d.createImageData(size.w, size.h);
+    const rowBytes = size.w * 4;
+
+    glRenderer.shadowMap.enabled = false;
+    glRenderer.setRenderTarget(rt);
+    glRenderer.setClearColor(0x000000, 0);
+    glRenderer.autoClear = true;
+    try {
+      run((scene, camera) => {
+        glRenderer.clear();
+        glRenderer.render(scene, camera);
+        glRenderer.readRenderTargetPixels(rt, 0, 0, size.w, size.h, pixels);
+        for (let y = 0; y < size.h; y++) {
+          const src = (size.h - 1 - y) * rowBytes;
+          img.data.set(pixels.subarray(src, src + rowBytes), y * rowBytes);
+        }
+        ctx2d.putImageData(img, 0, 0);
+        return canvas.toDataURL('image/png');
+      });
+    } finally {
+      glRenderer.setRenderTarget(prevTarget);
+      glRenderer.setClearColor(prevClearColor, prevClearAlpha);
+      glRenderer.autoClear = prevAutoClear;
+      glRenderer.shadowMap.enabled = prevShadow;
+      rt.dispose();
+    }
+    return;
   }
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+  let tempRenderer: THREE.WebGLRenderer;
+  try {
+    tempRenderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
+  } catch {
+    return;
+  }
+  tempRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  try {
+    run((scene, camera) => {
+      tempRenderer.render(scene, camera);
+      return canvas.toDataURL('image/png');
+    });
+  } finally {
+    tempRenderer.dispose();
+    tempRenderer.forceContextLoss();
+  }
+}
+
+/**
+ * 皮肤选择页用的头像：用真模型按皮肤上色，摆待机姿势，正面拍一张。
+ */
+export function renderPortraits(
+  model: LoadedModel,
+  skins: SkinDef[],
+  size = { w: 180, h: 220 },
+  glRenderer?: THREE.WebGLRenderer,
+): Record<string, string> {
+  const out: Record<string, string> = {};
   const scene = new THREE.Scene();
   scene.add(new THREE.HemisphereLight(0xffffff, 0x8090a0, 2.2));
   const sun = new THREE.DirectionalLight(0xffffff, 2.2);
   sun.position.set(2, 4, 5);
   scene.add(sun);
   const camera = new THREE.PerspectiveCamera(30, size.w / size.h, 0.1, 50);
-  for (const skin of skins) {
-    const body = SkeletonUtils.clone(model.scene);
-    const { team, pants } = skinColors(skin);
-    body.traverse((o) => {
-      const mesh = o as THREE.Mesh;
-      if (!mesh.isMesh) return;
-      const gun = under(mesh, ALL_GUNS);
-      if (gun && gun !== 'AK') {
-        mesh.visible = false;
-        return;
+
+  withSnapshotter(size, glRenderer, (capture) => {
+    for (const skin of skins) {
+      const body = SkeletonUtils.clone(model.scene);
+      const { team, pants } = skinColors(skin);
+      const tempMats: THREE.Material[] = [];
+      body.traverse((o) => {
+        const mesh = o as THREE.Mesh;
+        if (!mesh.isMesh) return;
+        const gun = under(mesh, ALL_GUNS);
+        if (gun && gun !== 'AK') {
+          mesh.visible = false;
+          return;
+        }
+        const old = mesh.material as THREE.MeshStandardMaterial;
+        const color = old.name === 'Character_Main' ? team : old.name === 'Pants' ? pants : old.color;
+        const mat = new THREE.MeshLambertMaterial({ color });
+        tempMats.push(mat);
+        mesh.material = mat;
+      });
+      const mixer = new THREE.AnimationMixer(body);
+      const idle = model.animations.find((a) => a.name === 'Idle');
+      if (idle) {
+        mixer.clipAction(idle).play();
+        mixer.setTime(0.4);
       }
-      const old = mesh.material as THREE.MeshStandardMaterial;
-      const color = old.name === 'Character_Main' ? team : old.name === 'Pants' ? pants : old.color;
-      mesh.material = new THREE.MeshLambertMaterial({ color });
-    });
-    const mixer = new THREE.AnimationMixer(body);
-    const idle = model.animations.find((a) => a.name === 'Idle');
-    if (idle) {
-      mixer.clipAction(idle).play();
-      mixer.setTime(0.4);
+      body.updateMatrixWorld(true);
+      const box = new THREE.Box3().setFromObject(body);
+      const h = box.max.y - box.min.y;
+      const c = box.getCenter(new THREE.Vector3());
+      scene.add(body);
+      camera.position.set(c.x + h * 0.55, c.y + h * 0.12, c.z + h * 2.1);
+      camera.lookAt(c.x, c.y, c.z);
+      out[skin.id] = capture(scene, camera);
+      scene.remove(body);
+      mixer.stopAllAction();
+      mixer.uncacheRoot(body);
+      for (const m of tempMats) m.dispose();
     }
-    body.updateMatrixWorld(true);
-    const box = new THREE.Box3().setFromObject(body);
-    const h = box.max.y - box.min.y;
-    const c = box.getCenter(new THREE.Vector3());
-    scene.add(body);
-    camera.position.set(c.x + h * 0.55, c.y + h * 0.12, c.z + h * 2.1);
-    camera.lookAt(c.x, c.y, c.z);
-    renderer.render(scene, camera);
-    out[skin.id] = canvas.toDataURL('image/png');
-    scene.remove(body);
-    mixer.stopAllAction();
-  }
-  renderer.dispose();
-  renderer.forceContextLoss();
+  });
   return out;
 }
 
@@ -163,18 +233,12 @@ export function renderPortraits(model: LoadedModel, skins: SkinDef[], size = { w
  * 每档武器的侧面图（HUD 武器牌、武器升级卡、军械库用）：真模型斜侧面拍一张，透明底。
  * 枪口统一朝右。
  */
-export function renderGunIcons(model: LoadedModel, size = { w: 240, h: 112 }): string[] {
+export function renderGunIcons(
+  model: LoadedModel,
+  size = { w: 240, h: 112 },
+  glRenderer?: THREE.WebGLRenderer,
+): string[] {
   const out: string[] = [];
-  const canvas = document.createElement('canvas');
-  canvas.width = size.w;
-  canvas.height = size.h;
-  let renderer: THREE.WebGLRenderer;
-  try {
-    renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true, preserveDrawingBuffer: true });
-  } catch {
-    return out;
-  }
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
   const scene = new THREE.Scene();
   scene.add(new THREE.HemisphereLight(0xffffff, 0x6a7890, 2.4));
   const sun = new THREE.DirectionalLight(0xffffff, 2.6);
@@ -183,54 +247,52 @@ export function renderGunIcons(model: LoadedModel, size = { w: 240, h: 112 }): s
   const aspect = size.w / size.h;
   const camera = new THREE.OrthographicCamera(-aspect, aspect, 1, -1, 0.1, 30);
   const material = new THREE.MeshLambertMaterial({ vertexColors: true });
-  for (let tier = 0; tier < GUN_NODES.length; tier++) {
-    const g = gunStatic(model, tier, 2);
-    if (!g) {
-      out.push('');
-      continue;
+
+  withSnapshotter(size, glRenderer, (capture) => {
+    for (let tier = 0; tier < GUN_NODES.length; tier++) {
+      const g = gunStatic(model, tier, 2);
+      if (!g) {
+        out.push('');
+        continue;
+      }
+      const pos = g.attributes.position;
+      const z0 = g.boundingBox!.min.z;
+      const z1 = g.boundingBox!.max.z;
+      const end = (z1 - z0) * 0.2;
+      const lo = [Infinity, -Infinity];
+      const hi = [Infinity, -Infinity];
+      for (let i = 0; i < pos.count; i++) {
+        const z = pos.getZ(i);
+        const y = pos.getY(i);
+        const span = z < z0 + end ? lo : z > z1 - end ? hi : null;
+        if (!span) continue;
+        span[0] = Math.min(span[0], y);
+        span[1] = Math.max(span[1], y);
+      }
+      if (lo[1] - lo[0] > hi[1] - hi[0]) {
+        g.rotateY(Math.PI);
+        g.computeBoundingBox();
+      }
+      const mesh = new THREE.Mesh(g, material);
+      scene.add(mesh);
+      const box = g.boundingBox!;
+      const c = box.getCenter(new THREE.Vector3());
+      const len = box.max.z - box.min.z;
+      const h = box.max.y - box.min.y;
+      const zoom = Math.min((aspect * 2 * 0.86) / len, (2 * 0.8) / Math.max(h, 0.01));
+      camera.left = -aspect / zoom;
+      camera.right = aspect / zoom;
+      camera.top = 1 / zoom;
+      camera.bottom = -1 / zoom;
+      camera.updateProjectionMatrix();
+      camera.position.set(c.x + 6, c.y + 1.4, c.z - 0.6);
+      camera.lookAt(c);
+      out.push(capture(scene, camera));
+      scene.remove(mesh);
+      g.dispose();
     }
-    // 各把枪模型朝向不一：枪口那头细（没有握把、弹匣），比较两头的高度，粗的那头放到 +z（画面左边）
-    const pos = g.attributes.position;
-    const z0 = g.boundingBox!.min.z;
-    const z1 = g.boundingBox!.max.z;
-    const end = (z1 - z0) * 0.2;
-    const lo = [Infinity, -Infinity];
-    const hi = [Infinity, -Infinity];
-    for (let i = 0; i < pos.count; i++) {
-      const z = pos.getZ(i);
-      const y = pos.getY(i);
-      const span = z < z0 + end ? lo : z > z1 - end ? hi : null;
-      if (!span) continue;
-      span[0] = Math.min(span[0], y);
-      span[1] = Math.max(span[1], y);
-    }
-    if (lo[1] - lo[0] > hi[1] - hi[0]) {
-      g.rotateY(Math.PI);
-      g.computeBoundingBox();
-    }
-    const mesh = new THREE.Mesh(g, material);
-    scene.add(mesh);
-    // 从 +x 侧面稍微俯视：画面右边是 -z（枪口方向）
-    const box = g.boundingBox!;
-    const c = box.getCenter(new THREE.Vector3());
-    const len = box.max.z - box.min.z;
-    const h = box.max.y - box.min.y;
-    const zoom = Math.min((aspect * 2 * 0.86) / len, (2 * 0.8) / Math.max(h, 0.01));
-    camera.left = -aspect / zoom;
-    camera.right = aspect / zoom;
-    camera.top = 1 / zoom;
-    camera.bottom = -1 / zoom;
-    camera.updateProjectionMatrix();
-    camera.position.set(c.x + 6, c.y + 1.4, c.z - 0.6);
-    camera.lookAt(c);
-    renderer.render(scene, camera);
-    out.push(canvas.toDataURL('image/png'));
-    scene.remove(mesh);
-    g.dispose();
-  }
+  });
   material.dispose();
-  renderer.dispose();
-  renderer.forceContextLoss();
   return out;
 }
 
@@ -253,12 +315,13 @@ export function buildZombies(models: Models): Partial<Record<ZombieKind, BakedMo
     let baked = cache.get(key);
     if (!baked) {
       const tint = src.tint;
+      const mulColor = tint ? new THREE.Color(tint[0], tint[1], tint[2]) : null;
       baked = bakeModel(m.scene, m.animations, {
         clips: ZOMBIE_CLIPS,
         fps: 16,
         height: ZOMBIE_HEIGHT,
         yaw: Math.PI,
-        recolor: tint ? (_n, c) => c.multiply(new THREE.Color(tint[0], tint[1], tint[2])) : undefined,
+        recolor: mulColor ? (_n, c) => c.multiply(mulColor) : undefined,
       });
       cache.set(key, baked);
     }
@@ -311,7 +374,7 @@ export class ModelBossView {
   ) {
     const src = BOSS_SOURCE[boss.kind];
     const body = SkeletonUtils.clone(model.scene);
-    // 换成和场景一致的漫反射材质，每个 Boss 一份（被打时单独发红）
+    const tintColor = src.tint ? new THREE.Color(src.tint) : null;
     body.traverse((o) => {
       const mesh = o as THREE.Mesh;
       if (!mesh.isMesh) return;
@@ -319,7 +382,7 @@ export class ModelBossView {
       mesh.frustumCulled = false;
       const old = mesh.material as THREE.MeshStandardMaterial;
       const mat = new THREE.MeshLambertMaterial({ map: old.map ?? null, color: old.color?.clone() ?? new THREE.Color(1, 1, 1) });
-      if (src.tint) mat.color.multiply(new THREE.Color(src.tint));
+      if (tintColor) mat.color.multiply(tintColor);
       this.materials.push(mat);
       mesh.material = mat;
     });
@@ -327,7 +390,6 @@ export class ModelBossView {
     this.scale = src.height / Math.max(0.01, box.max.y - box.min.y);
     body.scale.setScalar(this.scale);
     body.position.y = -box.min.y * this.scale;
-    // 模型默认面朝 +Z，Boss 要面朝队伍（+Z 方向就是朝镜头），不用转
     this.root.add(body);
 
     this.mixer = new THREE.AnimationMixer(body);
@@ -346,7 +408,6 @@ export class ModelBossView {
       hit: find(['HitReact', 'HitRecieve']),
     };
     const attack = this.actions.attack;
-    // 连击交替使用同一段动作的两个实例，上一击收势可与下一击起手交叉淡化。
     this.attackVariants = [attack, attack ? this.mixer.clipAction(attack.getClip().clone()) : null];
     for (const k of ['attack', 'death', 'hit'] as const) {
       const a = this.actions[k];
@@ -375,6 +436,10 @@ export class ModelBossView {
     scene.add(this.root);
   }
 
+  get isDeadDone(): boolean {
+    return !this.boss.alive && this.deathT > 3.2;
+  }
+
   private play(action: THREE.AnimationAction | null, fade = 0.15) {
     if (!action || action === this.current) return;
     action.reset().play();
@@ -388,7 +453,6 @@ export class ModelBossView {
     return true;
   }
 
-  /** 投弹屠夫扔出油桶（动作在 update 里按蓄力进度驱动，这里不用管） */
   thrown() {}
 
   update(dt: number, time: number) {
@@ -396,7 +460,6 @@ export class ModelBossView {
     const moving = dt > 0 && Math.hypot(b.x - this.lastX, b.d - this.lastD) / dt > 0.12;
     this.lastX = b.x;
     this.lastD = b.d;
-    // 狂暴后动作也快一点
     this.mixer.timeScale = b.enraged ? 1.3 : 1;
     let drop = 0;
     if (this.dropT >= 0) {
@@ -410,7 +473,6 @@ export class ModelBossView {
     const hitPulse = b.alive ? b.flash * (0.55 + 0.45 * Math.max(0, Math.sin(time * 52))) : 0;
     this.root.position.set(b.x + Math.sin(time * 61) * b.flash * 0.045, drop, -b.d - hitPulse * 0.08);
     this.root.scale.set(1 + hitPulse * 0.035, 1 - hitPulse * 0.025, 1 + hitPulse * 0.035);
-    // 挨打时高频脉冲泛红发亮，展现出弹雨倾泻在巨兽身上的受击反馈；狂暴后整只发红光、呼吸闪
     const rage = b.enraged ? 0.18 + 0.1 * Math.sin(time * 8) : 0;
     for (const m of this.materials) m.emissive.setRGB(hitPulse * 0.28 + rage, hitPulse * 0.11 + rage * 0.1, hitPulse * 0.06);
 
@@ -444,8 +506,10 @@ export class ModelBossView {
 
   dispose() {
     this.mixer.stopAllAction();
+    this.mixer.uncacheRoot(this.root);
     this.root.removeFromParent();
     this.bar.dispose();
+    (this.hpSprite.material as THREE.Material).dispose();
     for (const m of this.materials) m.dispose();
   }
 }
