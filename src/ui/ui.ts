@@ -117,7 +117,7 @@ function nextEvolution(u: (typeof UPGRADES)[number], lvl: number) {
 const MODE_TIPS: Partial<Record<GameMode, string>> = {
   defense: '左右拖动换道：门道打门、拆补给变强，另一边的尸潮别让它冲到脚下',
   campaign: '左右拖动选道，子弹只打正前方',
-  blitz: '左道射 +1 门养兵 · 中道打红油桶清怪 · 右道集火重装坦克解锁满仓神器！',
+  blitz: '左道高速 +1 门直通养兵 · 中道红油桶清怪迎多 Boss · 右道打爆坦克收编助战 + 拿神器！',
   carnage: '左侧 +1 增兵 · 黄色 +99 装弹 · 右侧拆炮架 · 中路清红军',
   endless: '越往后越难，看你能撑多远',
 };
@@ -994,7 +994,7 @@ export class UI {
         body.innerHTML = `<div class="guide-note">免费切换，下一局生效。敌人不会因为你变强而加血。</div>${TACTICS.map((t) => `<button class="row tactic-row ${s.tactic === t.id ? 'active' : ''}" data-tactic="${t.id}" aria-pressed="${s.tactic === t.id}"><div class="row-main"><div class="row-title">${t.name}${s.tactic === t.id ? ' · 已选择' : ''}</div><div class="row-sub">${t.desc}</div></div></button>`).join('')}<div class="guide-note">数字门按命中次数涨数；连射更擅长养门。破甲对装甲目标的持续伤害比均衡高约 15%，但养门更慢、清普通尸潮稍弱。关卡路线固定，可用演练比较打法。</div>`;
         break;
       case 'help':
-        body.innerHTML = `<div class="guide"><h3>单手就能玩</h3><p>按住空白处左右拖动，子弹自动打向正前方。手指放在屏幕下部也能换道。设置里可调灵敏度。</p><h3>防线：两条道，两件事</h3><p>开局先拆门道障碍，打破后回到门道接住一串增益门。尸潮接近桥头时切去清怪；一直贪补给会被包围。</p><h3>重装突袭（过 5 / 10 关解锁）</h3><p>经典三道爽游玩法：左道持续输送可射击升级的 +1 数字门与变绿翻盘门；中道是汹涌尸潮与可引爆清场的红油桶；右道由重装坦克严密守卫，身后藏着无人机、多发弹道、能量护盾、空袭与顶级武器，轰碎坦克即可瞬间收割整排奖励！</p><h3>看清数字，再选路</h3><p>+ 是加人，− 是减员，× 是人数倍率，枪和闪电分别升级武器和射速。红门可以射成正数；数字门按命中次数成长，敌人和障碍按伤害掉血。</p><h3>Boss：先躲，再打</h3><p>砸击先锁红色危险带，整队移出去；两次慢砸后有三连击，停顿时再集火。油桶红圈内的士兵都会被炸。</p><h3>失败也有进步</h3><p>战斗所得会保留，结算会告诉你怎样损兵。免费换战术，升级前到军械库看真实收益。模式页可演练已通关关卡；撤退和主动重试保留战利品，但没有额外新手补贴。</p></div>`;
+        body.innerHTML = `<div class="guide"><h3>单手就能玩</h3><p>按住空白处左右拖动，子弹自动打向正前方。手指放在屏幕下部也能换道。设置里可调灵敏度。</p><h3>防线：两条道，两件事</h3><p>开局先拆门道障碍，打破后回到门道接住一串增益门。尸潮接近桥头时切去清怪；一直贪补给会被包围。</p><h3>重装突袭（过 5 / 10 关解锁）</h3><p>经典三道爽游玩法：左道极速涌来固定数值 +1 数字门（射击不会变数）；中道是密集尸潮、连番登场的多波 Boss 与可引爆清场的红油桶；右道驻守重装坦克与满仓神装，打爆坦克后它会立刻收编入队、开上前线和你一起轰炸敌军，同时释放身后的无人机、扇形多弹道、3D 能量护盾、战机空袭与超级弹药！</p><h3>看清数字，再选路</h3><p>+ 是加人，− 是减员，× 是人数倍率，枪和闪电分别升级武器和射速。普通模式红门可射成正数，重装突袭左道门固定数值高速传送。</p><h3>Boss：先躲，再打</h3><p>砸击先锁红色危险带，整队移出去；两次慢砸后有三连击，停顿时再集火。油桶红圈内的士兵都会被炸。</p><h3>失败也有进步</h3><p>战斗所得会保留，结算会告诉你怎样损兵。免费换战术，升级前到军械库看真实收益。模式页可演练已通关关卡；撤退和主动重试保留战利品，但没有额外新手补贴。</p></div>`;
         break;
       case 'settings':
         body.innerHTML = `
@@ -1133,7 +1133,7 @@ export class UI {
       }
     } else if (w.spec.mode === 'blitz') {
       const b = w.blitz;
-      const tankText = `坦克 ${b.tanksDestroyed}/${b.totalTanks}`;
+      const tankText = b.allyTanks > 0 ? `友军坦 ×${b.allyTanks} (${b.tanksDestroyed}/${b.totalTanks})` : `重坦 ${b.tanksDestroyed}/${b.totalTanks}`;
       if (tankText !== this.lastBlitzTanks) {
         this.lastBlitzTanks = tankText;
         this.blitzTanksEl.textContent = tankText;

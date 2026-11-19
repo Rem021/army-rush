@@ -32,7 +32,7 @@ export class Bot {
     return w.state === 'boss' ? this.dodge(w, this.bossTarget(w)) : this.runTarget(w);
   }
 
-  /** 广告奇袭三路决策：右路放行奖励立刻吃、左路正门快到顺手吃、中路油桶/贴脸尸潮及时清、其余时间火力轰重坦或终局 Boss */
+  /** 广告奇袭三路决策：右路放行奖励立刻吃、左路极速 +1 门顺手扩军、中路油桶/贴脸尸潮与 Boss 及时清、尽早收编右路重装坦克参战 */
   private blitzTarget(w: World): number {
     const sq = w.squad;
     let frontTankD = Infinity;
@@ -48,13 +48,13 @@ export class Bot {
     // 1. 右路刚放行的奖励舱或增益门：最高优先级立刻切右吃满！
     for (let i = 0; i < w.barrels.length; i++) {
       const b = w.barrels[i];
-      if (b.alive && b.blitzLane === 'right' && !b.tank && b.d < frontTankD && b.d > -1 && b.d < 15) {
+      if (b.alive && b.blitzLane === 'right' && !b.tank && b.d < frontTankD && b.d > -1 && b.d < 16) {
         return BLITZ_LANES.right;
       }
     }
     for (let i = 0; i < w.gates.length; i++) {
       const g = w.gates[i];
-      if (!g.consumed && g.blitzLane === 'right' && g.d < frontTankD && g.d > 0 && g.d < 13) {
+      if (!g.consumed && g.blitzLane === 'right' && g.d < frontTankD && g.d > 0 && g.d < 14) {
         return BLITZ_LANES.right;
       }
     }
@@ -65,14 +65,14 @@ export class Bot {
     let nearestMidD = Infinity;
     for (let i = 0; i < w.zombies.length; i++) {
       const z = w.zombies[i];
-      if (!z.alive || z.d > 14) continue;
-      urgentMid += (THREAT[z.kind] ?? 1) * (z.d < 8 ? 2 : 1);
+      if (!z.alive || z.d > 14.5) continue;
+      urgentMid += (THREAT[z.kind] ?? 1) * (z.d < 8 ? 2.2 : 1);
       if (z.d < nearestMidD) {
         nearestMidD = z.d;
         nearestMidX = z.x;
       }
     }
-    if (urgentMid >= Math.max(4, sq.count * 0.12)) return nearestMidX;
+    if (urgentMid >= Math.max(5, sq.count * 0.14)) return nearestMidX;
 
     // 3. 中路爆裂红油桶周围有尸潮：点爆清屏
     for (let i = 0; i < w.barrels.length; i++) {
@@ -82,36 +82,30 @@ export class Bot {
       }
     }
 
-    // 4. 左路 +1 / 射速 / 倍率正门快滑到脚下时，切左白嫖扩军（红门先打翻再吃）
-    let nearLeft: Gate | null = null;
-    for (let i = 0; i < w.gates.length; i++) {
-      const g = w.gates[i];
-      if (!g.consumed && g.blitzLane === 'left' && g.d > 0 && g.d < 11 && (!nearLeft || g.d < nearLeft.d)) {
-        nearLeft = g;
-      }
-    }
-    if (nearLeft) {
-      if (nearLeft.kind !== 'add' || nearLeft.value > 0) {
-        if (sq.count < 110 || nearLeft.d < 4.5) return BLITZ_LANES.left;
-      } else if (nearLeft.d > 4.5) {
-        // 翻转红门，提前射成绿门
-        return BLITZ_LANES.left;
-      }
-    }
-
-    // 5. 前期兵力偏少先在左路攒兵；够火力后优先集火右路重装坦克爆神装，或集火终局 Boss
+    // 4. 贴脸 Boss 优先集火打掉
     let boss: (typeof w.bosses)[number] | null = null;
     for (let i = 0; i < w.bosses.length; i++) {
       const b = w.bosses[i];
-      if (b.alive && b.active) {
-        boss = b;
-        break;
+      if (b.alive && b.active && (!boss || b.d < boss.d)) boss = b;
+    }
+    if (boss && boss.d < 20) return boss.x;
+
+    // 5. 左路极速 +1 门快滑到脚下时切左吃门扩军
+    let nearLeft: Gate | null = null;
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
+      if (!g.consumed && g.blitzLane === 'left' && g.d > 0 && g.d < 9 && (!nearLeft || g.d < nearLeft.d)) {
+        nearLeft = g;
       }
     }
-    if (boss && boss.d < 24) return boss.x;
-    if (sq.count < 24) return BLITZ_LANES.left;
-    if (frontTank && frontTank.d <= 25) return BLITZ_LANES.right;
+    if (sq.count < 22) return BLITZ_LANES.left;
+    // 尽早打爆第一辆右路重坦收编入队！
+    if (frontTank && frontTank.d <= 24 && (w.allyTanks.length === 0 || sq.count >= 30 || !nearLeft)) {
+      return BLITZ_LANES.right;
+    }
+    if (nearLeft && (sq.count < 110 || nearLeft.d < 4.5)) return BLITZ_LANES.left;
     if (boss) return boss.x;
+    if (frontTank && frontTank.d <= 26) return BLITZ_LANES.right;
     return BLITZ_LANES.left;
   }
 

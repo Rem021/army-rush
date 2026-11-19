@@ -7,11 +7,11 @@ import { ModelBossView, bakeSoldierBody, bossModel, buildSoldier, buildZombies, 
 import { Crowd, type AgentPose } from './crowd';
 import { commitInstances } from './dispose';
 import { BlobShadows, BulletMesh, Explosions, Flashes, FloatTexts, Particles, Pillar, Rings, Splats, Streaks, ZombieBars } from './effects';
-import { BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, gateColor, stripeTexture } from './entities';
+import { AllyTankView, BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, gateColor, stripeTexture } from './entities';
 import { Environment } from './environment';
 import { HpBar, formatNumber } from './label';
 import { setGunProvider, soldierBody, soldierLeg } from './models';
-import { droneGeometry, zombieBody, zombieLeg } from './props';
+import { droneGeometry, jetGeometry, zombieBody, zombieLeg } from './props';
 import { VatCrowd } from './vat';
 
 type Pose = AgentPose & { clip?: string; cycle?: number };
@@ -215,12 +215,23 @@ export class GameRenderer {
   private readonly camLook = new THREE.Vector3();
   private readonly squadPos = new THREE.Vector3();
   private readonly badge: HTMLDivElement;
+  private readonly allyTanks = new Map<number, AllyTankView>();
   private readonly blitzDrones: THREE.Mesh[] = [];
   private readonly shieldAura: THREE.Mesh;
   private readonly shieldMat: THREE.MeshBasicMaterial;
+  private readonly shieldDome: THREE.Mesh;
+  private readonly shieldDomeMat: THREE.MeshBasicMaterial;
+  private readonly powerAura: THREE.Mesh;
+  private readonly powerAuraMat: THREE.MeshBasicMaterial;
   private readonly blitzMissiles: THREE.InstancedMesh;
   private prevBlitzMissiles = 0;
+  private readonly allyShellMesh: THREE.InstancedMesh;
+  private prevAllyShells = 0;
+  private readonly airstrikeJet: THREE.Mesh;
+  private jetT = -1;
+  private jetX = 0;
   private readonly blitzLanes: THREE.Group;
+  private readonly blitzChevrons: THREE.Mesh[] = [];
   private shieldFlash = 0;
   private ammoName = '';
   private lastBadgeX = NaN;
@@ -327,8 +338,8 @@ export class GameRenderer {
     this.texts = new FloatTexts(fxLayer);
     this.walls = new WallsView(this.scene);
 
-    // 广告奇袭专属 3D 表现：护航无人机、小队护盾环、追踪导弹与三路标线
-    const droneGeo = droneGeometry(0.9);
+    // 广告奇袭专属 3D 表现：护航无人机、3D 能量护盾罩、火力光环、追踪导弹、友军重炮弹、空袭战机与左路极速传送带箭头
+    const droneGeo = droneGeometry(0.95);
     const droneMat = new THREE.MeshLambertMaterial({ vertexColors: true });
     for (let i = 0; i < 6; i++) {
       const mesh = new THREE.Mesh(droneGeo, droneMat);
@@ -346,11 +357,40 @@ export class GameRenderer {
       side: THREE.DoubleSide,
       toneMapped: false,
     });
-    this.shieldAura = new THREE.Mesh(new THREE.RingGeometry(0.86, 1.04, 36), this.shieldMat);
+    this.shieldAura = new THREE.Mesh(new THREE.RingGeometry(0.86, 1.06, 36), this.shieldMat);
     this.shieldAura.rotation.x = -Math.PI / 2;
     this.shieldAura.position.y = 0.08;
     this.shieldAura.visible = false;
     this.scene.add(this.shieldAura);
+
+    this.shieldDomeMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.16,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    this.shieldDome = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.5), this.shieldDomeMat);
+    this.shieldDome.position.y = 0.04;
+    this.shieldDome.visible = false;
+    this.scene.add(this.shieldDome);
+
+    this.powerAuraMat = new THREE.MeshBasicMaterial({
+      color: 0xf97316,
+      transparent: true,
+      opacity: 0.34,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    this.powerAura = new THREE.Mesh(new THREE.RingGeometry(0.68, 0.94, 32), this.powerAuraMat);
+    this.powerAura.rotation.x = -Math.PI / 2;
+    this.powerAura.position.y = 0.05;
+    this.powerAura.visible = false;
+    this.scene.add(this.powerAura);
 
     this.blitzMissiles = new THREE.InstancedMesh(
       new THREE.ConeGeometry(0.11, 0.72, 8),
@@ -362,8 +402,23 @@ export class GameRenderer {
     this.blitzMissiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(this.blitzMissiles);
 
+    this.allyShellMesh = new THREE.InstancedMesh(
+      new THREE.CapsuleGeometry(0.18, 0.62, 6, 10),
+      new THREE.MeshBasicMaterial({ color: 0xffe066, toneMapped: false }),
+      40,
+    );
+    this.allyShellMesh.frustumCulled = false;
+    this.allyShellMesh.count = 0;
+    this.allyShellMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(this.allyShellMesh);
+
+    this.airstrikeJet = new THREE.Mesh(jetGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+    this.airstrikeJet.castShadow = true;
+    this.airstrikeJet.visible = false;
+    this.scene.add(this.airstrikeJet);
+
     this.blitzLanes = new THREE.Group();
-    const laneMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, transparent: true, opacity: 0.34, depthWrite: false });
+    const laneMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, transparent: true, opacity: 0.36, depthWrite: false });
     const dashGeo = new THREE.PlaneGeometry(0.12, 2.2);
     for (const lx of [-1.85, 1.85]) {
       for (let d = -2; d < 64; d += 4.2) {
@@ -372,6 +427,26 @@ export class GameRenderer {
         dash.position.set(lx, 0.025, -d);
         this.blitzLanes.add(dash);
       }
+    }
+    // 左路高速 +1 传送带流动箭头（视觉提示左路门高速滑来！）
+    const chevMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.38,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    const chevGeo = new THREE.RingGeometry(0.45, 0.68, 3);
+    for (let i = 0; i < 12; i++) {
+      const ch = new THREE.Mesh(chevGeo, chevMat);
+      ch.rotation.x = -Math.PI / 2;
+      ch.rotation.z = Math.PI / 2;
+      ch.scale.set(1.2, 1.8, 1);
+      ch.position.set(-3.6, 0.03, -i * 5.2);
+      this.blitzLanes.add(ch);
+      this.blitzChevrons.push(ch);
     }
     this.blitzLanes.visible = false;
     this.scene.add(this.blitzLanes);
@@ -485,10 +560,17 @@ export class GameRenderer {
     this.splats.clear();
     this.explosions.clear();
     this.texts.clear();
+    for (const v of this.allyTanks.values()) v.dispose();
+    this.allyTanks.clear();
     for (let i = 0; i < this.blitzDrones.length; i++) this.blitzDrones[i].visible = false;
     this.shieldAura.visible = false;
+    this.shieldDome.visible = false;
+    this.powerAura.visible = false;
+    this.airstrikeJet.visible = false;
+    this.jetT = -1;
     this.shieldFlash = 0;
     this.prevBlitzMissiles = commitInstances(this.blitzMissiles, 0, this.prevBlitzMissiles);
+    this.prevAllyShells = commitInstances(this.allyShellMesh, 0, this.prevAllyShells);
   }
 
   loadLevel(world: World) {
@@ -587,6 +669,16 @@ export class GameRenderer {
       }
     }
     for (const [id, v] of this.hazards) if (!seen.has(id)) (this.dropView(v.group, v), this.hazards.delete(id));
+
+    seen.clear();
+    for (let i = 0; i < w.allyTanks.length; i++) {
+      const t = w.allyTanks[i];
+      seen.add(t.id);
+      if (!this.allyTanks.has(t.id)) {
+        this.allyTanks.set(t.id, new AllyTankView(this.scene, t));
+      }
+    }
+    for (const [id, v] of this.allyTanks) if (!seen.has(id)) (v.dispose(), this.allyTanks.delete(id));
   }
 
   private makeBossView(b: World['bosses'][number], dropIn: boolean): BossView | ModelBossView {
@@ -780,17 +872,17 @@ export class GameRenderer {
             b.tank ? TANK_DEBRIS_COLS : b.look === 'tires' ? TIRES_COLS : b.look === 'cage' ? CAGE_COLS : b.look === 'crate' ? CRATE_COLS : WOOD_BARREL_COLS;
           const isPickup = b.blitzLane === 'right' && !b.tank;
           if (b.tank) {
-            this.debris.burst(b.x, 1.2, -b.d, 48, 12, 1.4, 0.34, colors, 20, 0.65);
-            this.sparks.burst(b.x, 1.5, -b.d, 40, 11, 0.9, 0.22, BOSS_SPARK_COLS, 6, 0.55);
+            this.debris.burst(b.x, 1.2, -b.d, 44, 12, 1.4, 0.34, colors, 20, 0.65);
+            this.sparks.burst(b.x, 1.5, -b.d, 42, 11, 0.9, 0.22, SHIELD_COLS, 6, 0.6);
             this.explosions.spawn(b.x, 1.3, -b.d, 3.6);
-            this.rings.spawn(b.x, -b.d, 9.5, 0xffb347, 0.65);
-            this.shake(0.55);
+            this.rings.spawn(b.x, -b.d, 10.5, 0x38bdf8, 0.72);
+            this.rings.spawn(b.x, -b.d, 7.5, 0xffd34d, 0.55);
+            this.shake(0.58);
             this.streaks.burst(b.x - 1.6, b.x + 1.6, -(b.d + 36), -b.d, 40, 34);
-            this.texts.spawn('奖励释放！', b.x, 2.8, -(b.d - 4), 'big gold', 1.2, 1.5);
           } else if (isPickup) {
-            this.rings.spawn(b.x, -b.d, 3.2, 0x38bdf8, 0.35);
-            this.sparks.burst(b.x, 1.1, -b.d, 16, 6.5, 0.5, 0.14, WEAPON_UP_COLS, 8, 0.45);
-            this.shake(0.08);
+            this.rings.spawn(b.x, -b.d, 3.8, 0x38bdf8, 0.38);
+            this.sparks.burst(b.x, 1.1, -b.d, 22, 7.5, 0.55, 0.15, WEAPON_UP_COLS, 8, 0.48);
+            this.shake(0.1);
           } else {
             this.debris.burst(b.x, 1, -b.d, 26, 9, 1.1, 0.28, colors, 22, 0.5);
             if (b.look !== 'cage') this.explosions.spawn(b.x, 1, -b.d, 1.8);
@@ -808,38 +900,70 @@ export class GameRenderer {
         }
         case 'reward': {
           const r = e.reward;
+          const pw = Math.max(1.5, w.halfWidth + 0.6);
           if (r.kind === 'weapon') {
             if (e.upgraded) {
               this.texts.spawn(`${WEAPONS[r.tier].name}!`, sq.x, 2.8, -sq.d, 'big gold', 1.4, 1.8);
-              this.rings.spawn(sq.x, -sq.d, 3.6, 0xffd34d, 0.5);
-              this.sparks.burst(sq.x, 1.0, -sq.d, 30, 8, 0.7, 0.14, WEAPON_UP_COLS, 8, 0.5);
+              this.pillar.spawn(sq.x, -sq.d, pw, 0xffd34d);
+              this.rings.spawn(sq.x, -sq.d, 4.4, 0xffd34d, 0.52);
+              this.sparks.burst(sq.x, 1.0, -sq.d, 34, 8.5, 0.75, 0.15, WEAPON_UP_COLS, 8, 0.55);
+              this.shake(0.16);
             }
           } else if (r.kind === 'soldiers') {
             this.texts.spawn(`+${r.amount}`, sq.x, 2.6, -sq.d, 'big good', 1.2, 1.8);
+            this.rings.spawn(sq.x, -sq.d, 3.4, 0x22c55e, 0.4);
           } else if (r.kind === 'coins') {
             this.texts.spawn(`+${r.amount} 金币`, e.x, 2.5, -e.d, 'gold', 1.2, 1.5);
           } else if (r.kind === 'rate') {
-            this.texts.spawn(`射速 +${r.amount}%`, sq.x, 2.6, -sq.d, 'big good', 1.2, 1.8);
+            this.texts.spawn(`射速 +${r.amount}%`, sq.x, 2.8, -sq.d, 'big good', 1.25, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0x14c8e0);
+            this.rings.spawn(sq.x, -sq.d, 4.2, 0x14c8e0, 0.48);
+            this.sparks.burst(sq.x, 1.1, -sq.d, 22, 7.5, 0.6, 0.13, SHIELD_COLS, 6, 0.5);
           } else if (r.kind === 'drone') {
-            this.texts.spawn(`无人机 +${r.amount}!`, sq.x, 3.0, -sq.d, 'big gold', 1.3, 1.8);
-            this.rings.spawn(sq.x, -sq.d, 4.2, 0x38bdf8, 0.45);
+            this.texts.spawn(`导弹无人机 +${r.amount}!`, sq.x, 3.1, -sq.d, 'big gold', 1.35, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0x38bdf8);
+            this.rings.spawn(sq.x, -sq.d, 4.8, 0x38bdf8, 0.52);
+            this.sparks.burst(sq.x, 1.8, -sq.d, 28, 8.5, 0.7, 0.14, SHIELD_COLS, 4, 0.55);
+            this.shake(0.16);
           } else if (r.kind === 'multishot') {
-            this.texts.spawn(e.upgraded ? `弹道 ×${w.blitz.multishot}!` : '弹道已满', sq.x, 3.0, -sq.d, 'big gold', 1.3, 1.8);
-            this.rings.spawn(sq.x, -sq.d, 4.5, 0xa855f7, 0.5);
+            this.texts.spawn(e.upgraded ? `扇形弹道 ×${w.blitz.multishot}!` : '弹道已满', sq.x, 3.1, -sq.d, 'big gold', 1.4, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0xa855f7);
+            this.rings.spawn(sq.x, -sq.d, 5.2, 0xa855f7, 0.56);
+            _triCols[0] = 0xa855f7;
+            _triCols[1] = 0xfacc15;
+            _triCols[2] = 0xffffff;
+            this.sparks.burst(sq.x, 1.2, -sq.d, 32, 9.5, 0.75, 0.15, _triCols, 6, 0.55);
+            this.shake(0.18);
           } else if (r.kind === 'ammo') {
             const ammoDef = AMMO[Math.min(AMMO.length - 1, Math.max(0, r.level))];
-            this.texts.spawn(`${ammoDef.name}!`, sq.x, 3.0, -sq.d, 'big gold', 1.3, 1.8);
-            this.rings.spawn(sq.x, -sq.d, 4.2, ammoDef.color ?? 0x38bdf8, 0.5);
+            const ac = ammoDef.color ?? 0x38bdf8;
+            this.texts.spawn(`${ammoDef.name}装填!`, sq.x, 3.1, -sq.d, 'big gold', 1.35, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, ac);
+            this.rings.spawn(sq.x, -sq.d, 4.8, ac, 0.55);
+            _pairCols[0] = ac;
+            _pairCols[1] = 0xffffff;
+            this.sparks.burst(sq.x, 1.1, -sq.d, 30, 9, 0.7, 0.15, _pairCols, 6, 0.55);
+            this.shake(0.16);
           } else if (r.kind === 'damage') {
-            this.texts.spawn(`火力 +${r.amount}%`, sq.x, 2.8, -sq.d, 'big gold', 1.2, 1.8);
-            this.rings.spawn(sq.x, -sq.d, 4.0, 0xf97316, 0.45);
+            this.texts.spawn(`狂暴火力 +${r.amount}%!`, sq.x, 3.0, -sq.d, 'big gold', 1.35, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0xf97316);
+            this.rings.spawn(sq.x, -sq.d, 4.8, 0xf97316, 0.52);
+            this.sparks.burst(sq.x, 1.1, -sq.d, 30, 9, 0.7, 0.15, BOSS_SPARK_COLS, 6, 0.55);
+            this.shake(0.16);
           } else if (r.kind === 'shield') {
-            this.texts.spawn(`护盾 +${r.amount}`, sq.x, 2.8, -sq.d, 'big good', 1.2, 1.8);
-            this.rings.spawn(sq.x, -sq.d, 4.2, 0x22d3ee, 0.48);
+            this.shieldFlash = 1;
+            this.texts.spawn(`能量护盾 +${r.amount}!`, sq.x, 3.0, -sq.d, 'big good', 1.3, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0x22d3ee);
+            this.rings.spawn(sq.x, -sq.d, 5.0, 0x22d3ee, 0.55);
+            this.sparks.burst(sq.x, 1.2, -sq.d, 26, 8, 0.65, 0.14, SHIELD_COLS, 5, 0.55);
           } else if (r.kind === 'boom') {
-            this.texts.spawn('爆破清场!', e.x, 2.8, -e.d, 'big gold', 1.2, 1.6);
+            this.texts.spawn('爆破清场!', e.x, 2.9, -e.d, 'big gold', 1.3, 1.6);
+            this.pillar.spawn(e.x, -e.d, 2.4, 0xff5a1f);
           } else {
-            this.texts.spawn('空袭！', sq.x, 3, -sq.d, 'big gold', 1.2, 1.8);
+            this.texts.spawn('战机空袭！', sq.x, 3.2, -sq.d, 'big gold', 1.4, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0xff5a3a);
+            this.rings.spawn(sq.x, -sq.d, 5.5, 0xff5a3a, 0.55);
+            this.shake(0.24);
           }
           break;
         }
@@ -903,10 +1027,40 @@ export class GameRenderer {
           this.shake(0.14);
           break;
         }
+        case 'tankCapture': {
+          this.pillar.spawn(e.fromX, -e.fromD, 2.8, 0x38bdf8);
+          this.rings.spawn(e.fromX, -e.fromD, 8.5, 0x38bdf8, 0.65);
+          this.sparks.burst(e.fromX, 1.4, -e.fromD, 36, 10, 0.85, 0.16, SHIELD_COLS, 5, 0.65);
+          this.texts.spawn(`${e.tank.name} 入队参战！`, e.fromX, 3.0, -(e.fromD - 3), 'big good', 1.45, 1.7);
+          break;
+        }
+        case 'allyTankFire': {
+          const at = e.tank;
+          this.flashes.spawn(at.x, 1.1, -(at.d + at.r + 0.9), 1.5);
+          this.sparks.burst(at.x, 1.1, -(at.d + at.r + 0.7), 10, 7, 0.35, 0.11, BOSS_SPARK_COLS, 6, 0.35);
+          this.shake(0.08);
+          break;
+        }
+        case 'allyShellHit': {
+          const r = e.r;
+          this.explosions.spawn(e.x, 0.9, -e.d, r * 0.95);
+          this.rings.spawn(e.x, -e.d, r * 2.1, e.tier >= 3 ? 0xfacc15 : 0xff8a1f, 0.42);
+          this.sparks.burst(e.x, 1.0, -e.d, 20, 9.5, 0.6, 0.14, BOSS_SPARK_COLS, 8, 0.45);
+          this.debris.burst(e.x, 0.6, -e.d, 12, 7.5, 0.7, 0.16, IMPACT_DEBRIS_COLS, 20, 0.5);
+          this.shake(0.15);
+          break;
+        }
+        case 'airstrikeLaunch': {
+          this.jetT = 0;
+          this.jetX = Math.max(-2.5, Math.min(2.5, e.x * 0.5));
+          this.airstrikeJet.visible = true;
+          this.shake(0.22);
+          break;
+        }
         case 'shieldBlock': {
           this.shieldFlash = 1;
-          this.sparks.burst(e.x, 0.9, -e.d, 8, 5, 0.35, 0.1, SHIELD_COLS, 8, 0.4);
-          this.rings.spawn(e.x, -e.d, 2.2, 0x22d3ee, 0.32);
+          this.sparks.burst(e.x, 0.9, -e.d, 14, 6.5, 0.45, 0.12, SHIELD_COLS, 8, 0.45);
+          this.rings.spawn(e.x, -e.d, 3.4, 0x22d3ee, 0.38);
           break;
         }
         case 'hiveSpawn': {
@@ -1093,8 +1247,66 @@ export class GameRenderer {
     this.blobs.end();
 
     this.bullets.update(w.bullets);
-    // 广告奇袭：护航无人机、小队护盾能量环与追踪导弹
+    // 广告奇袭：友军坦克编队、重炮弹道、护航无人机、3D 护盾罩、火力光环、追踪导弹、空袭战机与左路高速箭头
     const isBlitz = w.spec.mode === 'blitz';
+    if (isBlitz) {
+      // 左路高速 +1 传送带流动箭头
+      const span = 12 * 5.2;
+      for (let i = 0; i < this.blitzChevrons.length; i++) {
+        const ch = this.blitzChevrons[i];
+        const raw = ((i * 5.2 - t * 7.8) % span + span) % span;
+        ch.position.z = -(raw - 2);
+      }
+      // 友军收编坦克更新 + 进场履带能量火花
+      for (const view of this.allyTanks.values()) {
+        view.update(t);
+        if (dt > 0 && view.tank.phase === 'joining' && Math.random() < 0.7) {
+          this.sparks.spawn(view.tank.x + (Math.random() - 0.5) * 1.1, 0.25, -view.tank.d - 0.8, 0, 1.4, -2, 0.28, 0.12, 0x38bdf8, 8);
+        }
+      }
+    }
+    // 友军重炮弹飞行与炽烈拖尾
+    let si = 0;
+    if (isBlitz && w.allyShells.length > 0) {
+      for (let i = 0; i < w.allyShells.length && si < 40; i++) {
+        const sh = w.allyShells[i];
+        const k = Math.min(1, sh.t / sh.T);
+        const y = 1.15 + Math.sin(k * Math.PI) * 2.2 - k * 0.4;
+        const x = THREE.MathUtils.lerp(sh.x0, sh.x, k);
+        const d = THREE.MathUtils.lerp(sh.d0, sh.d, k);
+        _mDir.set(sh.x - sh.x0, Math.cos(k * Math.PI) * 4.2 - 0.4, -(sh.d - sh.d0)).normalize();
+        _mQuat.setFromUnitVectors(_mUp, _mDir);
+        _mPos.set(x, y, -d);
+        _mMat.compose(_mPos, _mQuat, _mScale);
+        this.allyShellMesh.setMatrixAt(si++, _mMat);
+        if (dt > 0) {
+          this.sparks.spawn(x, y, -d, (Math.random() - 0.5) * 1.2, 0.4, 2.2, 0.24, 0.12, sh.tier >= 3 ? 0xfacc15 : 0xff7b24, 0);
+        }
+      }
+    }
+    this.prevAllyShells = commitInstances(this.allyShellMesh, si, this.prevAllyShells);
+
+    // 3D 空袭战机低空呼啸掠过动画
+    if (this.jetT >= 0) {
+      this.jetT += dt;
+      const dur = 1.45;
+      const k = this.jetT / dur;
+      if (k >= 1) {
+        this.jetT = -1;
+        this.airstrikeJet.visible = false;
+      } else {
+        const jz = THREE.MathUtils.lerp(18, -72, k);
+        const jy = 7.8 + Math.sin(k * Math.PI) * 1.6;
+        this.airstrikeJet.visible = true;
+        this.airstrikeJet.position.set(this.jetX, jy, jz);
+        this.airstrikeJet.rotation.set(-0.08, 0, Math.sin(k * Math.PI * 2) * 0.22);
+        if (dt > 0) {
+          this.sparks.spawn(this.jetX - 0.28, jy - 0.02, jz + 2.2, 0, 0, 8, 0.28, 0.16, 0xff9f1c, 0);
+          this.sparks.spawn(this.jetX + 0.28, jy - 0.02, jz + 2.2, 0, 0, 8, 0.28, 0.16, 0xffd34d, 0);
+        }
+      }
+    }
+
     const droneCount = isBlitz ? Math.min(this.blitzDrones.length, w.blitz.drones) : 0;
     for (let i = 0; i < this.blitzDrones.length; i++) {
       const dm = this.blitzDrones[i];
@@ -1102,14 +1314,14 @@ export class GameRenderer {
         dm.visible = true;
         const side = i % 2 === 0 ? -1 : 1;
         const ring = Math.floor(i / 2) + 1;
-        const angle = t * 2.2 + i * 1.3;
+        const angle = t * 2.4 + i * 1.3;
         dm.position.set(
           sq.x + side * (Math.max(1.0, w.halfWidth + 0.35) + (ring - 1) * 0.45) + Math.sin(angle) * 0.18,
-          2.05 + Math.sin(t * 4.5 + i) * 0.18 + (ring - 1) * 0.22,
+          2.1 + Math.sin(t * 4.8 + i) * 0.2 + (ring - 1) * 0.22,
           -(sq.d + 0.3 - (ring - 1) * 0.65),
         );
-        dm.rotation.y = Math.sin(t * 2 + i) * 0.25;
-        dm.rotation.z = Math.cos(angle) * 0.15;
+        dm.rotation.y = Math.sin(t * 2.4 + i) * 0.3;
+        dm.rotation.z = Math.cos(angle) * 0.18;
       } else {
         dm.visible = false;
       }
@@ -1117,12 +1329,29 @@ export class GameRenderer {
     this.shieldFlash = Math.max(0, this.shieldFlash - dt * 4);
     if (isBlitz && w.blitz.shield > 0 && sq.count > 0) {
       this.shieldAura.visible = true;
-      const r = Math.max(1.05, w.halfWidth + 0.42);
+      this.shieldDome.visible = true;
+      const r = Math.max(1.15, w.halfWidth + 0.5);
+      const pulse = 1 + this.shieldFlash * 0.14 + Math.sin(t * 5) * 0.025;
       this.shieldAura.position.set(sq.x, 0.08, -sq.d);
-      this.shieldAura.scale.setScalar(r * (1 + this.shieldFlash * 0.14 + Math.sin(t * 5) * 0.025));
-      this.shieldMat.opacity = 0.34 + this.shieldFlash * 0.45 + Math.sin(t * 4) * 0.08;
+      this.shieldAura.scale.setScalar(r * pulse);
+      this.shieldMat.opacity = 0.38 + this.shieldFlash * 0.48 + Math.sin(t * 4) * 0.08;
+      this.shieldDome.position.set(sq.x, 0.02, -sq.d);
+      this.shieldDome.scale.set(r * pulse, Math.min(2.6, r * 0.85) * pulse, r * pulse);
+      this.shieldDomeMat.opacity = 0.14 + this.shieldFlash * 0.34 + Math.sin(t * 4.5) * 0.04;
     } else {
       this.shieldAura.visible = false;
+      this.shieldDome.visible = false;
+    }
+    // 火力倍增 / 多重弹道炽烈光环
+    if (isBlitz && (w.blitz.damageBonus > 0 || w.blitz.multishot > 1) && sq.count > 0) {
+      this.powerAura.visible = true;
+      const pr = Math.max(1.0, w.halfWidth + 0.25);
+      this.powerAura.position.set(sq.x, 0.05, -sq.d);
+      this.powerAura.scale.setScalar(pr * (1 + Math.sin(t * 6.5) * 0.04));
+      this.powerAuraMat.color.setHex(w.blitz.damageBonus > 0 ? 0xf97316 : 0xa855f7);
+      this.powerAuraMat.opacity = 0.26 + Math.sin(t * 6.5) * 0.08;
+    } else {
+      this.powerAura.visible = false;
     }
     let mi = 0;
     if (isBlitz && w.rockets.length > 0) {
@@ -1141,7 +1370,18 @@ export class GameRenderer {
       }
     }
     this.prevBlitzMissiles = commitInstances(this.blitzMissiles, mi, this.prevBlitzMissiles);
-    const trail = sq.tier >= 5 ? (sq.tier === 6 ? 0xd59bff : 0xffe27a) : w.ammo.name === '电磁弹' ? 0xb98cff : 0;
+    const trail =
+      sq.tier >= 5
+        ? sq.tier === 6
+          ? 0xd59bff
+          : 0xffe27a
+        : w.ammo.name === '电磁弹'
+          ? 0x67e8f9
+          : w.ammo.name === '爆裂弹'
+            ? 0xff7b24
+            : isBlitz && w.blitz.multishot > 1
+              ? 0xe879f9
+              : 0;
     if (trail && w.bullets.length && dt > 0) {
       for (let i = 0; i < 6; i++) {
         const b = w.bullets[Math.floor(Math.random() * w.bullets.length)];

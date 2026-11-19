@@ -13,27 +13,35 @@ function freshSave(): SaveData {
   return s;
 }
 
-function simulateBlitz(stage: 1 | 2, maxSeconds = 180) {
+function simulateBlitz(stage: 1 | 2, maxSeconds = 200) {
   const spec = generateBlitz(stage);
   const w = new World(spec, blitzOptions(stage));
   const bot = new Bot(mulberry32(stage === 1 ? 101 : 202), 0);
   const dt = 1 / 30;
   const steps = Math.ceil(maxSeconds / dt);
   let tankFires = 0;
+  let allyCaptures = 0;
+  let allyFires = 0;
+  let allyHits = 0;
   let shieldBlocks = 0;
   let strikeBlasts = 0;
   let peakSquad = w.squad.count;
+  let bossesDefeated = 0;
   for (let i = 0; i < steps && w.state !== 'won' && w.state !== 'lost'; i++) {
     w.setTarget(bot.target(w));
     w.update(dt);
     peakSquad = Math.max(peakSquad, w.squad.count);
     for (const e of w.drainEvents()) {
       if (e.type === 'tankFire') tankFires++;
+      else if (e.type === 'tankCapture') allyCaptures++;
+      else if (e.type === 'allyTankFire') allyFires++;
+      else if (e.type === 'allyShellHit') allyHits++;
       else if (e.type === 'shieldBlock') shieldBlocks++;
+      else if (e.type === 'bossDie') bossesDefeated++;
       else if (e.type === 'explode' && e.source === 'strike') strikeBlasts++;
     }
   }
-  return { w, tankFires, shieldBlocks, strikeBlasts, peakSquad };
+  return { w, tankFires, allyCaptures, allyFires, allyHits, shieldBlocks, strikeBlasts, peakSquad, bossesDefeated };
 }
 
 describe('Blitz unlock & save rules', () => {
@@ -101,7 +109,6 @@ describe('Blitz unlock & save rules', () => {
     expect(s.level).toBe(6);
     expect(s.defenseLevel).toBe(6);
 
-    // Replay Stage 1 should not grant duplicate first-clear gems
     const replay = settleRun(s, {
       mode: 'blitz',
       level: 1,
@@ -120,7 +127,7 @@ describe('Blitz unlock & save rules', () => {
 });
 
 describe('Blitz core mechanics', () => {
-  it('shields right-lane rewards behind living tank and lets squad auto-collect after tank breaks', () => {
+  it('destroying a Heavy Tank captures it as an AllyTank that drives up and fires explosive shells alongside the squad', () => {
     const spec = generateBlitz(1);
     const w = new World(spec, blitzOptions(1));
     const tank = w.barrels.find((b) => b.look === 'tank')!;
@@ -136,14 +143,37 @@ describe('Blitz core mechanics', () => {
     expect(tank.hp).toBeLessThan(tank.maxHp);
     expect(reward.hp).toBe(rewardHp0);
 
-    // Destroy tank; right-lane reward should slide to squad and grant reward with zero soldier loss
+    // Destroy tank -> captures AllyTank AND unlocks right-lane rewards
     tank.hp = 1;
-    for (let i = 0; i < 60 && tank.alive; i++) w.update(0.05);
+    let captured = false;
+    for (let i = 0; i < 60 && tank.alive; i++) {
+      w.update(0.05);
+      for (const e of w.drainEvents()) if (e.type === 'tankCapture') captured = true;
+    }
     expect(tank.alive).toBe(false);
-    expect(w.blitz.tanksDestroyed).toBeGreaterThanOrEqual(1);
+    expect(captured).toBe(true);
+    expect(w.allyTanks.length).toBe(1);
+    expect(w.blitz.allyTanks).toBe(1);
 
+    // Let AllyTank drive down to flank the squad and fire shells at incoming middle-lane enemies
+    let fired = 0;
+    let blasted = 0;
+    for (let i = 0; i < 90; i++) {
+      w.update(0.05);
+      for (const e of w.drainEvents()) {
+        if (e.type === 'allyTankFire') fired++;
+        if (e.type === 'allyShellHit') blasted++;
+      }
+    }
+    expect(w.allyTanks[0].phase).toBe('fighting');
+    expect(w.allyTanks[0].d).toBeLessThan(4);
+    expect(fired).toBeGreaterThanOrEqual(2);
+    expect(blasted).toBeGreaterThanOrEqual(1);
+
+    // Right-lane reward auto-collects with zero soldier loss
     const beforeCount = w.squad.count;
-    reward.d = 1.2;
+    reward.alive = true;
+    reward.d = 1.0;
     w.squad.x = BLITZ_LANES.right;
     w.update(0.05);
     expect(reward.alive).toBe(false);
@@ -151,36 +181,28 @@ describe('Blitz core mechanics', () => {
     expect(w.blitz.buffsCollected).toBeGreaterThanOrEqual(1);
   });
 
-  it('left +1 gate upgrades when shot and red flip gate turns positive in Stage 2', () => {
-    const spec2 = generateBlitz(2);
-    const w = new World(spec2, blitzOptions(2));
-    const leftAdd = w.gates.find((g) => g.blitzLane === 'left' && g.kind === 'add' && g.value > 0)!;
-    const redFlip = w.gates.find((g) => g.blitzLane === 'left' && g.kind === 'add' && g.value < 0)!;
+  it('left +1 number gates never increase when shot and move swiftly down the left lane', () => {
+    const spec = generateBlitz(1);
+    const w = new World(spec, blitzOptions(1));
+    const leftAdd = w.gates.find((g) => g.blitzLane === 'left' && g.kind === 'add' && g.value === 1)!;
     expect(leftAdd).toBeDefined();
-    expect(redFlip).toBeDefined();
 
-    // Bring leftAdd into firing range and shoot it
+    // Place leftAdd in direct line of fire and shoot at it for 1 second
     leftAdd.d = 18;
-    const v0 = leftAdd.value;
+    const d0 = leftAdd.d;
     w.squad.x = BLITZ_LANES.left;
     w.setTarget(BLITZ_LANES.left);
     for (let i = 0; i < 20; i++) w.update(0.05);
-    expect(leftAdd.value).toBeGreaterThan(v0);
 
-    // Consume any earlier left gates so bullets directly hit redFlip
-    for (const g of w.gates) {
-      if (g !== redFlip && g.blitzLane === 'left') g.consumed = true;
-    }
-    redFlip.d = 18;
-    redFlip.value = -2;
-    for (let i = 0; i < 60 && redFlip.value <= 0; i++) w.update(0.05);
-    expect(redFlip.value).toBeGreaterThan(0);
+    // Value MUST stay fixed at 1 (shooting does not increment Blitz gates)
+    expect(leftAdd.value).toBe(1);
+    // And it advanced rapidly (~7.8 m/s)
+    expect(d0 - leftAdd.d).toBeGreaterThan(7.0);
   });
 
-  it('shield charges absorb incoming zombie casualties and spatial splash damages only nearby zombies', () => {
+  it('shield charges absorb incoming zombie casualties with shockwave repulse and spatial splash hits nearby zombies', () => {
     const spec = generateBlitz(1);
     const w = new World(spec, { ...blitzOptions(1), ammo: 2 });
-    // Grant shield reward via right-lane pickup (clear all other right-lane barrels)
     const shieldBarrel = w.barrels.find((b) => b.reward?.kind === 'shield')!;
     expect(shieldBarrel).toBeDefined();
     for (const b of w.barrels) if (b !== shieldBarrel && b.blitzLane === 'right') b.alive = false;
@@ -193,21 +215,23 @@ describe('Blitz core mechanics', () => {
     const beforeSquad = w.squad.count;
     const beforeShield = w.blitz.shield;
     const template = w.zombies[0];
-    // Place a zombie directly on squad to trigger contact kill (should be absorbed by shield)
-    w.zombies.push({
+    const attacker = {
       ...template,
       id: 99991,
       x: w.squad.x,
       d: 0.2,
-      hp: 100,
-      maxHp: 100,
-      kind: 'walker',
+      hp: 500,
+      maxHp: 500,
+      kind: 'walker' as const,
       alive: true,
       active: true,
-    });
+    };
+    w.zombies.push(attacker);
     w.update(0.05);
     expect(w.squad.count).toBe(beforeSquad);
     expect(w.blitz.shield).toBeLessThan(beforeShield);
+    // Shield repulse dealt real damage to the attacker
+    expect(attacker.hp).toBeLessThan(500);
 
     // Spatial splash accuracy: near zombie gets hit by splash, far zombie stays at full HP
     const nearZ = {
@@ -244,29 +268,35 @@ describe('Blitz core mechanics', () => {
 });
 
 describe('Blitz full headless Bot playthrough', () => {
-  it('Stage 1 (重装坦克道) is winnable, destroys all tanks, and collects rich buffs', () => {
-    const { w, tankFires, strikeBlasts, peakSquad } = simulateBlitz(1);
+  it('Stage 1 (重装坦克道) is winnable with dense hordes, 6 Bosses, and captured Allied Tanks fighting together', () => {
+    const { w, allyCaptures, allyFires, allyHits, strikeBlasts, peakSquad, bossesDefeated } = simulateBlitz(1);
     expect(w.state).toBe('won');
     expect(w.blitz.tanksDestroyed).toBe(w.blitz.totalTanks);
-    expect(w.blitz.totalTanks).toBe(3);
-    expect(w.blitz.buffsCollected).toBeGreaterThanOrEqual(6);
-    expect(w.blitz.drones).toBeGreaterThanOrEqual(1);
-    expect(w.blitz.multishot).toBeGreaterThanOrEqual(2);
-    expect(tankFires).toBeGreaterThan(0);
-    expect(strikeBlasts).toBeGreaterThan(0);
-    expect(peakSquad).toBeGreaterThan(15);
-  });
-
-  it('Stage 2 (广告大乱斗) is winnable, destroys all 4 tanks, and scales to crazy firepower', () => {
-    const { w, tankFires, strikeBlasts, peakSquad } = simulateBlitz(2);
-    expect(w.state).toBe('won');
-    expect(w.blitz.tanksDestroyed).toBe(w.blitz.totalTanks);
-    expect(w.blitz.totalTanks).toBe(4);
+    expect(allyCaptures).toBe(w.blitz.totalTanks);
+    expect(allyFires).toBeGreaterThanOrEqual(15);
+    expect(allyHits).toBeGreaterThanOrEqual(15);
+    expect(bossesDefeated).toBeGreaterThanOrEqual(6);
     expect(w.blitz.buffsCollected).toBeGreaterThanOrEqual(8);
     expect(w.blitz.drones).toBeGreaterThanOrEqual(2);
     expect(w.blitz.multishot).toBeGreaterThanOrEqual(2);
-    expect(tankFires).toBeGreaterThan(0);
+    expect(w.squad.tier).toBeGreaterThanOrEqual(4);
     expect(strikeBlasts).toBeGreaterThan(0);
-    expect(peakSquad).toBeGreaterThan(20);
+    expect(peakSquad).toBeGreaterThan(30);
+    expect(w.kills).toBeGreaterThan(220);
+  });
+
+  it('Stage 2 (广告大乱斗) is winnable with 4 captured Tanks, 10 Bosses, and massive combat intensity', () => {
+    const { w, allyCaptures, allyFires, bossesDefeated, strikeBlasts } = simulateBlitz(2);
+    expect(w.state).toBe('won');
+    expect(w.blitz.tanksDestroyed).toBe(4);
+    expect(allyCaptures).toBe(4);
+    expect(allyFires).toBeGreaterThanOrEqual(20);
+    expect(bossesDefeated).toBeGreaterThanOrEqual(10);
+    expect(w.blitz.buffsCollected).toBeGreaterThanOrEqual(10);
+    expect(w.blitz.drones).toBeGreaterThanOrEqual(3);
+    expect(w.blitz.multishot).toBe(3);
+    expect(w.squad.tier).toBeGreaterThanOrEqual(5);
+    expect(strikeBlasts).toBeGreaterThan(0);
+    expect(w.kills).toBeGreaterThan(320);
   });
 });

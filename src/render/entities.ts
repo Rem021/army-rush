@@ -1,11 +1,12 @@
 import * as THREE from 'three';
 import { AMMO, BOSSES, BOSS_STRIKE_HALF, THROWER_MELEE_TIME, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
-import type { Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
+import type { AllyTank, Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
 import { bossMotion, bossPose } from './bossMotion';
 import { commitInstances, disposeObject } from './dispose';
 import { HpBar, Label, formatNumber, labelPlane, labelSprite } from './label';
 import { barrelGeometry, coinGeometry, gunGeometry, tiresGeometry, tiresHeight } from './models';
 import {
+  ammoCoreGeometry,
   armorGeometry,
   barrierGeometry,
   bombBarrelGeometry,
@@ -13,11 +14,15 @@ import {
   cageGeometry,
   crateGeometry,
   crateHeight,
+  damageCoreGeometry,
   droneGeometry,
   drumMesh,
   missileGeometry,
+  multishotGeometry,
+  rateBoltGeometry,
   sawBladeGeometry,
   sawRailGeometry,
+  shieldCoreGeometry,
   spikesGeometry,
   tankHullGeometry,
   tankTurretGeometry,
@@ -237,6 +242,8 @@ export class BarrelView {
   private readonly labelSprite: THREE.Sprite;
   private readonly rewardLabel?: Label;
   private readonly isPickupPod: boolean;
+  private readonly podBeam?: THREE.Mesh;
+  private readonly bombHalo?: THREE.Mesh;
   private flyT = -1;
   private readonly flyFrom = new THREE.Vector3();
   /** 每个桶自己一份材质，被打时单独闪白 */
@@ -315,11 +322,13 @@ export class BarrelView {
     this.group.add(this.labelSprite);
 
     const r = barrel.reward;
+    let beamColor = 0;
     if (barrel.tank) {
       // 坦克本身已带顶部血条与名牌，无需重复悬空金币图标遮挡炮塔
       this.reward.visible = false;
     } else if (r.kind === 'weapon') {
-      const gun = new THREE.Mesh(gunGeometry(r.tier, 4.6), vertexMat);
+      beamColor = 0xffd34d;
+      const gun = new THREE.Mesh(gunGeometry(r.tier, 4.8), vertexMat);
       gun.rotation.y = Math.PI / 2;
       gun.castShadow = true;
       this.reward.add(gun);
@@ -327,74 +336,121 @@ export class BarrelView {
       if (this.isPickupPod) {
         this.rewardLabel = new Label(256, 96);
         this.rewardLabel.set(WEAPONS[r.tier].name, { fill: '#ffffff', stroke: '#7c2d12', pill: '#f59e0b', size: 46 });
-        const s = labelSprite(this.rewardLabel, 2.1, 0.78, false);
-        s.position.y = 0.85;
+        const s = labelSprite(this.rewardLabel, 2.2, 0.82, false);
+        s.position.y = 0.92;
         this.reward.add(s);
       }
     } else if (r.kind === 'airstrike') {
+      beamColor = 0xff5a3a;
       const m = new THREE.Mesh(missileGeometry(), vertexMat);
       m.rotation.z = Math.PI / 2;
-      m.scale.setScalar(1.3);
+      m.scale.setScalar(1.45);
+      m.castShadow = true;
       this.reward.add(m);
       this.reward.add(glowRing(0xff5a3a));
       this.rewardLabel = new Label(256, 96);
-      this.rewardLabel.set('空袭', { fill: '#ffffff', stroke: '#7a1a0a', pill: '#e3462f', size: 58 });
-      const s = labelSprite(this.rewardLabel, 1.6, 0.6, false);
-      s.position.y = 0.85;
+      this.rewardLabel.set('战机空袭', { fill: '#ffffff', stroke: '#7a1a0a', pill: '#e3462f', size: 50 });
+      const s = labelSprite(this.rewardLabel, 2.1, 0.78, false);
+      s.position.y = 0.96;
       this.reward.add(s);
     } else if (r.kind === 'drone') {
-      const d = new THREE.Mesh(droneGeometry(1.15), vertexMat);
+      beamColor = 0x38bdf8;
+      const d = new THREE.Mesh(droneGeometry(1.3), vertexMat);
       d.castShadow = true;
       this.reward.add(d);
       this.reward.add(glowRing(0x38bdf8));
       this.rewardLabel = new Label(256, 96);
       this.rewardLabel.set(`+${r.amount} 无人机`, { fill: '#ffffff', stroke: '#0c4a6e', pill: '#0284c7', size: 46 });
       const s = labelSprite(this.rewardLabel, 2.2, 0.8, false);
-      s.position.y = 0.85;
+      s.position.y = 0.94;
       this.reward.add(s);
     } else if (r.kind === 'multishot') {
+      beamColor = 0xa855f7;
+      const ms = new THREE.Mesh(multishotGeometry(), vertexMat);
+      ms.scale.setScalar(1.2);
+      ms.castShadow = true;
+      this.reward.add(ms);
       this.reward.add(glowRing(0xa855f7));
       this.rewardLabel = new Label(256, 112);
-      this.rewardLabel.set(`+${r.amount} 弹道`, { fill: '#ffffff', stroke: '#4c1d95', pill: '#9333ea', size: 52 });
-      const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
-      s.position.y = 0.45;
+      this.rewardLabel.set(`+${r.amount} 扇形弹道`, { fill: '#ffffff', stroke: '#4c1d95', pill: '#9333ea', size: 44 });
+      const s = labelSprite(this.rewardLabel, 2.35, 0.92, false);
+      s.position.y = 0.95;
       this.reward.add(s);
     } else if (r.kind === 'ammo') {
       const ammoDef = AMMO[Math.min(AMMO.length - 1, Math.max(0, r.level))];
-      this.reward.add(glowRing(ammoDef.color ?? 0x38bdf8));
+      beamColor = ammoDef.color ?? 0x38bdf8;
+      const core = new THREE.Mesh(ammoCoreGeometry(r.level), vertexMat);
+      core.scale.setScalar(1.18);
+      core.castShadow = true;
+      this.reward.add(core);
+      this.reward.add(glowRing(beamColor));
       this.rewardLabel = new Label(256, 112);
-      this.rewardLabel.set(ammoDef.name, { fill: '#ffffff', stroke: '#1e1b4b', pill: '#4f46e5', size: 46 });
+      this.rewardLabel.set(ammoDef.name, { fill: '#ffffff', stroke: '#1e1b4b', pill: '#4f46e5', size: 48 });
       const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
-      s.position.y = 0.45;
+      s.position.y = 0.96;
       this.reward.add(s);
     } else if (r.kind === 'damage') {
+      beamColor = 0xf97316;
+      const dmgMesh = new THREE.Mesh(damageCoreGeometry(), vertexMat);
+      dmgMesh.scale.setScalar(1.22);
+      dmgMesh.castShadow = true;
+      this.reward.add(dmgMesh);
       this.reward.add(glowRing(0xf97316));
       this.rewardLabel = new Label(256, 112);
       this.rewardLabel.set(`火力 +${r.amount}%`, { fill: '#ffffff', stroke: '#7c2d12', pill: '#ea580c', size: 46 });
-      const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
-      s.position.y = 0.45;
+      const s = labelSprite(this.rewardLabel, 2.25, 0.92, false);
+      s.position.y = 0.98;
       this.reward.add(s);
     } else if (r.kind === 'shield') {
+      beamColor = 0x22d3ee;
+      const shMesh = new THREE.Mesh(shieldCoreGeometry(), vertexMat);
+      shMesh.scale.setScalar(1.25);
+      shMesh.castShadow = true;
+      this.reward.add(shMesh);
       this.reward.add(glowRing(0x22d3ee));
       this.rewardLabel = new Label(256, 112);
       this.rewardLabel.set(`护盾 +${r.amount}`, { fill: '#ffffff', stroke: '#155e75', pill: '#0891b2', size: 50 });
-      const s = labelSprite(this.rewardLabel, 2.1, 0.9, false);
-      s.position.y = 0.45;
+      const s = labelSprite(this.rewardLabel, 2.2, 0.9, false);
+      s.position.y = 0.96;
       this.reward.add(s);
     } else if (r.kind === 'boom') {
       this.reward.add(glowRing(0xef4444));
       this.rewardLabel = new Label(256, 96);
       this.rewardLabel.set('引爆清场', { fill: '#fff7ed', stroke: '#7f1d1d', pill: '#dc2626', size: 48 });
       const s = labelSprite(this.rewardLabel, 1.9, 0.72, false);
-      s.position.y = 0.35;
+      s.position.y = 0.42;
       this.reward.add(s);
+      // 地面警示爆破圈
+      this.bombHalo = new THREE.Mesh(
+        new THREE.RingGeometry(1.15, 1.48, 28),
+        new THREE.MeshBasicMaterial({
+          color: 0xff3b30,
+          transparent: true,
+          opacity: 0.6,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+          toneMapped: false,
+        }),
+      );
+      this.bombHalo.rotation.x = -Math.PI / 2;
+      this.bombHalo.position.y = 0.06;
+      this.group.add(this.bombHalo);
     } else {
+      if (r.kind === 'rate') {
+        beamColor = 0x14c8e0;
+        const bolt = new THREE.Mesh(rateBoltGeometry(), vertexMat);
+        bolt.scale.setScalar(1.18);
+        bolt.castShadow = true;
+        this.reward.add(bolt);
+        this.reward.add(glowRing(0x14c8e0));
+      }
       this.rewardLabel = new Label(256, 128);
       if (r.kind === 'soldiers') this.rewardLabel.set(`+${r.amount}`, { fill: '#ffffff', stroke: '#1d7a33', pill: '#2fd14a', size: 70 });
       else if (r.kind === 'coins') this.rewardLabel.set(`+${r.amount}`, { fill: '#ffffff', stroke: '#9a6a00', pill: '#ffbf1f', size: 70 });
-      else this.rewardLabel.set(`+${r.amount}%`, { fill: '#ffffff', stroke: '#0a5a6a', pill: '#14c8e0', size: 60, icon: 'bolt' });
-      const s = labelSprite(this.rewardLabel, 2.0, 1.0, false);
-      s.position.y = 0.3;
+      else this.rewardLabel.set(`射速 +${r.amount}%`, { fill: '#ffffff', stroke: '#0a5a6a', pill: '#14c8e0', size: 48, icon: 'bolt' });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
+      s.position.y = r.kind === 'rate' ? 0.96 : 0.3;
       this.reward.add(s);
       if (r.kind === 'coins') {
         const coin = new THREE.Mesh(coinGeometry(), vertexMat);
@@ -402,7 +458,11 @@ export class BarrelView {
         this.reward.add(coin);
       }
     }
-    this.reward.position.set(0, this.topY + (this.isPickupPod ? 0.75 : 1.0), 0);
+    if (this.isPickupPod && beamColor) {
+      this.podBeam = holoBeam(beamColor);
+      this.group.add(this.podBeam);
+    }
+    this.reward.position.set(0, this.topY + (this.isPickupPod ? 0.85 : 1.0), 0);
     this.group.add(this.reward);
   }
 
@@ -423,6 +483,8 @@ export class BarrelView {
     this.body.visible = false;
     if (this.turret) this.turret.visible = false;
     if (this.tankBarSprite) this.tankBarSprite.visible = false;
+    if (this.podBeam) this.podBeam.visible = false;
+    if (this.bombHalo) this.bombHalo.visible = false;
     this.labelSprite.visible = false;
     if (this.barrel.tank || this.barrel.reward.kind === 'boom') {
       this.reward.visible = false;
@@ -478,17 +540,30 @@ export class BarrelView {
         const big = b.r >= 1.5 ? 1.12 : 1;
         this.labelSprite.scale.set(2.6 * big * (1 + b.bump * 0.1), 1.3 * big * (1 + b.bump * 0.1), 1);
       }
-      this.reward.rotation.y = time * 1.8;
-      this.reward.position.y = this.topY + (this.isPickupPod ? 0.75 : 1.0) + Math.sin(time * 3) * 0.12;
+      this.reward.rotation.y = time * (this.isPickupPod ? 2.4 : 1.8);
+      this.reward.position.y = this.topY + (this.isPickupPod ? 0.85 : 1.0) + Math.sin(time * (this.isPickupPod ? 4.2 : 3)) * 0.16;
+      if (this.isPickupPod) {
+        const beat = 1 + Math.sin(time * 5.2 + b.id) * 0.08;
+        this.reward.scale.setScalar(beat);
+        if (this.podBeam) {
+          (this.podBeam.material as THREE.MeshBasicMaterial).opacity = 0.22 + Math.sin(time * 4.5 + b.id) * 0.08;
+          this.podBeam.scale.set(0.95 + Math.sin(time * 6 + b.id) * 0.1, 1, 0.95 + Math.sin(time * 6 + b.id) * 0.1);
+        }
+      }
+      if (this.bombHalo) {
+        const sc = 0.9 + Math.sin(time * 7 + b.id) * 0.18;
+        this.bombHalo.scale.setScalar(sc);
+        (this.bombHalo.material as THREE.MeshBasicMaterial).opacity = 0.35 + Math.max(0, Math.sin(time * 7 + b.id)) * 0.4;
+      }
       return;
     }
     if (this.flyT < 0) return;
     this.flyT += dt;
-    const k = Math.min(1, this.flyT / 0.45);
+    const k = Math.min(1, this.flyT / 0.42);
     this.reward.position.lerpVectors(this.flyFrom, squadPos, k * k);
-    this.reward.position.y += Math.sin(k * Math.PI) * 2.5;
-    this.reward.rotation.y += dt * 12;
-    this.reward.scale.setScalar(1 - k * 0.6);
+    this.reward.position.y += Math.sin(k * Math.PI) * 2.8;
+    this.reward.rotation.y += dt * 15;
+    this.reward.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.35 - k * 0.55);
     if (k >= 1) {
       this.reward.visible = false;
       this.flyT = -1;
@@ -505,10 +580,27 @@ export class BarrelView {
   }
 }
 
+function holoBeam(color: number): THREE.Mesh {
+  const beam = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.68, 0.96, 3.6, 16, 1, true),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.24,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    }),
+  );
+  beam.position.y = 1.85;
+  return beam;
+}
+
 function glowRing(color: number): THREE.Mesh {
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.5, 0.95, 32),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = -0.45;
@@ -902,6 +994,92 @@ export class StrikeView {
   }
 
   dispose() {
+    this.group.removeFromParent();
+    disposeObject(this.group);
+  }
+}
+
+/** 被玩家收编的友军重装坦克：蓝金涂装 + 底部能量光环 + 掉头入队动画 + 炮塔自动索敌轰炸 */
+export class AllyTankView {
+  readonly group = new THREE.Group();
+  private readonly rig = new THREE.Group();
+  private readonly hull: THREE.Mesh;
+  private readonly turret: THREE.Mesh;
+  private readonly turretY: number;
+  private readonly mat: THREE.MeshLambertMaterial;
+  private readonly halo: THREE.Mesh;
+  private readonly haloMat: THREE.MeshBasicMaterial;
+  private readonly badge = new Label(256, 72);
+  private readonly badgeSprite: THREE.Sprite;
+
+  constructor(
+    scene: THREE.Scene,
+    readonly tank: AllyTank,
+  ) {
+    this.group.position.set(tank.x, 0, -tank.d);
+    this.mat = vertexMat.clone();
+    this.mat.userData.shared = false;
+
+    this.hull = new THREE.Mesh(tankHullGeometry(tank.tier, tank.r, true), this.mat);
+    this.hull.castShadow = true;
+    this.rig.add(this.hull);
+
+    this.turretY = (tank.r / 1.5) * 1.06;
+    this.turret = new THREE.Mesh(tankTurretGeometry(tank.tier, tank.r, tank.twin, true), this.mat);
+    this.turret.position.set(0, this.turretY, 0);
+    this.turret.castShadow = true;
+    this.rig.add(this.turret);
+    this.group.add(this.rig);
+
+    this.haloMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.65,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    this.halo = new THREE.Mesh(new THREE.RingGeometry(tank.r * 1.05, tank.r * 1.38, 32), this.haloMat);
+    this.halo.rotation.x = -Math.PI / 2;
+    this.halo.position.y = 0.06;
+    this.group.add(this.halo);
+
+    this.badge.set(tank.twin ? '友军双管坦' : '友军重坦', {
+      fill: '#ffffff',
+      stroke: '#0c4a6e',
+      pill: '#0284c7',
+      size: 38,
+    });
+    this.badgeSprite = labelSprite(this.badge, 1.9, 0.56, false);
+    this.badgeSprite.position.set(0, (tank.r / 1.5) * 2.55, 0);
+    this.group.add(this.badgeSprite);
+
+    scene.add(this.group);
+  }
+
+  update(time: number) {
+    const t = this.tank;
+    this.group.position.set(t.x, 0, -t.d);
+    // 车体朝向：hullYaw=0 指向敌阵 (-z)，hullYaw=PI 指向玩家 (+z)
+    this.rig.rotation.y = Math.PI - t.hullYaw;
+    // 行驶引擎轻微震动
+    const bob = Math.sin(time * 28 + t.id) * 0.025;
+    this.hull.position.y = bob;
+    this.turret.rotation.y = -t.turretYaw;
+    this.turret.position.set(0, this.turretY + bob, -t.recoil * 0.36);
+
+    // 收编高光 + 开炮微闪
+    const glow = Math.max(t.captureGlow * 0.75, t.recoil * 0.25);
+    this.mat.emissive.setRGB(glow * 0.22, glow * 0.55, glow * 0.85);
+    const ringScale = 1 + t.captureGlow * 0.45 + Math.sin(time * 5 + t.id) * 0.04;
+    this.halo.scale.setScalar(ringScale);
+    this.haloMat.opacity = 0.42 + t.captureGlow * 0.48 + Math.sin(time * 4 + t.id) * 0.08;
+    this.badgeSprite.position.y = (t.r / 1.5) * 2.55 + Math.sin(time * 3 + t.id) * 0.08;
+  }
+
+  dispose() {
+    this.badge.dispose();
     this.group.removeFromParent();
     disposeObject(this.group);
   }

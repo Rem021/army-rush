@@ -2,7 +2,7 @@ import type { BlitzStage } from './config';
 import type { BarrelSpec, GateSpec, HazardSpec, LevelSpec, Reward, SpawnSpec, TankSpec, ZombieSpec } from './level';
 import type { WorldOptions } from './world';
 
-/** 广告奇袭三路坐标：左路 +1 成长门 · 中路敌军与红油桶 · 右路重装坦克与奖励宝库 */
+/** 广告奇袭三路坐标：左路极速 +1 传送门 · 中路密集尸潮/Boss/红油桶 · 右路重装坦克（击毁收编参战！）+ 超级奖励宝库 */
 export const BLITZ_LANES = {
   left: -3.6,
   mid: 0,
@@ -12,25 +12,25 @@ export const BLITZ_LANES = {
 export function blitzOptions(stage: BlitzStage): WorldOptions {
   return stage === 2
     ? {
-        startSoldiers: 8,
+        startSoldiers: 10,
         startTier: 1,
         damageMult: 1.25,
         rateMult: 1.15,
         ammo: 0,
-        steerMult: 1.3,
+        steerMult: 1.35,
         warnMult: 1.15,
-        coinMult: 1.2,
+        coinMult: 1.25,
         seed: 10202,
       }
     : {
-        startSoldiers: 7,
+        startSoldiers: 8,
         startTier: 1,
-        damageMult: 1.15,
-        rateMult: 1.1,
+        damageMult: 1.2,
+        rateMult: 1.12,
         ammo: 0,
-        steerMult: 1.25,
+        steerMult: 1.3,
         warnMult: 1.2,
-        coinMult: 1.1,
+        coinMult: 1.15,
         seed: 5101,
       };
 }
@@ -46,52 +46,8 @@ interface TankConvoy {
 function buildStage1Convoys(): TankConvoy[] {
   return [
     {
-      tank: { tier: 1, name: '轻甲突击车', fireInterval: 5.2 },
-      hp: 300,
-      r: 1.45,
-      rewards: [
-        { reward: { kind: 'weapon', tier: 2 }, look: 'crate' },
-        { reward: { kind: 'rate', amount: 25 }, look: 'crate' },
-        { reward: { kind: 'drone', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'shield', amount: 6 }, look: 'armor' },
-      ],
-      gate: { kind: 'add', value: 10 },
-    },
-    {
-      tank: { tier: 2, name: '重装主战坦克', fireInterval: 4.2 },
-      hp: 2200,
-      r: 1.55,
-      rewards: [
-        { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'weapon', tier: 4 }, look: 'crate' },
-        { reward: { kind: 'ammo', level: 2 }, look: 'crate' },
-        { reward: { kind: 'drone', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'damage', amount: 30 }, look: 'crate' },
-      ],
-      gate: { kind: 'mul', value: 1.5 },
-    },
-    {
-      tank: { tier: 3, name: '天启双管坦克', fireInterval: 3.4, twin: true },
-      hp: 15000,
-      r: 1.65,
-      rewards: [
-        { reward: { kind: 'weapon', tier: 6 }, look: 'crate' },
-        { reward: { kind: 'ammo', level: 3 }, look: 'armor' },
-        { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'drone', amount: 2 }, look: 'armor' },
-        { reward: { kind: 'airstrike' }, look: 'crate' },
-        { reward: { kind: 'shield', amount: 12 }, look: 'armor' },
-      ],
-      gate: { kind: 'add', value: 24 },
-    },
-  ];
-}
-
-function buildStage2Convoys(): TankConvoy[] {
-  return [
-    {
-      tank: { tier: 1, name: '钢铁步战车', fireInterval: 4.8 },
-      hp: 650,
+      tank: { tier: 1, name: '轻甲突击坦', fireInterval: 5.2 },
+      hp: 260,
       r: 1.45,
       rewards: [
         { reward: { kind: 'weapon', tier: 2 }, look: 'crate' },
@@ -102,40 +58,85 @@ function buildStage2Convoys(): TankConvoy[] {
       gate: { kind: 'add', value: 12 },
     },
     {
-      tank: { tier: 2, name: '沙漠重甲坦克', fireInterval: 4.0 },
-      hp: 3400,
+      tank: { tier: 2, name: '重装主战坦', fireInterval: 4.3 },
+      hp: 2100,
       r: 1.55,
       rewards: [
         { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'ammo', level: 1 }, look: 'crate' },
         { reward: { kind: 'weapon', tier: 4 }, look: 'crate' },
-        { reward: { kind: 'damage', amount: 30 }, look: 'crate' },
+        { reward: { kind: 'ammo', level: 2 }, look: 'armor' },
+        { reward: { kind: 'damage', amount: 35 }, look: 'crate' },
+        { reward: { kind: 'drone', amount: 1 }, look: 'armor' },
       ],
       gate: { kind: 'mul', value: 1.5 },
     },
     {
-      tank: { tier: 3, name: '赤焰双管攻城坦', fireInterval: 3.3, twin: true },
-      hp: 18000,
+      tank: { tier: 3, name: '天启双管坦', fireInterval: 3.5, twin: true },
+      hp: 14500,
+      r: 1.65,
+      rewards: [
+        { reward: { kind: 'weapon', tier: 6 }, look: 'crate' },
+        { reward: { kind: 'ammo', level: 3 }, look: 'armor' },
+        { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
+        { reward: { kind: 'drone', amount: 2 }, look: 'armor' },
+        { reward: { kind: 'airstrike' }, look: 'crate' },
+        { reward: { kind: 'shield', amount: 14 }, look: 'armor' },
+      ],
+      gate: { kind: 'add', value: 26 },
+    },
+  ];
+}
+
+function buildStage2Convoys(): TankConvoy[] {
+  return [
+    {
+      tank: { tier: 1, name: '钢铁步战坦', fireInterval: 4.8 },
+      hp: 340,
+      r: 1.45,
+      rewards: [
+        { reward: { kind: 'weapon', tier: 2 }, look: 'crate' },
+        { reward: { kind: 'drone', amount: 1 }, look: 'armor' },
+        { reward: { kind: 'rate', amount: 28 }, look: 'crate' },
+        { reward: { kind: 'shield', amount: 10 }, look: 'armor' },
+      ],
+      gate: { kind: 'add', value: 14 },
+    },
+    {
+      tank: { tier: 2, name: '沙漠重甲坦', fireInterval: 4.0 },
+      hp: 3200,
+      r: 1.55,
+      rewards: [
+        { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
+        { reward: { kind: 'ammo', level: 1 }, look: 'armor' },
+        { reward: { kind: 'weapon', tier: 4 }, look: 'crate' },
+        { reward: { kind: 'damage', amount: 35 }, look: 'crate' },
+        { reward: { kind: 'airstrike' }, look: 'crate' },
+      ],
+      gate: { kind: 'mul', value: 1.5 },
+    },
+    {
+      tank: { tier: 3, name: '赤焰双管坦', fireInterval: 3.3, twin: true },
+      hp: 17500,
       r: 1.62,
       rewards: [
         { reward: { kind: 'weapon', tier: 5 }, look: 'crate' },
         { reward: { kind: 'ammo', level: 2 }, look: 'armor' },
-        { reward: { kind: 'drone', amount: 1 }, look: 'armor' },
+        { reward: { kind: 'drone', amount: 2 }, look: 'armor' },
         { reward: { kind: 'rate', amount: 35 }, look: 'crate' },
-        { reward: { kind: 'airstrike' }, look: 'crate' },
+        { reward: { kind: 'shield', amount: 12 }, look: 'armor' },
       ],
-      gate: { kind: 'add', value: 20 },
+      gate: { kind: 'add', value: 22 },
     },
     {
       tank: { tier: 4, name: '黄金天启巨坦', fireInterval: 2.9, twin: true },
-      hp: 46000,
+      hp: 44000,
       r: 1.72,
       rewards: [
         { reward: { kind: 'weapon', tier: 6 }, look: 'crate' },
         { reward: { kind: 'ammo', level: 3 }, look: 'armor' },
         { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
         { reward: { kind: 'drone', amount: 2 }, look: 'armor' },
-        { reward: { kind: 'damage', amount: 45 }, look: 'crate' },
+        { reward: { kind: 'damage', amount: 50 }, look: 'crate' },
         { reward: { kind: 'airstrike' }, look: 'crate' },
       ],
       gate: { kind: 'mul', value: 1.5 },
@@ -144,34 +145,25 @@ function buildStage2Convoys(): TankConvoy[] {
 }
 
 export function generateBlitz(stage: BlitzStage = 1): LevelSpec {
-  const duration = stage === 2 ? 96 : 82;
+  const duration = stage === 2 ? 90 : 78;
   const gates: GateSpec[] = [];
   const barrels: BarrelSpec[] = [];
   const zombies: ZombieSpec[] = [];
   const hazards: HazardSpec[] = [];
   const spawns: SpawnSpec[] = [];
 
-  // 1. 左路：源源不断的 +1 可射击成长门（第 2 幕穿插翻转红门、射速门与倍率门）
-  const gateCount = 95;
+  // 1. 左路：极速滑来的固定 +1 数字门流（不可射击增长，密集高频吃门滚雪球！）
+  const gateCount = 240;
   for (let i = 0; i < gateCount; i++) {
-    const d = 14 + i * 5.6;
+    const d = 8.5 + i * 3.1;
     let kind: GateSpec['kind'] = 'add';
     let value = 1;
-    if (stage === 2) {
-      if (i > 2 && i % 6 === 3) {
-        // 红转绿翻转门：集火快速翻正！
-        kind = 'add';
-        value = -4;
-      } else if (i > 4 && i % 8 === 6) {
-        kind = 'rate';
-        value = 8;
-      } else if (i > 6 && i % 11 === 10) {
-        kind = 'mul';
-        value = 1.5;
-      }
-    } else if (i > 4 && i % 9 === 8) {
+    if (stage === 2 && i > 5 && i % 10 === 9) {
+      kind = 'add';
+      value = 2;
+    } else if (i > 7 && i % 16 === 15) {
       kind = 'rate';
-      value = 8;
+      value = 10;
     }
     gates.push({
       blitzLane: 'left',
@@ -184,9 +176,9 @@ export function generateBlitz(stage: BlitzStage = 1): LevelSpec {
     });
   }
 
-  // 2. 右路：重装坦克 + 身后紧贴排列的超级奖励队列（坦克炸毁瞬间放行！）
+  // 2. 右路：重装坦克 + 身后堆叠超级奖励（击毁坦克瞬间收编开上前线一起打，奖励同步全线放行！）
   const convoys = stage === 2 ? buildStage2Convoys() : buildStage1Convoys();
-  let rightD = 22;
+  let rightD = 20;
   let rightGroup = 10000;
   for (let ci = 0; ci < convoys.length; ci++) {
     const c = convoys[ci];
@@ -199,9 +191,9 @@ export function generateBlitz(stage: BlitzStage = 1): LevelSpec {
       hp: c.hp,
       block: true,
       look: 'tank',
-      reward: { kind: 'coins', amount: 60 + ci * 50 },
+      reward: { kind: 'coins', amount: 80 + ci * 60 },
     });
-    rightD += 4.6;
+    rightD += 4.4;
     for (const item of c.rewards) {
       barrels.push({
         blitzLane: 'right',
@@ -212,7 +204,7 @@ export function generateBlitz(stage: BlitzStage = 1): LevelSpec {
         look: item.look,
         reward: item.reward,
       });
-      rightD += 3.5;
+      rightD += 3.3;
     }
     if (c.gate) {
       gates.push({
@@ -224,83 +216,144 @@ export function generateBlitz(stage: BlitzStage = 1): LevelSpec {
         value: c.gate.value,
         group: rightGroup++,
       });
-      rightD += 5.4;
+      rightD += 5.0;
     }
-    rightD += 4.5;
+    rightD += 4.2;
   }
 
-  // 3. 中路：开局先导敌军 + 定时尸潮波次 + 爆裂红油桶 + 中途巨尸 + 终局 Boss
-  for (let i = 0; i < 14; i++) {
+  // 3. 中路：开局就铺满密集敌潮！
+  const openingCount = stage === 2 ? 44 : 36;
+  const openCols = 6;
+  for (let i = 0; i < openingCount; i++) {
+    const row = Math.floor(i / openCols);
+    const col = i % openCols;
     zombies.push({
-      kind: 'walker',
-      x: -1.2 + (i % 5) * 0.6,
-      d: 26 + Math.floor(i / 5) * 2.1,
-      hp: 8,
+      kind: row > 3 && col % 3 === 1 ? 'runner' : 'walker',
+      x: -1.55 + col * 0.62 + (row % 2 ? 0.14 : -0.1),
+      d: 18 + row * 1.45,
+      hp: stage === 2 ? 8 : 7,
     });
   }
 
-  // 中路爆裂红油桶：随时间滑入敌阵，一枪点爆清中路！
-  const bombCount = stage === 2 ? 12 : 9;
+  // 中路高密爆破红油桶：混在尸潮里，一点就炸翻一片！
+  const bombCount = stage === 2 ? 18 : 14;
   for (let i = 0; i < bombCount; i++) {
     barrels.push({
       blitzLane: 'mid',
-      x: ((i % 3) - 1) * 0.75,
-      d: 34 + i * 26,
-      r: 0.72,
-      hp: 16 + i * 6,
+      x: ((i % 3) - 1) * 0.85,
+      d: 26 + i * 20,
+      r: 0.75,
+      hp: 16 + i * 7,
       look: 'bomb',
-      reward: { kind: 'boom', radius: 4.5 },
+      reward: { kind: 'boom', radius: 5.2 },
     });
   }
 
-  // 中路定时敌军波次与 Boss
+  // 4. 中路密集敌潮波次 + 多波 Boss 连番登场
   spawns.push({
-    t: 2,
+    t: 1.5,
     banner: {
       d: 0,
-      text: stage === 2 ? '左门成长 · 中清敌潮 · 右轰重坦！' : '左吃 +1 扩兵 · 右轰坦克爆神装！',
+      text: '左吃极速 +1 门 · 右轰坦克收编参战 · 中路尸潮与多 Boss 来袭！',
       tone: 'info',
     },
   });
 
-  for (let t = 10; t < duration - 6; t += stage === 2 ? 11 : 13) {
+  const waveInterval = stage === 2 ? 5.5 : 6.5;
+  for (let t = 6; t < duration - 4; t += waveInterval) {
     const p = t / duration;
-    spawns.push({ t, wave: Math.round((stage === 2 ? 18 : 14) + p * (stage === 2 ? 32 : 24)) });
+    spawns.push({ t, wave: Math.round((stage === 2 ? 32 : 26) + p * (stage === 2 ? 34 : 26)) });
   }
 
-  // 中途巨尸施压
+  // 中途巨尸穿插施压
   spawns.push({
-    t: Math.round(duration * 0.42),
-    zombie: { kind: 'giant', x: 0, d: 2, hp: stage === 2 ? 950 : 620, reward: { kind: 'soldiers', amount: 8 } },
-    banner: { d: 0, text: '中路巨尸逼近！注意爆裂油桶', tone: 'danger' },
+    t: 22,
+    zombie: { kind: 'giant', x: -0.6, d: 2, hp: stage === 2 ? 1100 : 750, reward: { kind: 'soldiers', amount: 8 } },
+  });
+  spawns.push({
+    t: 48,
+    zombie: { kind: 'giant', x: 0.6, d: 2, hp: stage === 2 ? 3200 : 2100, reward: { kind: 'airstrike' } },
   });
 
-  if (stage === 2) {
+  if (stage === 1) {
+    // 第 1 阶：总共 6 个 Boss（4 轮中途 Boss + 终局双王）
     spawns.push({
-      t: Math.round(duration * 0.68),
-      zombie: { kind: 'giant', x: 0, d: 2, hp: 2600, reward: { kind: 'airstrike' } },
-      banner: { d: 0, text: '精英尸潮狂攻！收割右路神装反击', tone: 'danger' },
+      t: 14,
+      boss: { kind: 'brute', x: 0, hp: 2200 },
+      banner: { d: 0, text: '先锋巨尸王突袭中路！收编右路坦克一起轰！', tone: 'boss' },
     });
-    // 第 2 幕中路锯片陷阱
-    hazards.push({ kind: 'saw', x0: -1.4, x1: 1.4, d0: 6.8, d1: 7.4 });
-  }
-
-  // 终局 Boss（与重装坦克夹击，击毁全部坦克 + 终局 Boss 获胜！）
-  if (stage === 2) {
+    spawns.push({
+      t: 30,
+      boss: { kind: 'thrower', x: 0.25, hp: 5200 },
+      banner: { d: 0, text: '投弹屠夫王登场！注意躲避红圈炮击', tone: 'boss' },
+    });
+    spawns.push({
+      t: 46,
+      boss: { kind: 'brute', x: -0.25, hp: 11000 },
+      banner: { d: 0, text: '铁甲暴君杀入中路！全军与友军坦克集火！', tone: 'boss' },
+    });
+    spawns.push({
+      t: 62,
+      boss: { kind: 'thrower', x: 0, hp: 17500 },
+      banner: { d: 0, text: '烈焰投弹王压境！准备迎接终局总攻', tone: 'boss' },
+    });
     spawns.push({
       t: duration,
-      boss: { kind: 'brute', x: -0.7, hp: 36000 },
-      banner: { d: 0, text: '终局双 Boss 与黄金巨坦总攻！', tone: 'boss' },
+      boss: { kind: 'brute', x: -0.8, hp: 26000 },
+      banner: { d: 0, text: '终局双王总攻！坦克编队全火力齐射！', tone: 'boss' },
     });
     spawns.push({
-      t: duration + 0.5,
-      boss: { kind: 'thrower', x: 0.7, hp: 26000 },
+      t: duration + 0.4,
+      boss: { kind: 'thrower', x: 0.8, hp: 21000 },
     });
   } else {
+    // 第 2 阶：总共 10 个 Boss（连环双王压境 + 终局三王总攻）+ 中路移动锯片
+    hazards.push({ kind: 'saw', x0: -1.45, x1: 1.45, d0: 7.0, d1: 7.6 });
+    spawns.push({
+      t: 11,
+      boss: { kind: 'brute', x: 0, hp: 3000 },
+      banner: { d: 0, text: '狂暴先锋王突袭！快抢右路首辆重装坦克！', tone: 'boss' },
+    });
+    spawns.push({
+      t: 24,
+      boss: { kind: 'thrower', x: 0.3, hp: 6800 },
+      banner: { d: 0, text: '重炮投弹王进场！中路密集尸潮同步狂攻', tone: 'boss' },
+    });
+    spawns.push({
+      t: 38,
+      boss: { kind: 'brute', x: -0.75, hp: 12500 },
+      banner: { d: 0, text: '双王合击！重坦编队全线压制！', tone: 'boss' },
+    });
+    spawns.push({
+      t: 38.4,
+      boss: { kind: 'thrower', x: 0.75, hp: 10500 },
+    });
+    spawns.push({
+      t: 54,
+      boss: { kind: 'brute', x: 0, hp: 21000 },
+      banner: { d: 0, text: '地狱暴君冲阵！炸毁油桶清屏！', tone: 'boss' },
+    });
+    spawns.push({
+      t: 70,
+      boss: { kind: 'brute', x: -0.75, hp: 30000 },
+      banner: { d: 0, text: '精英双王来袭！击毁黄金天启巨坦入队！', tone: 'boss' },
+    });
+    spawns.push({
+      t: 70.4,
+      boss: { kind: 'thrower', x: 0.75, hp: 26000 },
+    });
     spawns.push({
       t: duration,
-      boss: { kind: 'brute', x: 0, hp: 16500 },
-      banner: { d: 0, text: '终局巨尸王降临！全军总攻！', tone: 'boss' },
+      boss: { kind: 'brute', x: -1.0, hp: 44000 },
+      banner: { d: 0, text: '终局三王总攻！全装甲坦克群齐射！', tone: 'boss' },
+    });
+    spawns.push({
+      t: duration + 0.35,
+      boss: { kind: 'thrower', x: 0, hp: 34000 },
+    });
+    spawns.push({
+      t: duration + 0.7,
+      boss: { kind: 'brute', x: 1.0, hp: 40000 },
     });
   }
 
@@ -319,14 +372,14 @@ export function generateBlitz(stage: BlitzStage = 1): LevelSpec {
     banners: [],
     bosses: [],
     defense: {
-      conveyor: 14,
-      spawnD: 56,
-      stopD: 20,
-      gateSide: 1,
+      conveyor: 6.4,
+      spawnD: 54,
+      stopD: 19,
+      gateSide: -1,
       duration,
       spawns,
     },
-    expected: 90,
+    expected: stage === 2 ? 185 : 155,
     estimates: [],
   };
 }

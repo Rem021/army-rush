@@ -166,6 +166,8 @@ export interface Zombie {
   owner: number;
   /** 一只顶几只（超大尸潮折算），影响杀伤 */
   weight: number;
+  /** 电磁弹减速计时（秒） */
+  slow?: number;
 }
 
 export interface Boss {
@@ -267,8 +269,46 @@ export type GameEvent =
   | { type: 'blocked'; barrel: Barrel }
   | { type: 'shieldBlock'; x: number; d: number; remaining: number }
   | { type: 'tankFire'; barrel: Barrel; proj: Projectile }
+  | { type: 'tankCapture'; tank: AllyTank; fromX: number; fromD: number }
+  | { type: 'allyTankFire'; tank: AllyTank; shell: AllyShell }
+  | { type: 'allyShellHit'; x: number; d: number; r: number; tier: 1 | 2 | 3 | 4 }
+  | { type: 'airstrikeLaunch'; x: number; d: number }
   | { type: 'won' }
   | { type: 'lost' };
+
+/** 被玩家击毁收编后开上前线与小队并肩作战的友军重装坦克 */
+export interface AllyTank {
+  id: number;
+  tier: 1 | 2 | 3 | 4;
+  name: string;
+  twin: boolean;
+  r: number;
+  x: number;
+  d: number;
+  /** joining: 从右路收编点开上前线入队；fighting: 随小队协同作战 */
+  phase: 'joining' | 'fighting';
+  slot: number;
+  hullYaw: number;
+  turretYaw: number;
+  fireTimer: number;
+  fireInterval: number;
+  recoil: number;
+  captureGlow: number;
+}
+
+/** 友军重装坦克射出的高爆重炮弹 */
+export interface AllyShell {
+  id: number;
+  x0: number;
+  d0: number;
+  x: number;
+  d: number;
+  t: number;
+  T: number;
+  damage: number;
+  radius: number;
+  tier: 1 | 2 | 3 | 4;
+}
 
 export interface WorldOptions {
   startSoldiers: number;
@@ -382,6 +422,8 @@ export class World {
     burstUntil: 0,
     clears: 0,
   };
+  readonly allyTanks: AllyTank[] = [];
+  readonly allyShells: AllyShell[] = [];
   readonly blitz = {
     stage: 1 as 1 | 2,
     drones: 0,
@@ -390,6 +432,7 @@ export class World {
     damageBonus: 0,
     tanksDestroyed: 0,
     totalTanks: 0,
+    allyTanks: 0,
     buffsCollected: 0,
     combo: 0,
     bestCombo: 0,
@@ -809,6 +852,7 @@ export class World {
     const def = this.defense!;
     const p = Math.min(1, this.time / def.duration);
     const s2 = this.blitz.stage === 2;
+    const zombieCap = 210;
     let alive = 0;
     for (let i = 0; i < this.zombies.length; i++) if (this.zombies[i].alive) alive++;
 
@@ -824,17 +868,17 @@ export class World {
         added = true;
       }
       if (sp.wave) {
-        const n = Math.min(sp.wave, Math.max(0, 145 - alive));
-        const baseHp = s2 ? 10 + p * 58 : 7 + p * 34;
-        const cols = 5;
+        const n = Math.min(sp.wave, Math.max(0, zombieCap - alive));
+        const baseHp = s2 ? 7.5 + p * 52 : 6.5 + p * 32;
+        const cols = 6;
         for (let i = 0; i < n; i++) {
           const row = Math.floor(i / cols);
           const col = i % cols;
           const kind = this.blitzEnemyKind(p);
           const z = this.makeZombie({
             kind,
-            x: -1.4 + col * 0.7 + (row % 2 ? 0.2 : -0.1),
-            d: def.spawnD - 6 + row * 0.95,
+            x: -1.6 + col * 0.64 + (row % 2 ? 0.16 : -0.12),
+            d: def.spawnD - 7 + row * 0.85,
             hp: baseHp * ZOMBIES[kind].hp,
           });
           z.active = true;
@@ -846,7 +890,7 @@ export class World {
       if (sp.boss) {
         const b = this.makeBoss(sp.boss, def.spawnD - 18);
         b.final = sp.t >= def.duration - 0.01;
-        b.pair = s2;
+        b.pair = b.final || Math.abs(sp.boss.x) > 0.4;
         b.active = true;
         this.bosses.push(b);
         this.events.push({ type: 'bossStart', bosses: [b] });
@@ -854,21 +898,21 @@ export class World {
       }
     }
 
-    // 中路持续敌军流
+    // 中路高密度持续敌军洪流
     let bossAlive = false;
     for (let i = 0; i < this.bosses.length; i++) if (this.bosses[i].alive) bossAlive = true;
     const tanksRemain = this.blitz.tanksDestroyed < this.blitz.totalTanks;
-    if (this.time > 1.5 && (this.time < def.duration || bossAlive || tanksRemain) && alive < 130) {
-      const rate = (s2 ? 2.4 + p * 3.8 : 1.9 + p * 3.0) * (this.time > def.duration ? 0.45 : 1);
+    if (this.time > 0.8 && (this.time < def.duration || bossAlive || tanksRemain) && alive < zombieCap) {
+      const rate = (s2 ? 6.2 + p * 7.4 : 4.8 + p * 5.8) * (this.time > def.duration ? 0.55 : 1);
       this.streamAcc += rate * dt;
-      const baseHp = (s2 ? 10 + p * 54 : 7 + p * 30) * (bossAlive ? 0.65 : 1);
-      while (this.streamAcc >= 1 && alive < 130) {
+      const baseHp = (s2 ? 7.5 + p * 48 : 6.5 + p * 28) * (bossAlive ? 0.72 : 1);
+      while (this.streamAcc >= 1 && alive < zombieCap) {
         this.streamAcc -= 1;
         const kind = this.blitzEnemyKind(p);
         const z = this.makeZombie({
           kind,
-          x: randRange(this.rng, -1.55, 1.55),
-          d: def.spawnD - 4 + randRange(this.rng, 0, 2.2),
+          x: randRange(this.rng, -1.72, 1.72),
+          d: def.spawnD - 5 + randRange(this.rng, 0, 2.4),
           hp: baseHp * ZOMBIES[kind].hp,
         });
         z.active = true;
@@ -886,13 +930,13 @@ export class World {
       const rocket = this.rockets[i];
       rocket.t += dt;
       if (rocket.t >= rocket.T) {
-        this.blitzRocketBlast(rocket.x, rocket.d, 2.8, rocket.damage);
+        this.blitzRocketBlast(rocket.x, rocket.d, 3.0, rocket.damage);
         this.rockets[i] = this.rockets[this.rockets.length - 1];
         this.rockets.pop();
       }
     }
     if (this.blitz.drones > 0 && this.time >= this.droneAt && this.squad.count > 0) {
-      this.droneAt = this.time + Math.max(0.55, 1.65 - this.blitz.drones * 0.16);
+      this.droneAt = this.time + Math.max(0.45, 1.35 - this.blitz.drones * 0.14);
       const frontTank = this.frontBlitzTank();
       let boss: Boss | null = null;
       for (let i = 0; i < this.bosses.length; i++) {
@@ -908,16 +952,16 @@ export class World {
         if (z.alive && z.d > 2 && z.d < 46) targets.push(z);
       }
       if ((frontTank && frontTank.d < 36) || boss || targets.length > 0) {
-        const dmg = (95 + this.squad.tier * 48) * this.damage;
+        const dmg = (115 + this.squad.tier * 55) * this.damage;
         for (let i = 0; i < this.blitz.drones; i++) {
           let tx = 0;
           let td = 24;
-          if (i % 2 === 0 && frontTank && frontTank.d < 36) {
-            tx = frontTank.x;
-            td = frontTank.d;
-          } else if (boss && (i % 2 === 1 || !frontTank)) {
+          if (boss && (i % 2 === 0 || !frontTank)) {
             tx = boss.x;
             td = boss.d;
+          } else if (frontTank && frontTank.d < 36 && i % 2 === 1) {
+            tx = frontTank.x;
+            td = frontTank.d;
           } else if (targets.length > 0) {
             const pick = targets[Math.floor(this.rng() * targets.length)];
             tx = pick.x;
@@ -937,14 +981,214 @@ export class World {
             x: tx,
             d: td,
             t: 0,
-            T: 0.48 + i * 0.05,
+            T: 0.45 + i * 0.04,
             damage: dmg,
           });
         }
       }
     }
 
+    // 友军收编坦克进场、伴随走位与重炮协同轰炸
+    this.updateAllyTanks(dt);
     this.moveBlitzQueue(dt);
+  }
+
+  /** 将刚击毁的敌方坦克收编为友军重坦，立即掉头开上前线与小队并肩作战！ */
+  private captureTank(br: Barrel) {
+    if (!br.tank) return;
+    const tier = br.tank.tier;
+    const slot = this.allyTanks.length;
+    const tank: AllyTank = {
+      id: this.nextId++,
+      tier,
+      name: br.tank.name,
+      twin: !!br.tank.twin,
+      r: br.r * 0.72,
+      x: br.x,
+      d: br.d,
+      phase: 'joining',
+      slot,
+      hullYaw: Math.PI,
+      turretYaw: 0,
+      fireTimer: 0.4,
+      fireInterval: tier >= 4 ? 0.72 : tier === 3 ? 0.82 : tier === 2 ? 0.95 : 1.1,
+      recoil: 0,
+      captureGlow: 1,
+    };
+    this.allyTanks.push(tank);
+    this.blitz.allyTanks = this.allyTanks.length;
+    this.version++;
+    this.events.push({ type: 'tankCapture', tank, fromX: br.x, fromD: br.d });
+  }
+
+  private updateAllyTanks(dt: number) {
+    const sq = this.squad;
+    // 更新飞行中的友军重炮弹
+    for (let i = this.allyShells.length - 1; i >= 0; i--) {
+      const sh = this.allyShells[i];
+      sh.t += dt;
+      if (sh.t >= sh.T) {
+        this.allyShellBlast(sh);
+        this.allyShells[i] = this.allyShells[this.allyShells.length - 1];
+        this.allyShells.pop();
+      }
+    }
+    if (this.allyTanks.length === 0 || sq.count <= 0) return;
+
+    const frontTank = this.frontBlitzTank();
+    for (let i = 0; i < this.allyTanks.length; i++) {
+      const tank = this.allyTanks[i];
+      tank.recoil = Math.max(0, tank.recoil - dt * 3.8);
+      tank.captureGlow = Math.max(0, tank.captureGlow - dt * 1.4);
+
+      // 计算伴随编队站位（右翼、左翼、前右翼、前左翼）
+      const side = tank.slot % 2 === 0 ? 1 : -1;
+      const row = Math.floor(tank.slot / 2);
+      const flankOff = Math.max(1.85, this.halfWidth + 0.95) + row * 0.35;
+      const rawTx = sq.x + side * flankOff;
+      const tx = Math.max(-TRACK_HALF + 1.15, Math.min(TRACK_HALF - 1.15, rawTx));
+      const td = sq.d + 0.8 + row * 2.55;
+
+      if (tank.phase === 'joining') {
+        const dx = tx - tank.x;
+        const dd = td - tank.d;
+        const dist = Math.hypot(dx, dd);
+        const speed = 15.5;
+        if (dist <= 0.85) {
+          tank.x = tx;
+          tank.d = td;
+          tank.phase = 'fighting';
+        } else {
+          const step = Math.min(dist, speed * dt);
+          tank.x += (dx / dist) * step;
+          tank.d += (dd / dist) * step;
+        }
+        // 收编掉头动画：车体从朝向玩家 (PI) 平滑转向朝向前方敌阵 (0)
+        const targetYaw = dist > 1.2 ? Math.atan2(dx, Math.max(1, -dd)) * 0.3 : 0;
+        tank.hullYaw += (targetYaw - tank.hullYaw) * Math.min(1, dt * 6.5);
+      } else {
+        const dx = tx - tank.x;
+        const dd = td - tank.d;
+        tank.x += dx * Math.min(1, dt * 5.2);
+        tank.d += dd * Math.min(1, dt * 6.5);
+        const steerYaw = Math.max(-0.32, Math.min(0.32, dx * 0.14));
+        tank.hullYaw += (steerYaw - tank.hullYaw) * Math.min(1, dt * 8);
+      }
+
+      // 寻找最佳轰炸目标（优先前排活跃 Boss，其次密集近敌，最后前方敌方坦克）
+      let aimX = 0;
+      let aimD = 22;
+      let hasTarget = false;
+      let bestBoss: Boss | null = null;
+      for (let bi = 0; bi < this.bosses.length; bi++) {
+        const b = this.bosses[bi];
+        if (b.alive && b.active && b.d > tank.d + 2 && (!bestBoss || b.d < bestBoss.d)) bestBoss = b;
+      }
+      let bestZombie: Zombie | null = null;
+      let bestZScore = -1;
+      for (let zi = 0; zi < this.near.length; zi++) {
+        const z = this.near[zi];
+        if (!z.alive || z.d <= tank.d + 2.5 || z.d > 46) continue;
+        const sc = (z.kind === 'giant' ? 60 : z.kind === 'brute' ? 24 : 10) + Math.max(0, 32 - z.d);
+        if (sc > bestZScore) {
+          bestZScore = sc;
+          bestZombie = z;
+        }
+      }
+
+      if (bestBoss && (i % 2 === 0 || !bestZombie || bestBoss.d < 26)) {
+        aimX = bestBoss.x;
+        aimD = bestBoss.d;
+        hasTarget = true;
+      } else if (bestZombie) {
+        aimX = bestZombie.x;
+        aimD = bestZombie.d;
+        hasTarget = true;
+      } else if (frontTank && frontTank.d < 36) {
+        aimX = frontTank.x;
+        aimD = frontTank.d;
+        hasTarget = true;
+      } else if (bestBoss) {
+        aimX = bestBoss.x;
+        aimD = bestBoss.d;
+        hasTarget = true;
+      }
+
+      const worldAim = hasTarget ? Math.atan2(aimX - tank.x, Math.max(2, aimD - tank.d)) : 0;
+      const desiredTurret = Math.max(-1.05, Math.min(1.05, worldAim - tank.hullYaw));
+      tank.turretYaw += (desiredTurret - tank.turretYaw) * Math.min(1, dt * 8);
+
+      // 进场接近前线或已就位后，持续向敌军倾泻重炮！
+      if (hasTarget && (tank.phase === 'fighting' || tank.d < 15)) {
+        tank.fireTimer -= dt;
+        if (tank.fireTimer <= 0) {
+          tank.fireTimer = tank.fireInterval;
+          this.fireAllyTank(tank, aimX, aimD);
+        }
+      }
+    }
+  }
+
+  private fireAllyTank(tank: AllyTank, aimX: number, aimD: number) {
+    tank.recoil = 1;
+    const shots = tank.twin ? 2 : 1;
+    const dmg = (175 + tank.tier * 130 + this.squad.tier * 55) * this.damage;
+    const radius = 3.1 + tank.tier * 0.35;
+    for (let s = 0; s < shots; s++) {
+      const jitterX = shots > 1 ? (s === 0 ? -0.65 : 0.65) : 0;
+      const tx = Math.max(-TRACK_HALF + 0.6, Math.min(TRACK_HALF - 0.6, aimX + jitterX));
+      const td = Math.max(tank.d + 3, aimD + (shots > 1 ? s * 0.8 : 0));
+      const dist = Math.hypot(tx - tank.x, td - tank.d);
+      const shell: AllyShell = {
+        id: this.nextId++,
+        x0: tank.x + (shots > 1 ? (s === 0 ? -0.25 : 0.25) : 0),
+        d0: tank.d + tank.r * 1.1,
+        x: tx,
+        d: td,
+        t: 0,
+        T: Math.max(0.24, Math.min(0.56, dist / 52)),
+        damage: dmg,
+        radius,
+        tier: tank.tier,
+      };
+      this.allyShells.push(shell);
+      this.events.push({ type: 'allyTankFire', tank, shell });
+    }
+  }
+
+  private allyShellBlast(sh: AllyShell) {
+    this.events.push({ type: 'allyShellHit', x: sh.x, d: sh.d, r: sh.radius, tier: sh.tier });
+    const r = sh.radius;
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
+      if (!z.alive) continue;
+      const dx = z.x - sh.x;
+      const dd = z.d - sh.d;
+      const lim = r + z.r;
+      if (dx * dx + dd * dd < lim * lim) this.damageZombie(z, sh.damage);
+    }
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
+      if (!b.alive || !b.active) continue;
+      const dx = b.x - sh.x;
+      const dd = b.d - sh.d;
+      const lim = r + b.r;
+      if (dx * dx + dd * dd < lim * lim) this.damageBoss(b, sh.damage * 1.55);
+    }
+    for (let i = 0; i < this.barrels.length; i++) {
+      const br = this.barrels[i];
+      if (!br.alive || !br.tank) continue;
+      const dx = br.x - sh.x;
+      const dd = br.d - sh.d;
+      const lim = r + br.r;
+      if (dx * dx + dd * dd < lim * lim) {
+        const tdmg = sh.damage * 1.25;
+        br.hp -= tdmg;
+        br.bump = 1;
+        this.events.push({ type: 'hit', x: br.x, d: br.d, y: 1.3, target: 'barrel', color: 0x38bdf8, dmg: tdmg, id: br.id });
+        if (br.hp <= 0) this.breakBarrel(br);
+      }
+    }
   }
 
   private frontBlitzTank(): Barrel | null {
@@ -959,15 +1203,15 @@ export class World {
 
   private moveBlitzQueue(dt: number) {
     const def = this.defense!;
-    // 左路：源源不断的 +1 数字门匀速滑下
-    const leftStep = 3.2 * dt;
+    // 左路：固定 +1 数字门高速传送带涌来（不可射击增长，吃得飞快！）
+    const leftStep = 7.8 * dt;
     for (let i = 0; i < this.gates.length; i++) {
       const g = this.gates[i];
       if (!g.consumed && g.blitzLane === 'left') g.d -= leftStep;
     }
 
-    // 中路：爆裂红油桶随敌军推进
-    const midStep = 2.6 * dt;
+    // 中路：爆裂红油桶随密集敌潮快速推进
+    const midStep = 3.8 * dt;
     for (let i = 0; i < this.barrels.length; i++) {
       const b = this.barrels[i];
       if (!b.alive || b.blitzLane !== 'mid') continue;
@@ -975,10 +1219,10 @@ export class World {
       if (b.d < -4) b.alive = false;
     }
 
-    // 右路：重装坦克推进至 stopD 驻停开炮，身后奖励紧紧排成一列，击毁坦克瞬间全线冲下供玩家扫货！
+    // 右路：重装坦克推进至 stopD 驻停开炮，身后奖励紧紧排成一列，击毁坦克瞬间收编入队并全线放行奖励！
     if (this.time > 0.6) this.queueV += (def.conveyor - this.queueV) * Math.min(1, dt * 6);
     const frontTank = this.frontBlitzTank();
-    const surgeStep = 8.8 * dt;
+    const surgeStep = 9.4 * dt;
     const queueStep = this.queueV * dt;
 
     if (frontTank) {
@@ -1033,12 +1277,12 @@ export class World {
     }
     if (frontTank && queue.length > 0) {
       queue.sort((a, b) => a.d - b.d);
-      let floor = frontTank.d + frontTank.r + 2.2;
+      let floor = frontTank.d + frontTank.r + 2.1;
       for (let i = 0; i < queue.length; i++) {
         const q = queue[i];
         const d = Math.max(floor + q.r, q.d - queueStep);
         q.item.d = d;
-        floor = d + q.r + 2.2;
+        floor = d + q.r + 2.1;
       }
     }
   }
@@ -1083,7 +1327,7 @@ export class World {
       const dx = b.x - x;
       const dd = b.d - d;
       const lim = r + b.r;
-      if (dx * dx + dd * dd < lim * lim) this.damageBoss(b, damage * 1.4);
+      if (dx * dx + dd * dd < lim * lim) this.damageBoss(b, damage * 1.45);
     }
     for (let i = 0; i < this.barrels.length; i++) {
       const br = this.barrels[i];
@@ -1110,8 +1354,8 @@ export class World {
       const dx = z.x - x;
       const dd = z.d - d;
       if (dx * dx + dd * dd > rr + z.r * z.r) continue;
-      if (z.kind === 'giant') this.damageZombie(z, z.maxHp * 0.32);
-      else if (z.kind === 'brute') this.damageZombie(z, z.maxHp * 0.75);
+      if (z.kind === 'giant') this.damageZombie(z, z.maxHp * 0.38);
+      else if (z.kind === 'brute') this.damageZombie(z, z.maxHp * 0.85);
       else this.killZombie(z, true);
     }
     for (let i = 0; i < this.bosses.length; i++) {
@@ -1119,7 +1363,7 @@ export class World {
       if (!b.alive || !b.active) continue;
       const dx = b.x - x;
       const dd = b.d - d;
-      if (dx * dx + dd * dd < (radius + b.r) * (radius + b.r)) this.damageBoss(b, b.maxHp * 0.06);
+      if (dx * dx + dd * dd < (radius + b.r) * (radius + b.r)) this.damageBoss(b, b.maxHp * 0.08);
     }
   }
 
@@ -1536,7 +1780,21 @@ export class World {
     if (!s) return;
     if (this.spec.mode === 'blitz' && this.blitz.shield > 0) {
       this.blitz.shield--;
-      this.events.push({ type: 'shieldBlock', x: this.squad.x + s.ox, d: this.squad.d + s.oz, remaining: this.blitz.shield });
+      const bx = this.squad.x + s.ox;
+      const bd = this.squad.d + s.oz;
+      this.events.push({ type: 'shieldBlock', x: bx, d: bd, remaining: this.blitz.shield });
+      // 真实护盾反震冲击波：震伤并击退贴脸尸潮
+      const repulseDmg = (42 + this.squad.tier * 24) * this.damage;
+      for (let i = 0; i < this.near.length; i++) {
+        const z = this.near[i];
+        if (!z.alive) continue;
+        const dx = z.x - bx;
+        const dd = z.d - bd;
+        if (dx * dx + dd * dd < 6.25) {
+          this.damageZombie(z, repulseDmg);
+          if (z.alive && z.kind !== 'giant') z.d += 0.9;
+        }
+      }
       return;
     }
     this.stats.lose(cause, 1);
@@ -1708,21 +1966,17 @@ export class World {
       g.bump = 1;
       return;
     }
+    // 广告奇袭模式：数字门固定数值，射击不会增加数字
+    if (this.spec.mode === 'blitz') return;
     g.hits += hits;
     g.bump = 1;
     const L = this.spec.level;
-    const isBlitz = this.spec.mode === 'blitz';
     let changed = false;
     for (;;) {
       if (g.kind === 'weapon' && g.value >= Math.min(WEAPONS.length - 1, maxWeaponTier(L) + 1)) break;
       if (g.kind === 'rate' && g.value >= RATE_GATE_MAX) break;
-      const step = isBlitz
-        ? g.kind === 'rate'
-          ? 5
-          : g.value < 0
-            ? 2
-            : Math.max(2, 2 + Math.floor(g.value / 5))
-        : g.kind === 'weapon'
+      const step =
+        g.kind === 'weapon'
           ? weaponGateStep(L, g.value)
           : g.kind === 'rate'
             ? rateGateStep(L, g.value)
@@ -1768,11 +2022,12 @@ export class World {
     while (this.shotAcc >= 1) {
       this.shotAcc -= 1;
       const s = this.soldiers[Math.floor(this.rng() * this.soldiers.length)];
-      const laneJitter = streams > 1 ? (Math.floor(this.rng() * streams) - (streams - 1) * 0.5) * 0.22 : 0;
+      const fanSlot = streams > 1 ? Math.floor(this.rng() * streams) - (streams - 1) * 0.5 : 0;
+      const laneJitter = fanSlot * 0.28;
       const x = sq.x + s.ox + 0.12 + laneJitter;
       const d = sq.d + s.oz + 0.35;
-      // 每种枪的弹道不一样：冲锋枪、加特林泼得开，战术步枪又快又准，等离子炮慢而大
-      let vx = randRange(this.rng, -w.spread, w.spread) + laneJitter * 1.4;
+      // 每种枪的弹道不一样：冲锋枪、加特林泼得开，战术步枪又快又准，等离子炮慢而大；多重弹道呈明显扇形扫射！
+      let vx = randRange(this.rng, -w.spread, w.spread) + fanSlot * 3.1;
       let vd = BULLET_SPEED * w.speed;
       if (aim) {
         let target: Boss | null = null;
@@ -1811,11 +2066,14 @@ export class World {
   private prepareHits() {
     const lo = this.squad.d + this.back - 3;
     const hi = this.squad.d + BULLET_RANGE + 6;
-    const frontTank = this.spec.mode === 'blitz' ? this.frontBlitzTank() : null;
+    const isBlitz = this.spec.mode === 'blitz';
+    const frontTank = isBlitz ? this.frontBlitzTank() : null;
     this.hitGates.length = 0;
-    for (let i = 0; i < this.gates.length; i++) {
-      const g = this.gates[i];
-      if (!g.consumed && g.kind !== 'mul' && g.d >= lo && g.d <= hi) this.hitGates.push(g);
+    if (!isBlitz) {
+      for (let i = 0; i < this.gates.length; i++) {
+        const g = this.gates[i];
+        if (!g.consumed && g.kind !== 'mul' && g.d >= lo && g.d <= hi) this.hitGates.push(g);
+      }
     }
     this.hitBarrels.length = 0;
     for (let i = 0; i < this.barrels.length; i++) {
@@ -1952,6 +2210,7 @@ export class World {
   private splash(x: number, d: number, dmg: number, skip: number) {
     const a = this.ammo;
     if (a.splash <= 0) return;
+    const isEmp = a.name === '电磁弹';
     const r2 = a.splash * a.splash;
     let hit = false;
     const [b0, b1] = this.zSpatial.range(d - a.splash - 1.2, d + a.splash + 1.2);
@@ -1965,10 +2224,12 @@ export class World {
         const dd = z.d - d;
         if (dx * dx + dd * dd > r2 + z.r * z.r) continue;
         this.damageZombie(z, dmg * a.splashDmg * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1));
+        if (isEmp && z.alive) z.slow = 1.6;
         hit = true;
       }
     }
-    if (hit && this.rng() < 0.4) this.events.push({ type: 'splash', x, d, r: a.splash });
+    const visChance = this.spec.mode === 'blitz' ? 0.72 : 0.4;
+    if (hit && this.rng() < visChance) this.events.push({ type: 'splash', x, d, r: a.splash });
   }
 
   // ---------- 桶 ----------
@@ -1983,7 +2244,8 @@ export class World {
     if (br.tank) {
       this.blitz.tanksDestroyed++;
       this.addGems(1, br.x, br.d);
-      this.events.push({ type: 'banner', text: `${br.tank.name} 击毁！右路奖励全线释放！`, tone: 'info' });
+      this.captureTank(br);
+      this.events.push({ type: 'banner', text: `已收编【${br.tank.name}】！开上前线协同开火，右路奖励全线释放！`, tone: 'info' });
     }
     this.events.push({ type: 'barrelBreak', barrel: br });
     if (br.carnage) {
@@ -2044,8 +2306,8 @@ export class World {
       const br = this.barrels[k];
       if (!br.alive) continue;
       if (br.d - br.r > sq.d + this.front + 0.4 || br.d + br.r < sq.d + this.back - 0.4) continue;
-      // 广告奇袭：右路已放行的奖励舱碰到队伍立刻无伤拾取，畅享连吃加成爽感！
-      if (br.blitzLane === 'right' && !br.tank) {
+      // 广告奇袭：右路已放行的奖励舱、中路友军安全爆破油桶碰到队伍立刻触发，不误伤己方士兵！
+      if ((br.blitzLane === 'right' && !br.tank) || br.look === 'bomb') {
         if (Math.abs(sq.x - br.x) <= this.halfWidth + br.r + 0.35) {
           this.breakBarrel(br);
         }
@@ -2122,7 +2384,10 @@ export class World {
       if (!b.alive || !b.active) continue;
       const dx = b.x - x;
       const dd = b.d - d;
-      if (dx * dx + dd * dd < (radius + b.r) * (radius + b.r)) this.damageBoss(b, b.maxHp * (source === 'strike' ? 0.04 : 0.01));
+      if (dx * dx + dd * dd < (radius + b.r) * (radius + b.r)) {
+        const pct = source === 'strike' ? (this.spec.mode === 'blitz' ? 0.08 : 0.04) : 0.01;
+        this.damageBoss(b, b.maxHp * pct);
+      }
     }
     if (source === 'strike') {
       for (let i = 0; i < this.barrels.length; i++) {
@@ -2131,7 +2396,7 @@ export class World {
         const dx = br.x - x;
         const dd = br.d - d;
         if (dx * dx + dd * dd < (radius + br.r) * (radius + br.r)) {
-          br.hp -= br.maxHp * 0.14;
+          br.hp -= br.maxHp * 0.18;
           br.bump = 1;
           if (br.hp <= 0) this.breakBarrel(br);
         }
@@ -2188,9 +2453,14 @@ export class World {
       const def = ZOMBIES[z.kind];
       if (!z.active && z.d - sq.d < ENEMY_ACTIVATE) z.active = true;
       if (!z.active) continue;
-      z.phase += dt * (z.kind === 'runner' ? 16 : z.kind === 'giant' ? 6 : 11);
+      let slowMult = 1;
+      if (z.slow && z.slow > 0) {
+        z.slow = Math.max(0, z.slow - dt);
+        slowMult = 0.56;
+      }
+      z.phase += dt * slowMult * (z.kind === 'runner' ? 16 : z.kind === 'giant' ? 6 : 11);
 
-      z.d -= def.speed * this.zombieSpeed * dt;
+      z.d -= def.speed * this.zombieSpeed * slowMult * dt;
       // 横向追踪：离阵型边缘够近才拐过来，所以隔得远的道可以躲开。
       // 防线模式下，冲进交战区的丧尸会横穿过来找你
       const engage = this.defense ? z.d < DEFENSE_WALL_D + 1 : z.d - front < 16;
@@ -2379,7 +2649,7 @@ export class World {
       const rage = b.enraged ? 1.3 : 1;
       // 横向跟着队伍，双 Boss 时各守一边；防线还在隔离墙那一段时守在自己的道上
       const inLane = this.defense && b.d > DEFENSE_WALL_D + b.r;
-      const lim = inLane ? 0.8 : double && !this.defense ? 0.9 : 4.5;
+      const lim = this.spec.mode === 'blitz' ? 1.45 : inLane ? 0.8 : double && !this.defense ? 0.9 : 4.5;
       const tx = Math.max(b.homeX - lim, Math.min(b.homeX + lim, sq.x));
       // 蓄力和挥击时站稳，别在锁定危险带后横滑。
       if (!b.attacking) b.x += Math.max(-1, Math.min(1, tx - b.x)) * 0.9 * dt;
@@ -2522,7 +2792,12 @@ export class World {
 
   private launchAirstrike() {
     const sq = this.squad;
+    this.events.push({ type: 'airstrikeLaunch', x: sq.x, d: sq.d });
     const targets: { x: number; d: number }[] = [];
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
+      if (b.alive && b.active && targets.length < 4) targets.push({ x: b.x, d: b.d + 1.5 });
+    }
     if (this.spec.mode === 'blitz') {
       const tank = this.frontBlitzTank();
       if (tank && tank.d < sq.d + 46) targets.push({ x: tank.x, d: tank.d + 1.5 });
@@ -2547,10 +2822,11 @@ export class World {
       }
       if (farEnough) targets.push({ x: z.x, d: z.d });
     }
-    while (targets.length < 6) targets.push({ x: randRange(this.rng, -TRACK_HALF + 1, TRACK_HALF - 1), d: sq.d + randRange(this.rng, 12, 40) });
+    const minCount = this.spec.mode === 'blitz' ? 8 : 6;
+    while (targets.length < minCount) targets.push({ x: randRange(this.rng, -TRACK_HALF + 1, TRACK_HALF - 1), d: sq.d + randRange(this.rng, 10, 40) });
     for (let i = 0; i < targets.length; i++) {
       const t = targets[i];
-      const s: Strike = { id: this.nextId++, x: t.x, d: t.d, t: -i * 0.12, T: 0.75 };
+      const s: Strike = { id: this.nextId++, x: t.x, d: t.d, t: -i * 0.11, T: 0.72 };
       this.strikes.push(s);
       this.events.push({ type: 'strike', strike: s });
     }

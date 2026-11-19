@@ -569,9 +569,17 @@ const TANK_PALETTES = [
   { hull: 0xc99628, armor: 0x7a5713, accent: 0xfff08a, barrel: 0x2e2a22 }, // Tier 4 黄金天启
 ] as const;
 
-/** 3D 重装坦克底盘（车体 + 双侧履带 + 负重轮 + 反应装甲 + 前大灯） */
-export function tankHullGeometry(tier: 1 | 2 | 3 | 4, r: number): Part {
-  const pal = TANK_PALETTES[Math.min(3, Math.max(0, tier - 1))];
+const ALLY_TANK_PALETTES = [
+  { hull: 0x1d4ed8, armor: 0x1e3a8a, accent: 0x38bdf8, barrel: 0x1e293b }, // 友军 1 阶蓝钢
+  { hull: 0x0284c7, armor: 0x0c4a6e, accent: 0x67e8f9, barrel: 0x1e293b }, // 友军 2 阶天青重坦
+  { hull: 0x2563eb, armor: 0x1e3a8a, accent: 0xfacc15, barrel: 0x1e293b }, // 友军 3 阶双管雷霆
+  { hull: 0x0ea5e9, armor: 0x1d4ed8, accent: 0xfef08a, barrel: 0x0f172a }, // 友军 4 阶天启金蓝
+] as const;
+
+/** 3D 重装坦克底盘（车体 + 双侧履带 + 负重轮 + 反应装甲 + 前大灯；ally=true 时为收编友军蓝金涂装） */
+export function tankHullGeometry(tier: 1 | 2 | 3 | 4, r: number, ally = false): Part {
+  const pals = ally ? ALLY_TANK_PALETTES : TANK_PALETTES;
+  const pal = pals[Math.min(3, Math.max(0, tier - 1))];
   const sc = r / 1.5;
   const parts: Part[] = [];
   // 左右重型履带与裙甲
@@ -582,7 +590,7 @@ export function tankHullGeometry(tier: 1 | 2 | 3 | 4, r: number): Part {
       parts.push(
         paint(
           at(new THREE.CylinderGeometry(0.24 * sc, 0.24 * sc, 0.66 * sc, 10), s * 1.12 * sc, 0.25 * sc, i * 0.58 * sc, 0, 0, Math.PI / 2),
-          0x484d55,
+          ally ? 0x60a5fa : 0x484d55,
         ),
       );
     }
@@ -590,10 +598,15 @@ export function tankHullGeometry(tier: 1 | 2 | 3 | 4, r: number): Part {
   // 主装甲车体 + 前倾斜装甲
   parts.push(paint(at(new THREE.BoxGeometry(1.92 * sc, 0.72 * sc, 2.85 * sc), 0, 0.7 * sc, 0), pal.hull));
   parts.push(paint(at(new THREE.BoxGeometry(1.88 * sc, 0.46 * sc, 0.65 * sc), 0, 0.62 * sc, 1.5 * sc, 0.42), pal.armor));
-  // 警示涂装条与前灯（面向 +z 玩家方向）
+  // 警示涂装条与前灯（敌方朝 +z，友方由外层 group 旋转 180° 朝 -z 面向敌阵）
   parts.push(paint(at(new THREE.BoxGeometry(1.75 * sc, 0.14 * sc, 0.12 * sc), 0, 0.88 * sc, 1.45 * sc), pal.accent));
   for (const s of [-0.65, 0.65]) {
-    parts.push(paint(at(new THREE.SphereGeometry(0.11 * sc, 8, 6), s * sc, 0.82 * sc, 1.62 * sc), 0xfff3b0));
+    parts.push(paint(at(new THREE.SphereGeometry(0.11 * sc, 8, 6), s * sc, 0.82 * sc, 1.62 * sc), ally ? 0x67e8f9 : 0xfff3b0));
+  }
+  if (ally) {
+    // 友军金色识别菱徽与尾翼发光能量条
+    parts.push(paint(at(new THREE.OctahedronGeometry(0.26 * sc, 0), 0, 1.12 * sc, 0.78 * sc, 0, Math.PI / 4, 0, 1.2, 0.35, 1.2), 0xfacc15));
+    parts.push(paint(at(new THREE.BoxGeometry(1.6 * sc, 0.14 * sc, 0.16 * sc), 0, 1.06 * sc, -1.25 * sc), 0x38bdf8));
   }
   // 车尾散热格栅
   parts.push(paint(at(new THREE.BoxGeometry(1.4 * sc, 0.14 * sc, 0.65 * sc), 0, 1.09 * sc, -0.95 * sc), 0x26292e));
@@ -601,8 +614,9 @@ export function tankHullGeometry(tier: 1 | 2 | 3 | 4, r: number): Part {
 }
 
 /** 3D 坦克旋转炮塔（炮塔本体 + 指挥塔 + 单管或天启双管主炮，炮口朝 +z） */
-export function tankTurretGeometry(tier: 1 | 2 | 3 | 4, r: number, twin = false): Part {
-  const pal = TANK_PALETTES[Math.min(3, Math.max(0, tier - 1))];
+export function tankTurretGeometry(tier: 1 | 2 | 3 | 4, r: number, twin = false, ally = false): Part {
+  const pals = ally ? ALLY_TANK_PALETTES : TANK_PALETTES;
+  const pal = pals[Math.min(3, Math.max(0, tier - 1))];
   const sc = r / 1.5;
   const parts: Part[] = [];
   // 炮塔座圈与装甲外壳
@@ -611,7 +625,7 @@ export function tankTurretGeometry(tier: 1 | 2 | 3 | 4, r: number, twin = false)
   parts.push(paint(at(new THREE.BoxGeometry(1.56 * sc, 0.14 * sc, 1.25 * sc), 0, 0.58 * sc, -0.15 * sc), pal.accent));
   // 车长观察塔 + 天线
   parts.push(paint(at(new THREE.CylinderGeometry(0.32 * sc, 0.36 * sc, 0.24 * sc, 10), -0.35 * sc, 0.72 * sc, -0.35 * sc), pal.armor));
-  parts.push(paint(at(new THREE.CylinderGeometry(0.03 * sc, 0.03 * sc, 0.9 * sc, 5), 0.52 * sc, 0.98 * sc, -0.65 * sc), 0x1e2024));
+  parts.push(paint(at(new THREE.CylinderGeometry(0.03 * sc, 0.03 * sc, 0.9 * sc, 5), 0.52 * sc, 0.98 * sc, -0.65 * sc), ally ? 0x38bdf8 : 0x1e2024));
   // 主炮管（单管或双管）
   const xs = twin ? [-0.28 * sc, 0.28 * sc] : [0];
   for (const bx of xs) {
@@ -650,4 +664,99 @@ export function droneGeometry(scale = 1): Part {
     }
   }
   return merged(parts);
+}
+
+/** 多重弹道 3D 浮空图标：三联扇形光束炮管 + 紫金分束核心 */
+export function multishotGeometry(): Part {
+  const parts: Part[] = [
+    paint(at(new THREE.OctahedronGeometry(0.28, 1), 0, 0, -0.1), 0xa855f7),
+    paint(at(new THREE.TorusGeometry(0.38, 0.055, 8, 16), 0, 0, -0.05), 0xfacc15),
+  ];
+  for (const ang of [-0.42, 0, 0.42]) {
+    const bx = Math.sin(ang) * 0.34;
+    const bz = Math.cos(ang) * 0.34;
+    parts.push(paint(at(new THREE.CylinderGeometry(0.075, 0.095, 0.68, 8), bx, 0.04, bz, Math.PI / 2, ang), 0xe879f9));
+    parts.push(paint(at(new THREE.ConeGeometry(0.11, 0.22, 8), bx * 1.85, 0.04, bz * 1.85, Math.PI / 2, ang), 0xfef08a));
+  }
+  return merged(parts);
+}
+
+/** 超级弹药 3D 浮空核心（1 穿甲金矛 · 2 爆裂烈焰弹头 · 3 电磁雷暴球） */
+export function ammoCoreGeometry(level: number): Part {
+  const parts: Part[] = [];
+  if (level >= 3) {
+    // 电磁弹：雷电能量球 + 双倾斜磁环
+    parts.push(paint(at(new THREE.IcosahedronGeometry(0.32, 1), 0, 0.06, 0), 0x38bdf8));
+    parts.push(paint(at(new THREE.TorusGeometry(0.48, 0.05, 8, 18), 0, 0.06, 0, 0.65, 0.3), 0xa855f7));
+    parts.push(paint(at(new THREE.TorusGeometry(0.48, 0.05, 8, 18), 0, 0.06, 0, -0.65, -0.3), 0x67e8f9));
+  } else if (level === 2) {
+    // 爆裂弹：烈焰重型弹头 + 尾翼
+    parts.push(paint(at(new THREE.CylinderGeometry(0.22, 0.24, 0.62, 12), 0, 0, 0, 0.3, 0, -0.3), 0xea580c));
+    parts.push(paint(at(new THREE.ConeGeometry(0.22, 0.38, 12), 0.14, 0.44, 0.14, 0.3, 0, -0.3), 0xfef08a));
+    parts.push(paint(at(new THREE.TorusGeometry(0.34, 0.055, 6, 14), 0, 0.05, 0, Math.PI / 2), 0xff4d4d));
+  } else {
+    // 穿甲弹：三枚并列黄金穿甲弹芯
+    for (const sx of [-0.24, 0, 0.24]) {
+      parts.push(paint(at(new THREE.CylinderGeometry(0.085, 0.1, 0.56, 10), sx, 0, 0), 0xf59e0b));
+      parts.push(paint(at(new THREE.ConeGeometry(0.09, 0.28, 10), sx, 0.4, 0), 0xfffbeb));
+    }
+  }
+  return merged(parts);
+}
+
+/** 火力倍增 3D 浮空图标：炽烈熔火水晶 + 双能量增幅环 */
+export function damageCoreGeometry(): Part {
+  const parts: Part[] = [
+    paint(at(new THREE.OctahedronGeometry(0.36, 0), 0, 0.08, 0, 0, 0, 0, 0.9, 1.45, 0.9), 0xff4d1f),
+    paint(at(new THREE.OctahedronGeometry(0.24, 0), 0, 0.08, 0, 0, Math.PI / 4, 0, 1.15, 0.9, 1.15), 0xfacc15),
+    paint(at(new THREE.TorusGeometry(0.46, 0.05, 6, 16), 0, 0.08, 0, 0.5, 0.4), 0xfb923c),
+  ];
+  return merged(parts);
+}
+
+/** 小队护盾 3D 浮空图标：六角能量盾牌 + 发光晶核 */
+export function shieldCoreGeometry(): Part {
+  const parts: Part[] = [
+    paint(at(new THREE.CylinderGeometry(0.46, 0.38, 0.16, 6), 0, 0.06, 0, Math.PI / 2), 0x06b6d4),
+    paint(at(new THREE.CylinderGeometry(0.32, 0.26, 0.22, 6), 0, 0.06, 0, Math.PI / 2), 0x67e8f9),
+    paint(at(new THREE.OctahedronGeometry(0.18, 0), 0, 0.06, 0.14), 0xecfeff),
+  ];
+  return merged(parts);
+}
+
+/** 极速射速 3D 浮空图标：立体闪电增压核 */
+export function rateBoltGeometry(): Part {
+  const parts: Part[] = [
+    paint(at(new THREE.BoxGeometry(0.22, 0.56, 0.16), 0.1, 0.26, 0, 0, 0, -0.45), 0xfacc15),
+    paint(at(new THREE.BoxGeometry(0.22, 0.56, 0.16), -0.08, -0.18, 0, 0, 0, -0.45), 0x38bdf8),
+    paint(at(new THREE.TorusGeometry(0.42, 0.045, 6, 14), 0, 0.05, 0), 0x67e8f9),
+  ];
+  return merged(parts);
+}
+
+/** 空袭超音速战机 3D 模型（空袭触发时低空呼啸掠过战场，双尾喷拖曳烈焰！） */
+export function jetGeometry(): Part {
+  const parts: Part[] = [
+    // 机身与机头锥
+    paint(at(new THREE.CylinderGeometry(0.22, 0.34, 3.2, 10), 0, 0, 0, Math.PI / 2), 0x334155),
+    paint(at(new THREE.ConeGeometry(0.22, 1.1, 10), 0, 0, -2.15, -Math.PI / 2), 0x94a3b8),
+    // 驾驶舱玻璃罩
+    paint(at(new THREE.SphereGeometry(0.26, 10, 8), 0, 0.22, -0.65, 0, 0, 0, 0.85, 0.65, 2.1), 0x38bdf8),
+    // 后掠三角主翼 + 警示翼尖条
+    paint(at(new THREE.BoxGeometry(4.4, 0.1, 1.25), 0, -0.02, 0.35), 0x475569),
+    paint(at(new THREE.BoxGeometry(2.6, 0.12, 0.35), 0, 0.02, -0.2), 0xf97316),
+    // 双垂尾
+    forWing(-0.65),
+    forWing(0.65),
+    // 双发动机尾喷口 + 高亮加力燃烧室
+    paint(at(new THREE.CylinderGeometry(0.16, 0.18, 0.45, 10), -0.28, -0.02, 1.72, Math.PI / 2), 0x1e293b),
+    paint(at(new THREE.CylinderGeometry(0.16, 0.18, 0.45, 10), 0.28, -0.02, 1.72, Math.PI / 2), 0x1e293b),
+    paint(at(new THREE.ConeGeometry(0.15, 0.72, 8), -0.28, -0.02, 2.25, Math.PI / 2), 0xffb347),
+    paint(at(new THREE.ConeGeometry(0.15, 0.72, 8), 0.28, -0.02, 2.25, Math.PI / 2), 0xffb347),
+  ];
+  return merged(parts);
+}
+
+function forWing(x: number): Part {
+  return paint(at(new THREE.BoxGeometry(0.1, 0.85, 0.75), x, 0.42, 1.15, 0, 0, x < 0 ? 0.22 : -0.22), 0x1e293b);
 }

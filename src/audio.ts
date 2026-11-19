@@ -324,6 +324,30 @@ export class Sfx {
             this.tone('square', 960, 740, 0.08, 0.06, 0.08);
           }
           break;
+        case 'tankCapture':
+          // 收编坦克入队：高昂铜管三连音 + 引擎轰鸣
+          this.tone('triangle', 440, 660, 0.14, 0.16);
+          this.tone('triangle', 554, 880, 0.16, 0.18, 0.09);
+          this.tone('sine', 660, 1100, 0.22, 0.2, 0.18);
+          this.tone('sine', 110, 52, 0.32, 0.24, 0.05);
+          break;
+        case 'allyTankFire':
+          if (this.ready('allyTankFire', 0.1)) {
+            this.hiss(0.18, 0.22, 'lowpass', 1100, 140);
+            this.tone('sine', 135, 42, 0.18, 0.24);
+          }
+          break;
+        case 'allyShellHit':
+          if (this.ready('allyShellHit', 0.09)) {
+            this.hiss(0.24, 0.26, 'lowpass', 950, 90);
+            this.tone('sine', 96, 32, 0.24, 0.26);
+          }
+          break;
+        case 'airstrikeLaunch':
+          // 战机呼啸掠过：带通扫频喷气声
+          this.hiss(0.75, 0.24, 'bandpass', 1800, 320);
+          this.tone('sawtooth', 320, 110, 0.55, 0.08, 0.06);
+          break;
         case 'shieldBlock':
           if (this.ready('shieldBlock', 0.09)) {
             this.tone('sine', 880, 1480, 0.09, 0.1);
