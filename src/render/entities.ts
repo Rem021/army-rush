@@ -5,6 +5,7 @@ import { bossMotion, bossPose } from './bossMotion';
 import { commitInstances, disposeObject } from './dispose';
 import { HpBar, Label, formatNumber, labelPlane, labelSprite } from './label';
 import { barrelGeometry, coinGeometry, gunGeometry, tiresGeometry, tiresHeight } from './models';
+import { ITEM_SCALE } from './scale';
 import {
   ammoCoreGeometry,
   armorGeometry,
@@ -114,29 +115,30 @@ export class GateView {
     this.floorMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.32, depthWrite: false });
     this.postMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
 
-    const panel = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.3, 1.75), this.panelMat);
-    panel.position.y = 0.97;
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.3 * ITEM_SCALE, 1.75 * ITEM_SCALE), this.panelMat);
+    panel.position.y = 0.97 * ITEM_SCALE;
     panel.renderOrder = 2;
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.1, 2.2), this.floorMat);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.1, 2.2 * ITEM_SCALE), this.floorMat);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, 0.03, 0.9);
-    const topBar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.3, 0.16, 0.16), this.postMat);
-    topBar.position.y = 1.86;
+    floor.position.set(0, 0.03, 0.9 * ITEM_SCALE);
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.3 * ITEM_SCALE, 0.16 * ITEM_SCALE, 0.16 * ITEM_SCALE), this.postMat);
+    topBar.position.y = 1.86 * ITEM_SCALE;
     this.inner.add(panel, floor, topBar);
+    const postR = 0.17 * ITEM_SCALE;
     for (const side of [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 2.0, 10), this.postMat);
-      post.position.set(side * (w / 2 - 0.17), 1.0, 0);
+      const post = new THREE.Mesh(new THREE.CylinderGeometry(postR, postR, 2.0 * ITEM_SCALE, 10), this.postMat);
+      post.position.set(side * (w / 2 - postR), 1.0 * ITEM_SCALE, 0);
       post.castShadow = true;
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21, 10, 8), this.postMat);
-      cap.position.set(side * (w / 2 - 0.17), 2.02, 0);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21 * ITEM_SCALE, 10, 8), this.postMat);
+      cap.position.set(side * (w / 2 - postR), 2.02 * ITEM_SCALE, 0);
       this.inner.add(post, cap);
     }
-    this.labelMesh = labelPlane(this.label, Math.min(3.3, w - 0.5), 2.06);
-    this.labelMesh.position.set(0, 0.98, 0.05);
+    this.labelMesh = labelPlane(this.label, Math.min(3.3 * ITEM_SCALE, w - 0.4), 2.06 * ITEM_SCALE);
+    this.labelMesh.position.set(0, 0.98 * ITEM_SCALE, 0.05);
     this.inner.add(this.labelMesh);
     if (gate.kind === 'weapon') {
-      this.gun = new THREE.Mesh(gunGeometry(Math.max(0, gate.value), 3.6), vertexMat);
-      this.gun.position.set(0, 2.55, 0);
+      this.gun = new THREE.Mesh(gunGeometry(Math.max(0, gate.value), 3.6 * ITEM_SCALE), vertexMat);
+      this.gun.position.set(0, 2.55 * ITEM_SCALE, 0);
       this.gun.castShadow = true;
       this.inner.add(this.gun);
     }
@@ -166,7 +168,7 @@ export class GateView {
       if (this.gun && tier !== this.gunTier) {
         this.gunTier = tier;
         if (!this.gun.geometry.userData?.shared) this.gun.geometry.dispose();
-        this.gun.geometry = gunGeometry(tier, 3.6);
+        this.gun.geometry = gunGeometry(tier, 3.6 * ITEM_SCALE);
       }
     }
   }
@@ -186,7 +188,7 @@ export class GateView {
     this.labelMesh.scale.setScalar(1 + g.bump * 0.08 + easePop(this.pop) * 0.35);
     if (this.gun) {
       this.gun.rotation.y = time * 1.6;
-      this.gun.position.y = 2.55 + Math.sin(time * 3) * 0.1;
+      this.gun.position.y = (2.55 + Math.sin(time * 3) * 0.1) * ITEM_SCALE;
       this.gun.scale.setScalar(1 + g.bump * 0.15);
     }
     if (!g.consumed) {
@@ -261,6 +263,7 @@ export class BarrelView {
     prop?: (name: string, fit: number) => THREE.BufferGeometry | null,
   ) {
     this.group.position.set(barrel.x, 0, -barrel.d);
+    this.group.scale.setScalar(ITEM_SCALE);
     this.isPickupPod = barrel.blitzLane === 'right' && !barrel.tank;
     let geom: THREE.BufferGeometry;
     const external = prop && !barrel.tank && barrel.look !== 'bomb' ? externalProp(barrel, prop) : null;
@@ -478,6 +481,11 @@ export class BarrelView {
     return this.barrel.maxHp > 0 ? this.barrel.hp / this.barrel.maxHp : 1;
   }
 
+  /** 缩放后的世界空间顶面高度（渲染器放特效/火花用） */
+  get worldTopY(): number {
+    return this.topY * ITEM_SCALE;
+  }
+
   /** 桶被打爆后奖励飞向队伍 */
   startFly() {
     this.body.visible = false;
@@ -495,6 +503,7 @@ export class BarrelView {
     this.group.remove(this.reward);
     this.group.parent?.add(this.reward);
     this.reward.position.copy(this.flyFrom);
+    this.reward.scale.setScalar(ITEM_SCALE);
   }
 
   update(dt: number, time: number, squadPos: THREE.Vector3) {
@@ -561,9 +570,9 @@ export class BarrelView {
     this.flyT += dt;
     const k = Math.min(1, this.flyT / 0.42);
     this.reward.position.lerpVectors(this.flyFrom, squadPos, k * k);
-    this.reward.position.y += Math.sin(k * Math.PI) * 2.8;
+    this.reward.position.y += Math.sin(k * Math.PI) * 2.4;
     this.reward.rotation.y += dt * 15;
-    this.reward.scale.setScalar(1 + Math.sin(k * Math.PI) * 0.35 - k * 0.55);
+    this.reward.scale.setScalar(ITEM_SCALE * (1 + Math.sin(k * Math.PI) * 0.35 - k * 0.55));
     if (k >= 1) {
       this.reward.visible = false;
       this.flyT = -1;
@@ -673,7 +682,7 @@ export class BossView {
   ) {
     if (dropIn) this.dropT = 0;
     const def = BOSSES[boss.kind];
-    this.scale = def.scale;
+    this.scale = def.scale * ITEM_SCALE;
     this.rig = buildBossRig(boss.kind);
     this.rig.root.scale.setScalar(this.scale);
     this.rig.root.rotation.y = Math.PI;
@@ -795,13 +804,14 @@ export class HazardView {
     if (hazard.kind === 'spikes') {
       const depth = hazard.d1 - hazard.d0;
       const m = new THREE.Mesh(spikesGeometry(w, depth), vertexMat);
+      m.scale.y = ITEM_SCALE;
       m.position.set((hazard.x0 + hazard.x1) / 2, 0, -(hazard.d0 + hazard.d1) / 2);
       m.castShadow = true;
       this.group.add(m);
     } else {
       const rail = new THREE.Mesh(sawRailGeometry(w), vertexMat);
       rail.position.set((hazard.x0 + hazard.x1) / 2, 0.01, -hazard.d0);
-      this.blade = new THREE.Mesh(sawBladeGeometry(0.85), vertexMat);
+      this.blade = new THREE.Mesh(sawBladeGeometry(0.85 * ITEM_SCALE), vertexMat);
       this.blade.castShadow = true;
       this.group.add(rail, this.blade);
     }
@@ -810,7 +820,7 @@ export class HazardView {
   update(time: number) {
     const h = this.hazard;
     if (this.blade) {
-      this.blade.position.set(h.x, 0.62, -h.d0);
+      this.blade.position.set(h.x, 0.62 * ITEM_SCALE, -h.d0);
       this.blade.rotation.z = -time * 14;
     } else {
       const m = this.group.children[0];
@@ -832,8 +842,12 @@ export class WallsView {
   private lastKey = '';
 
   constructor(scene: THREE.Scene) {
-    this.red = new THREE.InstancedMesh(barrierGeometry(0xd9361f), vertexMat, 200);
-    this.white = new THREE.InstancedMesh(barrierGeometry(0xf4f4f4), vertexMat, 200);
+    const redGeo = barrierGeometry(0xd9361f);
+    redGeo.scale(ITEM_SCALE, ITEM_SCALE, 1);
+    const whiteGeo = barrierGeometry(0xf4f4f4);
+    whiteGeo.scale(ITEM_SCALE, ITEM_SCALE, 1);
+    this.red = new THREE.InstancedMesh(redGeo, vertexMat, 200);
+    this.white = new THREE.InstancedMesh(whiteGeo, vertexMat, 200);
     for (const m of [this.red, this.white]) {
       m.castShadow = true;
       m.count = 0;
@@ -911,11 +925,12 @@ export class ProjectileView {
   ) {
     if (barrelGeom) {
       const mesh = new THREE.Mesh(barrelGeom, vertexMat);
+      mesh.scale.setScalar(ITEM_SCALE);
       mesh.castShadow = true;
       this.drum = mesh;
     } else {
       this.drum = drumMesh();
-      this.drum.scale.setScalar(1.4);
+      this.drum.scale.setScalar(1.4 * ITEM_SCALE);
     }
     const mat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
     this.fill = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), mat);
@@ -974,7 +989,7 @@ export class StrikeView {
     readonly strike: Strike,
   ) {
     this.missile = new THREE.Mesh(missileGeometry(), vertexMat);
-    this.missile.scale.setScalar(1.6);
+    this.missile.scale.setScalar(1.6 * ITEM_SCALE);
     this.mark = new THREE.Mesh(
       new THREE.RingGeometry(1.2, 1.45, 32),
       new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.85, depthWrite: false }),
@@ -1017,6 +1032,7 @@ export class AllyTankView {
     readonly tank: AllyTank,
   ) {
     this.group.position.set(tank.x, 0, -tank.d);
+    this.group.scale.setScalar(ITEM_SCALE);
     this.mat = vertexMat.clone();
     this.mat.userData.shared = false;
 

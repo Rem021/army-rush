@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Bullet } from '../game/world';
 import { commitInstances } from './dispose';
+import { ITEM_SCALE } from './scale';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -613,14 +614,14 @@ export class BulletMesh {
     for (let i = 0; i < n; i++) {
       const b = bullets[i];
       const st = this.style;
-      const len = (0.65 + Math.min(0.55, b.travel * 0.06)) * st.len;
+      const len = (0.65 + Math.min(0.55, b.travel * 0.06)) * st.len * ITEM_SCALE;
       _e.set(0, Math.atan2(-b.vx, b.vd), 0);
       _q.setFromEuler(_e);
-      _p.set(b.x, 0.74, -b.d);
-      _s.set(st.core, st.core, len);
+      _p.set(b.x, 0.74 * ITEM_SCALE, -b.d);
+      _s.set(st.core * ITEM_SCALE, st.core * ITEM_SCALE, len);
       _m.compose(_p, _q, _s);
       this.mesh.setMatrixAt(i, _m);
-      _s.set(st.glow, st.glow, len);
+      _s.set(st.glow * ITEM_SCALE, st.glow * ITEM_SCALE, len);
       _m.compose(_p, _q, _s);
       this.glow.setMatrixAt(i, _m);
     }

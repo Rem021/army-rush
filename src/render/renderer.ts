@@ -12,6 +12,7 @@ import { Environment } from './environment';
 import { HpBar, formatNumber } from './label';
 import { setGunProvider, soldierBody, soldierLeg } from './models';
 import { droneGeometry, jetGeometry, zombieBody, zombieLeg } from './props';
+import { ITEM_SCALE } from './scale';
 import { VatCrowd } from './vat';
 
 type Pose = AgentPose & { clip?: string; cycle?: number };
@@ -339,7 +340,7 @@ export class GameRenderer {
     this.walls = new WallsView(this.scene);
 
     // 广告奇袭专属 3D 表现：护航无人机、3D 能量护盾罩、火力光环、追踪导弹、友军重炮弹、空袭战机与左路极速传送带箭头
-    const droneGeo = droneGeometry(0.95);
+    const droneGeo = droneGeometry(0.95 * ITEM_SCALE);
     const droneMat = new THREE.MeshLambertMaterial({ vertexColors: true });
     for (let i = 0; i < 6; i++) {
       const mesh = new THREE.Mesh(droneGeo, droneMat);
@@ -393,7 +394,7 @@ export class GameRenderer {
     this.scene.add(this.powerAura);
 
     this.blitzMissiles = new THREE.InstancedMesh(
-      new THREE.ConeGeometry(0.11, 0.72, 8),
+      new THREE.ConeGeometry(0.11 * ITEM_SCALE, 0.72 * ITEM_SCALE, 8),
       new THREE.MeshBasicMaterial({ color: 0x67e8f9, toneMapped: false }),
       48,
     );
@@ -403,7 +404,7 @@ export class GameRenderer {
     this.scene.add(this.blitzMissiles);
 
     this.allyShellMesh = new THREE.InstancedMesh(
-      new THREE.CapsuleGeometry(0.18, 0.62, 6, 10),
+      new THREE.CapsuleGeometry(0.18 * ITEM_SCALE, 0.62 * ITEM_SCALE, 6, 10),
       new THREE.MeshBasicMaterial({ color: 0xffe066, toneMapped: false }),
       40,
     );
@@ -413,6 +414,7 @@ export class GameRenderer {
     this.scene.add(this.allyShellMesh);
 
     this.airstrikeJet = new THREE.Mesh(jetGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+    this.airstrikeJet.scale.setScalar(ITEM_SCALE);
     this.airstrikeJet.castShadow = true;
     this.airstrikeJet.visible = false;
     this.scene.add(this.airstrikeJet);
@@ -841,15 +843,15 @@ export class GameRenderer {
             vd: 1.6 + Math.random() * 1.4,
             yaw: Math.PI + (Math.random() - 0.5) * 0.45,
             t: 0,
-            scale: def.scale,
+            scale: def.scale * ITEM_SCALE,
             look: e.look,
           });
-          this.impacts.spawn(e.x, 0.75 * def.scale, -e.d + 0.25, 0.55 * big);
-          this.debris.burst(e.x, 0.75 * def.scale, -e.d, Math.round(5 * big), 5.2 * big, 0.55, 0.12 * big, ZOMBIE_DIE_COLS, 19);
-          if (Math.random() < 0.82) this.splats.spawn(e.x, -e.d, def.scale * (e.kind === 'giant' ? 1.75 : 1.22), e.kind === 'exploder' ? 0xb8e04a : 0x5f8f3a);
-          if (e.coins > 0 && Math.random() < 0.6) this.debris.burst(e.x, 1.1, -e.d, Math.min(7, e.coins), 4.6, 0.72, 0.15, COIN_COLS, 22, 0.85);
+          this.impacts.spawn(e.x, 0.75 * def.scale * ITEM_SCALE, -e.d + 0.25, 0.55 * big * ITEM_SCALE);
+          this.debris.burst(e.x, 0.75 * def.scale * ITEM_SCALE, -e.d, Math.round(5 * big), 5.2 * big, 0.55, 0.12 * big * ITEM_SCALE, ZOMBIE_DIE_COLS, 19);
+          if (Math.random() < 0.82) this.splats.spawn(e.x, -e.d, def.scale * ITEM_SCALE * (e.kind === 'giant' ? 1.75 : 1.22), e.kind === 'exploder' ? 0xb8e04a : 0x5f8f3a);
+          if (e.coins > 0 && Math.random() < 0.6) this.debris.burst(e.x, 1.1 * ITEM_SCALE, -e.d, Math.min(7, e.coins), 4.6, 0.72, 0.15 * ITEM_SCALE, COIN_COLS, 22, 0.85);
           if (e.kind === 'giant') {
-            this.explosions.spawn(e.x, 1.5, -e.d, 2.4);
+            this.explosions.spawn(e.x, 1.5 * ITEM_SCALE, -e.d, 2.4 * ITEM_SCALE);
             this.rings.spawn(e.x, -e.d, 5.5, 0xff9f1c, 0.5);
             this.shake(0.45);
           } else if (e.kind === 'brute') {
@@ -859,10 +861,10 @@ export class GameRenderer {
           break;
         }
         case 'soldierDie': {
-          this.dyingPlayers.push({ x: e.x, y: 0, d: e.d, vx: (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 2, vd: -2 - Math.random() * 2, yaw: 0, t: 0, scale: 1, look: -1 });
+          this.dyingPlayers.push({ x: e.x, y: 0, d: e.d, vx: (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 2, vd: -2 - Math.random() * 2, yaw: 0, t: 0, scale: ITEM_SCALE, look: -1 });
           _pairCols[0] = this.skin.team;
           _pairCols[1] = this.skin.shirt;
-          this.debris.burst(e.x, 0.7, -e.d, 2, 3, 0.5, 0.1, _pairCols, 18);
+          this.debris.burst(e.x, 0.7 * ITEM_SCALE, -e.d, 2, 3, 0.5, 0.1 * ITEM_SCALE, _pairCols, 18);
           break;
         }
         case 'barrelBreak': {
@@ -1022,22 +1024,22 @@ export class GameRenderer {
         case 'tankFire': {
           this.projectiles.set(e.proj.id, new ProjectileView(this.scene, e.proj, THROW_RADIUS, null));
           const tb = e.barrel;
-          this.flashes.spawn(tb.x, 1.4, -(tb.d - tb.r - 0.8), 1.6);
-          this.sparks.burst(tb.x, 1.4, -(tb.d - tb.r - 0.6), 14, 7.5, 0.4, 0.12, BOSS_SPARK_COLS, 8, 0.45);
+          this.flashes.spawn(tb.x, 1.4 * ITEM_SCALE, -(tb.d - (tb.r + 0.8) * ITEM_SCALE), 1.6 * ITEM_SCALE);
+          this.sparks.burst(tb.x, 1.4 * ITEM_SCALE, -(tb.d - (tb.r + 0.6) * ITEM_SCALE), 14, 7.5, 0.4, 0.12 * ITEM_SCALE, BOSS_SPARK_COLS, 8, 0.45);
           this.shake(0.14);
           break;
         }
         case 'tankCapture': {
-          this.pillar.spawn(e.fromX, -e.fromD, 2.8, 0x38bdf8);
-          this.rings.spawn(e.fromX, -e.fromD, 8.5, 0x38bdf8, 0.65);
-          this.sparks.burst(e.fromX, 1.4, -e.fromD, 36, 10, 0.85, 0.16, SHIELD_COLS, 5, 0.65);
-          this.texts.spawn(`${e.tank.name} 入队参战！`, e.fromX, 3.0, -(e.fromD - 3), 'big good', 1.45, 1.7);
+          this.pillar.spawn(e.fromX, -e.fromD, 2.4 * ITEM_SCALE, 0x38bdf8);
+          this.rings.spawn(e.fromX, -e.fromD, 7.5 * ITEM_SCALE, 0x38bdf8, 0.65);
+          this.sparks.burst(e.fromX, 1.4 * ITEM_SCALE, -e.fromD, 36, 10, 0.85, 0.16 * ITEM_SCALE, SHIELD_COLS, 5, 0.65);
+          this.texts.spawn(`${e.tank.name} 入队参战！`, e.fromX, 2.6 * ITEM_SCALE, -(e.fromD - 3), 'big good', 1.45, 1.7);
           break;
         }
         case 'allyTankFire': {
           const at = e.tank;
-          this.flashes.spawn(at.x, 1.1, -(at.d + at.r + 0.9), 1.5);
-          this.sparks.burst(at.x, 1.1, -(at.d + at.r + 0.7), 10, 7, 0.35, 0.11, BOSS_SPARK_COLS, 6, 0.35);
+          this.flashes.spawn(at.x, 1.1 * ITEM_SCALE, -(at.d + (at.r + 0.9) * ITEM_SCALE), 1.5 * ITEM_SCALE);
+          this.sparks.burst(at.x, 1.1 * ITEM_SCALE, -(at.d + (at.r + 0.7) * ITEM_SCALE), 10, 7, 0.35, 0.11 * ITEM_SCALE, BOSS_SPARK_COLS, 6, 0.35);
           this.shake(0.08);
           break;
         }
@@ -1180,16 +1182,16 @@ export class GameRenderer {
       _pose.stride = stride;
       if (kit) {
         _pose.phase = s.phase;
-        _pose.scale = Math.max(0.01, pop) * (1 + this.tierFlash * 0.12);
+        _pose.scale = Math.max(0.01, pop) * ITEM_SCALE * (1 + this.tierFlash * 0.12);
         _pose.flash = this.tierFlash * 0.7;
         _pose.tilt = kick * 0.65;
         _pose.clip = clip;
         _pose.cycle = clip === 'run' ? s.phase / (Math.PI * 2) : t / clipLen + s.phase * 0.37;
         this.players.push(_pose);
-        this.blobs.push(_pose.x, -_pose.d, 0.8 * pop);
+        this.blobs.push(_pose.x, -_pose.d, 0.8 * ITEM_SCALE * pop);
       } else {
         _pose.phase = firing ? s.phase + t * 9 : s.phase;
-        _pose.scale = Math.max(0.01, pop);
+        _pose.scale = Math.max(0.01, pop) * ITEM_SCALE;
         _pose.flash = this.tierFlash * 0.5;
         _pose.tilt = kick * 0.8;
         _pose.clip = undefined;
@@ -1210,7 +1212,7 @@ export class GameRenderer {
       const z = w.zombies[i];
       if (!z.alive || z.d < lo || z.d > hi) continue;
       const def = ZOMBIES[z.kind];
-      let scale = def.scale * weightScale(z) * (1 + z.flash * 0.13);
+      let scale = def.scale * ITEM_SCALE * weightScale(z) * (1 + z.flash * 0.13);
       let flash = z.flash;
       if (z.kind === 'exploder') {
         scale *= 1 + Math.sin(t * 8 + z.id) * 0.05;
@@ -1235,7 +1237,7 @@ export class GameRenderer {
       if (anim) this.blobs.push(z.x, -(z.d + z.flash * 0.24), 0.9 * scale);
       if (z.kind === 'giant') this.giantLabel(giantIdx++, z);
       else if (z.hp < z.maxHp || (w.defense && z.d < w.defense.spawnD)) {
-        this.zombieBars.push(z.x, scale * (anim ? 1.55 : 1.32) + 0.18, -z.d, 0.78 * scale, Math.max(0, z.hp / z.maxHp));
+        this.zombieBars.push(z.x, scale * (anim ? 1.55 : 1.32) + 0.14, -z.d, 0.78 * scale, Math.max(0, z.hp / z.maxHp));
       }
     }
     for (let i = giantIdx; i < this.giantLabels.length; i++) this.giantLabels[i].sprite.visible = false;
@@ -1261,7 +1263,7 @@ export class GameRenderer {
       for (const view of this.allyTanks.values()) {
         view.update(t);
         if (dt > 0 && view.tank.phase === 'joining' && Math.random() < 0.7) {
-          this.sparks.spawn(view.tank.x + (Math.random() - 0.5) * 1.1, 0.25, -view.tank.d - 0.8, 0, 1.4, -2, 0.28, 0.12, 0x38bdf8, 8);
+          this.sparks.spawn(view.tank.x + (Math.random() - 0.5) * 1.1 * ITEM_SCALE, 0.22, -view.tank.d - 0.8 * ITEM_SCALE, 0, 1.4, -2, 0.28, 0.1 * ITEM_SCALE, 0x38bdf8, 8);
         }
       }
     }
@@ -1271,7 +1273,7 @@ export class GameRenderer {
       for (let i = 0; i < w.allyShells.length && si < 40; i++) {
         const sh = w.allyShells[i];
         const k = Math.min(1, sh.t / sh.T);
-        const y = 1.15 + Math.sin(k * Math.PI) * 2.2 - k * 0.4;
+        const y = 1.15 * ITEM_SCALE + Math.sin(k * Math.PI) * 2.0 - k * 0.35;
         const x = THREE.MathUtils.lerp(sh.x0, sh.x, k);
         const d = THREE.MathUtils.lerp(sh.d0, sh.d, k);
         _mDir.set(sh.x - sh.x0, Math.cos(k * Math.PI) * 4.2 - 0.4, -(sh.d - sh.d0)).normalize();
@@ -1280,7 +1282,7 @@ export class GameRenderer {
         _mMat.compose(_mPos, _mQuat, _mScale);
         this.allyShellMesh.setMatrixAt(si++, _mMat);
         if (dt > 0) {
-          this.sparks.spawn(x, y, -d, (Math.random() - 0.5) * 1.2, 0.4, 2.2, 0.24, 0.12, sh.tier >= 3 ? 0xfacc15 : 0xff7b24, 0);
+          this.sparks.spawn(x, y, -d, (Math.random() - 0.5) * 1.2, 0.4, 2.2, 0.24, 0.11 * ITEM_SCALE, sh.tier >= 3 ? 0xfacc15 : 0xff7b24, 0);
         }
       }
     }
@@ -1296,13 +1298,13 @@ export class GameRenderer {
         this.airstrikeJet.visible = false;
       } else {
         const jz = THREE.MathUtils.lerp(18, -72, k);
-        const jy = 7.8 + Math.sin(k * Math.PI) * 1.6;
+        const jy = 7.4 + Math.sin(k * Math.PI) * 1.5;
         this.airstrikeJet.visible = true;
         this.airstrikeJet.position.set(this.jetX, jy, jz);
         this.airstrikeJet.rotation.set(-0.08, 0, Math.sin(k * Math.PI * 2) * 0.22);
         if (dt > 0) {
-          this.sparks.spawn(this.jetX - 0.28, jy - 0.02, jz + 2.2, 0, 0, 8, 0.28, 0.16, 0xff9f1c, 0);
-          this.sparks.spawn(this.jetX + 0.28, jy - 0.02, jz + 2.2, 0, 0, 8, 0.28, 0.16, 0xffd34d, 0);
+          this.sparks.spawn(this.jetX - 0.28 * ITEM_SCALE, jy - 0.02, jz + 2.2 * ITEM_SCALE, 0, 0, 8, 0.28, 0.14 * ITEM_SCALE, 0xff9f1c, 0);
+          this.sparks.spawn(this.jetX + 0.28 * ITEM_SCALE, jy - 0.02, jz + 2.2 * ITEM_SCALE, 0, 0, 8, 0.28, 0.14 * ITEM_SCALE, 0xffd34d, 0);
         }
       }
     }
@@ -1316,9 +1318,9 @@ export class GameRenderer {
         const ring = Math.floor(i / 2) + 1;
         const angle = t * 2.4 + i * 1.3;
         dm.position.set(
-          sq.x + side * (Math.max(1.0, w.halfWidth + 0.35) + (ring - 1) * 0.45) + Math.sin(angle) * 0.18,
-          2.1 + Math.sin(t * 4.8 + i) * 0.2 + (ring - 1) * 0.22,
-          -(sq.d + 0.3 - (ring - 1) * 0.65),
+          sq.x + side * (Math.max(0.85, w.halfWidth + 0.25) + (ring - 1) * 0.36) + Math.sin(angle) * 0.16,
+          (2.1 + Math.sin(t * 4.8 + i) * 0.2 + (ring - 1) * 0.22) * ITEM_SCALE,
+          -(sq.d + 0.3 - (ring - 1) * 0.55),
         );
         dm.rotation.y = Math.sin(t * 2.4 + i) * 0.3;
         dm.rotation.z = Math.cos(angle) * 0.18;
@@ -1330,13 +1332,13 @@ export class GameRenderer {
     if (isBlitz && w.blitz.shield > 0 && sq.count > 0) {
       this.shieldAura.visible = true;
       this.shieldDome.visible = true;
-      const r = Math.max(1.15, w.halfWidth + 0.5);
+      const r = Math.max(0.95, w.halfWidth + 0.35);
       const pulse = 1 + this.shieldFlash * 0.14 + Math.sin(t * 5) * 0.025;
       this.shieldAura.position.set(sq.x, 0.08, -sq.d);
       this.shieldAura.scale.setScalar(r * pulse);
       this.shieldMat.opacity = 0.38 + this.shieldFlash * 0.48 + Math.sin(t * 4) * 0.08;
       this.shieldDome.position.set(sq.x, 0.02, -sq.d);
-      this.shieldDome.scale.set(r * pulse, Math.min(2.6, r * 0.85) * pulse, r * pulse);
+      this.shieldDome.scale.set(r * pulse, Math.min(2.6, r * 0.85) * ITEM_SCALE * pulse, r * pulse);
       this.shieldDomeMat.opacity = 0.14 + this.shieldFlash * 0.34 + Math.sin(t * 4.5) * 0.04;
     } else {
       this.shieldAura.visible = false;
@@ -1345,7 +1347,7 @@ export class GameRenderer {
     // 火力倍增 / 多重弹道炽烈光环
     if (isBlitz && (w.blitz.damageBonus > 0 || w.blitz.multishot > 1) && sq.count > 0) {
       this.powerAura.visible = true;
-      const pr = Math.max(1.0, w.halfWidth + 0.25);
+      const pr = Math.max(0.85, w.halfWidth + 0.18);
       this.powerAura.position.set(sq.x, 0.05, -sq.d);
       this.powerAura.scale.setScalar(pr * (1 + Math.sin(t * 6.5) * 0.04));
       this.powerAuraMat.color.setHex(w.blitz.damageBonus > 0 ? 0xf97316 : 0xa855f7);
@@ -1358,7 +1360,7 @@ export class GameRenderer {
       for (let i = 0; i < w.rockets.length && mi < 48; i++) {
         const r = w.rockets[i];
         const k = Math.min(1, r.t / r.T);
-        const y = 2.0 + Math.sin(k * Math.PI) * 3.8 - k * 1.1;
+        const y = 1.65 + Math.sin(k * Math.PI) * 3.4 - k * 1.0;
         const x = THREE.MathUtils.lerp(r.x0, r.x, k);
         const d = THREE.MathUtils.lerp(r.d0, r.d, k);
         _mDir.set(r.x - r.x0, Math.cos(k * Math.PI) * 7.5 - 1.1, -(r.d - r.d0)).normalize();
@@ -1366,7 +1368,7 @@ export class GameRenderer {
         _mPos.set(x, y, -d);
         _mMat.compose(_mPos, _mQuat, _mScale);
         this.blitzMissiles.setMatrixAt(mi++, _mMat);
-        if (dt > 0) this.sparks.spawn(x, y, -d, 0, -0.3, 1.5, 0.2, 0.09, 0x38bdf8, 0);
+        if (dt > 0) this.sparks.spawn(x, y, -d, 0, -0.3, 1.5, 0.2, 0.08 * ITEM_SCALE, 0x38bdf8, 0);
       }
     }
     this.prevBlitzMissiles = commitInstances(this.blitzMissiles, mi, this.prevBlitzMissiles);
@@ -1386,14 +1388,14 @@ export class GameRenderer {
       for (let i = 0; i < 6; i++) {
         const b = w.bullets[Math.floor(Math.random() * w.bullets.length)];
         this.sparks.spawn(
-          b.x + (Math.random() - 0.5) * 0.2,
-          0.72 + (Math.random() - 0.5) * 0.2,
-          -b.d + 0.4,
+          b.x + (Math.random() - 0.5) * 0.16,
+          0.72 * ITEM_SCALE + (Math.random() - 0.5) * 0.16,
+          -b.d + 0.35,
           (Math.random() - 0.5) * 1.5,
           Math.random() * 1.5,
           0,
           0.22,
-          0.07,
+          0.07 * ITEM_SCALE,
           Math.random() < 0.5 ? trail : 0xffffff,
           0,
         );
@@ -1402,19 +1404,30 @@ export class GameRenderer {
     this.tierFlash = Math.max(0, this.tierFlash - dt * 2.5);
     if ((w.state === 'run' || w.state === 'boss') && w.soldiers.length > 0 && dt > 0 && !this.menu) {
       const flashes = Math.min(20, Math.ceil(w.soldiers.length / 4));
-      const size = 0.44 + sq.tier * 0.07;
+      const size = (0.44 + sq.tier * 0.07) * ITEM_SCALE;
       const m = this.muzzle;
       for (let i = 0; i < flashes; i++) {
         const s = w.soldiers[Math.floor(Math.random() * w.soldiers.length)];
-        this.flashes.spawn(sq.x + s.ox + m.x, m.y, -(sq.d + s.oz + m.z), size);
+        this.flashes.spawn(sq.x + s.ox + m.x * ITEM_SCALE, m.y * ITEM_SCALE, -(sq.d + s.oz + m.z * ITEM_SCALE), size);
       }
       if (Math.random() < 0.75) {
         const s = w.soldiers[Math.floor(Math.random() * w.soldiers.length)];
-        this.sparks.spawn(sq.x + s.ox + m.x + 0.12, m.y + 0.05, -(sq.d + s.oz + m.z * 0.5), 1.4 + Math.random() * 1.6, 2.2 + Math.random() * 1.5, 0.6, 0.18, 0.055, 0xffd86b, 16);
+        this.sparks.spawn(
+          sq.x + s.ox + (m.x + 0.12) * ITEM_SCALE,
+          (m.y + 0.05) * ITEM_SCALE,
+          -(sq.d + s.oz + m.z * 0.5 * ITEM_SCALE),
+          1.4 + Math.random() * 1.6,
+          2.2 + Math.random() * 1.5,
+          0.6,
+          0.18,
+          0.055 * ITEM_SCALE,
+          0xffd86b,
+          16,
+        );
       }
     }
 
-    this.squadPos.set(sq.x, 1, -sq.d);
+    this.squadPos.set(sq.x, 1 * ITEM_SCALE, -sq.d);
     stripeTexture.offset.x -= dt * 0.6;
     const queueFar = w.defense ? (this.menuBlend > 0.5 ? -1e9 : DEFENSE_VIEW_D) : Infinity;
     for (const v of this.gates.values()) {
@@ -1433,13 +1446,15 @@ export class GameRenderer {
       if (!b.alive || !v.group.visible) continue;
       const stage = v.consumeStage();
       if (stage) {
-        this.debris.burst(b.x, v.topY * 0.6, -b.d + b.r * 0.5, 12 + stage * 5, 6.8, 0.85, 0.19 + stage * 0.03, BARREL_STAGE_COLS, 20, 0.6);
-        this.sparks.burst(b.x, v.topY * 0.6, -b.d + b.r * 0.5, 14, 7.5, 0.45, 0.13, WEAPON_UP_COLS, 8, 0.5);
+        this.debris.burst(b.x, v.worldTopY * 0.6, -b.d + b.r * 0.5 * ITEM_SCALE, 12 + stage * 5, 6.8, 0.85, (0.19 + stage * 0.03) * ITEM_SCALE, BARREL_STAGE_COLS, 20, 0.6);
+        this.sparks.burst(b.x, v.worldTopY * 0.6, -b.d + b.r * 0.5 * ITEM_SCALE, 14, 7.5, 0.45, 0.13 * ITEM_SCALE, WEAPON_UP_COLS, 8, 0.5);
         this.shake(0.11 + stage * 0.04);
       }
       const ratio = v.hpRatio;
-      if (ratio < 0.5 && Math.random() < dt * (ratio < 0.25 ? 9 : 4)) this.explosions.spawn(b.x + (Math.random() - 0.5) * b.r, v.topY * 0.8, -b.d, 0.35 + Math.random() * 0.3, true);
-      if (ratio < 0.25 && Math.random() < dt * 6) this.sparks.burst(b.x, v.topY * 0.7, -b.d + b.r * 0.4, 3, 4, 0.35, 0.08, BARREL_SPARK_COLS, 10, 0.7);
+      if (ratio < 0.5 && Math.random() < dt * (ratio < 0.25 ? 9 : 4))
+        this.explosions.spawn(b.x + (Math.random() - 0.5) * b.r * ITEM_SCALE, v.worldTopY * 0.8, -b.d, (0.35 + Math.random() * 0.3) * ITEM_SCALE, true);
+      if (ratio < 0.25 && Math.random() < dt * 6)
+        this.sparks.burst(b.x, v.worldTopY * 0.7, -b.d + b.r * 0.4 * ITEM_SCALE, 3, 4, 0.35, 0.08 * ITEM_SCALE, BARREL_SPARK_COLS, 10, 0.7);
     }
     for (const v of this.hazards.values()) {
       v.group.visible = v.hazard.d1 > sq.d - 15 && v.hazard.d0 < sq.d + VIEW_AHEAD + 30;
@@ -1534,14 +1549,14 @@ export class GameRenderer {
     if (!item) {
       const bar = new HpBar(320, 80);
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: bar.texture, depthTest: false, depthWrite: false, toneMapped: false }));
-      sprite.scale.set(3.2, 0.8, 1);
+      sprite.scale.set(3.2 * ITEM_SCALE, 0.8 * ITEM_SCALE, 1);
       sprite.renderOrder = 20;
       this.scene.add(sprite);
       item = { bar, sprite };
       this.giantLabels.push(item);
     }
     item.sprite.visible = true;
-    item.sprite.position.set(z.x, ZOMBIES.giant.scale * 1.35 + 0.7, -z.d);
+    item.sprite.position.set(z.x, ZOMBIES.giant.scale * ITEM_SCALE * 1.35 + 0.6 * ITEM_SCALE, -z.d);
     item.bar.set(z.hp / z.maxHp, formatNumber(Math.max(0, Math.ceil(z.hp))), '#ff8a1f', '巨尸');
   }
 
@@ -1691,7 +1706,7 @@ export class GameRenderer {
       }
       return;
     }
-    const v = _badge.set(sq.x, 1.6 + Math.min(1.2, w.halfWidth * 0.12), -(sq.d + Math.max(w.back * 0.2, w.front - 2.5)));
+    const v = _badge.set(sq.x, (1.6 + Math.min(1.2, w.halfWidth * 0.12)) * ITEM_SCALE, -(sq.d + Math.max(w.back * 0.2, w.front - 2.5)));
     v.project(this.camera);
     const x = Math.round(Math.max(40, Math.min(this.width - 40, (v.x * 0.5 + 0.5) * this.width)) * 2) * 0.5;
     const y = Math.round(Math.max(90, Math.min(this.height - 130, (-v.y * 0.5 + 0.5) * this.height)) * 2) * 0.5;
