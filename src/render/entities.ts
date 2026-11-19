@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BOSSES, BOSS_STRIKE_HALF, THROWER_MELEE_TIME, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
+import { AMMO, BOSSES, BOSS_STRIKE_HALF, THROWER_MELEE_TIME, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
 import type { Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
 import { bossMotion, bossPose } from './bossMotion';
 import { commitInstances, disposeObject } from './dispose';
@@ -8,15 +8,19 @@ import { barrelGeometry, coinGeometry, gunGeometry, tiresGeometry, tiresHeight }
 import {
   armorGeometry,
   barrierGeometry,
+  bombBarrelGeometry,
   buildBossRig,
   cageGeometry,
   crateGeometry,
   crateHeight,
+  droneGeometry,
   drumMesh,
   missileGeometry,
   sawBladeGeometry,
   sawRailGeometry,
   spikesGeometry,
+  tankHullGeometry,
+  tankTurretGeometry,
   type BossRig,
 } from './props';
 
@@ -225,9 +229,14 @@ export class BarrelView {
   readonly group = new THREE.Group();
   readonly reward = new THREE.Group();
   private readonly body: THREE.Mesh;
+  private readonly turret?: THREE.Mesh;
+  private readonly turretY: number;
+  private readonly tankBar?: HpBar;
+  private readonly tankBarSprite?: THREE.Sprite;
   private readonly label = new Label(256, 128);
   private readonly labelSprite: THREE.Sprite;
   private readonly rewardLabel?: Label;
+  private readonly isPickupPod: boolean;
   private flyT = -1;
   private readonly flyFrom = new THREE.Vector3();
   /** 每个桶自己一份材质，被打时单独闪白 */
@@ -245,9 +254,16 @@ export class BarrelView {
     prop?: (name: string, fit: number) => THREE.BufferGeometry | null,
   ) {
     this.group.position.set(barrel.x, 0, -barrel.d);
+    this.isPickupPod = barrel.blitzLane === 'right' && !barrel.tank;
     let geom: THREE.BufferGeometry;
-    const external = prop ? externalProp(barrel, prop) : null;
-    if (external) {
+    const external = prop && !barrel.tank && barrel.look !== 'bomb' ? externalProp(barrel, prop) : null;
+    if (barrel.tank) {
+      geom = tankHullGeometry(barrel.tank.tier, barrel.r);
+      this.topY = (barrel.r / 1.5) * 2.05;
+    } else if (barrel.look === 'bomb') {
+      geom = bombBarrelGeometry(barrel.r);
+      this.topY = barrel.r * 2.15;
+    } else if (external) {
       geom = external;
       this.topY = external.boundingBox!.max.y;
     } else if (barrel.look === 'tires') {
@@ -276,18 +292,45 @@ export class BarrelView {
     }
     this.group.add(this.body);
 
+    this.turretY = (barrel.r / 1.5) * 1.06;
+    if (barrel.tank) {
+      this.turret = new THREE.Mesh(tankTurretGeometry(barrel.tank.tier, barrel.r, barrel.tank.twin), this.mat);
+      this.turret.position.set(0, this.turretY, 0);
+      this.turret.castShadow = true;
+      this.group.add(this.turret);
+
+      this.tankBar = new HpBar(360, 96);
+      const barMat = new THREE.SpriteMaterial({ map: this.tankBar.texture, depthTest: false, depthWrite: false, toneMapped: false });
+      this.tankBarSprite = new THREE.Sprite(barMat);
+      this.tankBarSprite.scale.set(3.4, 0.9, 1);
+      this.tankBarSprite.position.set(0, this.topY + 1.15, 0);
+      this.tankBarSprite.renderOrder = 20;
+      this.group.add(this.tankBarSprite);
+    }
+
     const big = barrel.r >= 1.5 ? 1.12 : 1;
     this.labelSprite = labelSprite(this.label, 2.6 * big, 1.3 * big);
     this.labelSprite.position.set(0, this.topY * 0.5 + 0.2, barrel.r + 0.4);
+    if (barrel.tank || this.isPickupPod) this.labelSprite.visible = false;
     this.group.add(this.labelSprite);
 
     const r = barrel.reward;
-    if (r.kind === 'weapon') {
+    if (barrel.tank) {
+      // 坦克本身已带顶部血条与名牌，无需重复悬空金币图标遮挡炮塔
+      this.reward.visible = false;
+    } else if (r.kind === 'weapon') {
       const gun = new THREE.Mesh(gunGeometry(r.tier, 4.6), vertexMat);
       gun.rotation.y = Math.PI / 2;
       gun.castShadow = true;
       this.reward.add(gun);
       this.reward.add(glowRing(0xffd34d));
+      if (this.isPickupPod) {
+        this.rewardLabel = new Label(256, 96);
+        this.rewardLabel.set(WEAPONS[r.tier].name, { fill: '#ffffff', stroke: '#7c2d12', pill: '#f59e0b', size: 46 });
+        const s = labelSprite(this.rewardLabel, 2.1, 0.78, false);
+        s.position.y = 0.85;
+        this.reward.add(s);
+      }
     } else if (r.kind === 'airstrike') {
       const m = new THREE.Mesh(missileGeometry(), vertexMat);
       m.rotation.z = Math.PI / 2;
@@ -298,6 +341,52 @@ export class BarrelView {
       this.rewardLabel.set('空袭', { fill: '#ffffff', stroke: '#7a1a0a', pill: '#e3462f', size: 58 });
       const s = labelSprite(this.rewardLabel, 1.6, 0.6, false);
       s.position.y = 0.85;
+      this.reward.add(s);
+    } else if (r.kind === 'drone') {
+      const d = new THREE.Mesh(droneGeometry(1.15), vertexMat);
+      d.castShadow = true;
+      this.reward.add(d);
+      this.reward.add(glowRing(0x38bdf8));
+      this.rewardLabel = new Label(256, 96);
+      this.rewardLabel.set(`+${r.amount} 无人机`, { fill: '#ffffff', stroke: '#0c4a6e', pill: '#0284c7', size: 46 });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.8, false);
+      s.position.y = 0.85;
+      this.reward.add(s);
+    } else if (r.kind === 'multishot') {
+      this.reward.add(glowRing(0xa855f7));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(`+${r.amount} 弹道`, { fill: '#ffffff', stroke: '#4c1d95', pill: '#9333ea', size: 52 });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
+      s.position.y = 0.45;
+      this.reward.add(s);
+    } else if (r.kind === 'ammo') {
+      const ammoDef = AMMO[Math.min(AMMO.length - 1, Math.max(0, r.level))];
+      this.reward.add(glowRing(ammoDef.color ?? 0x38bdf8));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(ammoDef.name, { fill: '#ffffff', stroke: '#1e1b4b', pill: '#4f46e5', size: 46 });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
+      s.position.y = 0.45;
+      this.reward.add(s);
+    } else if (r.kind === 'damage') {
+      this.reward.add(glowRing(0xf97316));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(`火力 +${r.amount}%`, { fill: '#ffffff', stroke: '#7c2d12', pill: '#ea580c', size: 46 });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
+      s.position.y = 0.45;
+      this.reward.add(s);
+    } else if (r.kind === 'shield') {
+      this.reward.add(glowRing(0x22d3ee));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(`护盾 +${r.amount}`, { fill: '#ffffff', stroke: '#155e75', pill: '#0891b2', size: 50 });
+      const s = labelSprite(this.rewardLabel, 2.1, 0.9, false);
+      s.position.y = 0.45;
+      this.reward.add(s);
+    } else if (r.kind === 'boom') {
+      this.reward.add(glowRing(0xef4444));
+      this.rewardLabel = new Label(256, 96);
+      this.rewardLabel.set('引爆清场', { fill: '#fff7ed', stroke: '#7f1d1d', pill: '#dc2626', size: 48 });
+      const s = labelSprite(this.rewardLabel, 1.9, 0.72, false);
+      s.position.y = 0.35;
       this.reward.add(s);
     } else {
       this.rewardLabel = new Label(256, 128);
@@ -313,7 +402,7 @@ export class BarrelView {
         this.reward.add(coin);
       }
     }
-    this.reward.position.set(0, this.topY + 1.0, 0);
+    this.reward.position.set(0, this.topY + (this.isPickupPod ? 0.75 : 1.0), 0);
     this.group.add(this.reward);
   }
 
@@ -331,13 +420,19 @@ export class BarrelView {
 
   /** 桶被打爆后奖励飞向队伍 */
   startFly() {
+    this.body.visible = false;
+    if (this.turret) this.turret.visible = false;
+    if (this.tankBarSprite) this.tankBarSprite.visible = false;
+    this.labelSprite.visible = false;
+    if (this.barrel.tank || this.barrel.reward.kind === 'boom') {
+      this.reward.visible = false;
+      return;
+    }
     this.flyT = 0;
     this.reward.getWorldPosition(this.flyFrom);
     this.group.remove(this.reward);
     this.group.parent?.add(this.reward);
     this.reward.position.copy(this.flyFrom);
-    this.body.visible = false;
-    this.labelSprite.visible = false;
   }
 
   update(dt: number, time: number, squadPos: THREE.Vector3) {
@@ -346,14 +441,20 @@ export class BarrelView {
       this.group.position.z = -b.d;
       const base = b.block && (b.look === 'crate' || b.look === 'cage') ? b.r / 1.2 : 1;
       const pulse = b.bump * (0.65 + 0.35 * Math.max(0, Math.sin(time * 58)));
-      const s = (1 + pulse * 0.11) * base;
-      this.body.scale.set(s, (1 - pulse * 0.08) * base, s);
+      const s = (1 + pulse * (b.tank ? 0.045 : 0.11)) * base;
+      this.body.scale.set(s, (1 - pulse * (b.tank ? 0.03 : 0.08)) * base, s);
       const ratio = b.maxHp > 0 ? b.hp / b.maxHp : 1;
       this.mat.emissive.setRGB(pulse * 0.52, pulse * 0.42, pulse * 0.28);
-      const shake = b.bump * (0.075 + (1 - ratio) * 0.085);
+      const shake = b.bump * (b.tank ? 0.045 : 0.075 + (1 - ratio) * 0.085);
       this.body.position.x = Math.sin(time * 59) * shake;
-      this.body.position.z = -pulse * 0.09;
+      this.body.position.z = -pulse * (b.tank ? 0.05 : 0.09);
       this.body.rotation.z = Math.sin(time * 47) * shake * 0.55;
+      if (this.turret && b.tank) {
+        // 炮塔平滑瞄准玩家小队 + 开炮后坐力回弹
+        const aimYaw = Math.max(-0.65, Math.min(0.65, Math.atan2(squadPos.x - b.x, Math.max(4, b.d))));
+        this.turret.rotation.y += (aimYaw - this.turret.rotation.y) * Math.min(1, dt * 6);
+        this.turret.position.set(this.body.position.x, this.turretY, -b.recoil * 0.42 + this.body.position.z);
+      }
       const stage = ratio < 0.25 ? 3 : ratio < 0.5 ? 2 : ratio < 0.75 ? 1 : 0;
       if (stage > this.stage) {
         this.stage = stage;
@@ -361,15 +462,24 @@ export class BarrelView {
       }
       const ceilHp = Math.max(0, Math.ceil(b.hp));
       const low = ratio < 0.25;
-      if (ceilHp !== this.lastCeilHp || low !== this.lastLow) {
-        this.lastCeilHp = ceilHp;
-        this.lastLow = low;
-        this.label.set(formatNumber(ceilHp), { fill: low ? '#ffe066' : '#ffffff', stroke: '#d9480f', size: 88 });
+      if (b.tank && this.tankBar) {
+        if (ceilHp !== this.lastCeilHp || low !== this.lastLow) {
+          this.lastCeilHp = ceilHp;
+          this.lastLow = low;
+          const barColor = b.tank.tier === 4 ? '#f59e0b' : b.tank.tier === 3 ? '#ef4444' : '#f97316';
+          this.tankBar.set(ratio, formatNumber(ceilHp), barColor, b.tank.name);
+        }
+      } else if (!this.isPickupPod) {
+        if (ceilHp !== this.lastCeilHp || low !== this.lastLow) {
+          this.lastCeilHp = ceilHp;
+          this.lastLow = low;
+          this.label.set(formatNumber(ceilHp), { fill: low ? '#ffe066' : '#ffffff', stroke: '#d9480f', size: 88 });
+        }
+        const big = b.r >= 1.5 ? 1.12 : 1;
+        this.labelSprite.scale.set(2.6 * big * (1 + b.bump * 0.1), 1.3 * big * (1 + b.bump * 0.1), 1);
       }
-      const big = b.r >= 1.5 ? 1.12 : 1;
-      this.labelSprite.scale.set(2.6 * big * (1 + b.bump * 0.1), 1.3 * big * (1 + b.bump * 0.1), 1);
       this.reward.rotation.y = time * 1.8;
-      this.reward.position.y = this.topY + 1.0 + Math.sin(time * 3) * 0.12;
+      this.reward.position.y = this.topY + (this.isPickupPod ? 0.75 : 1.0) + Math.sin(time * 3) * 0.12;
       return;
     }
     if (this.flyT < 0) return;
@@ -387,6 +497,7 @@ export class BarrelView {
 
   dispose() {
     this.label.dispose();
+    this.tankBar?.dispose();
     this.rewardLabel?.dispose();
     this.reward.removeFromParent();
     disposeObject(this.group);

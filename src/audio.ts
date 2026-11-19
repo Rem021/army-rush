@@ -316,9 +316,30 @@ export class Sfx {
             this.tone('triangle', 660, 880, 0.15, 0.1);
           }
           break;
+        case 'tankFire':
+          // 重装坦克开火：低沉主炮轰鸣 + 预警双音
+          if (this.ready('tankFire', 0.14)) {
+            this.hiss(0.32, 0.34, 'lowpass', 1400, 110);
+            this.tone('sine', 120, 36, 0.28, 0.32);
+            this.tone('square', 960, 740, 0.08, 0.06, 0.08);
+          }
+          break;
+        case 'shieldBlock':
+          if (this.ready('shieldBlock', 0.09)) {
+            this.tone('sine', 880, 1480, 0.09, 0.1);
+            this.tone('triangle', 1320, 1760, 0.11, 0.07, 0.03);
+          }
+          break;
         case 'reward':
-          // 换枪的声音由 weaponUp 统一放
-          if (e.reward.kind !== 'weapon') this.coin();
+          // 换枪的声音由 weaponUp 统一放；无人机/多弹道/弹药进化给高亮科技和弦
+          if (e.reward.kind === 'drone' || e.reward.kind === 'multishot' || e.reward.kind === 'ammo') {
+            if (this.ready('buff', 0.08)) {
+              this.tone('triangle', 660, 990, 0.12, 0.12);
+              this.tone('triangle', 990, 1480, 0.18, 0.12, 0.07);
+            }
+          } else if (e.reward.kind !== 'weapon' && e.reward.kind !== 'boom') {
+            this.coin();
+          }
           break;
         case 'blocked':
           // 大障碍卡住：一声沉重的金属撞击

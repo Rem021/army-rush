@@ -106,6 +106,8 @@ export interface RunSettleTarget {
   defenseBest: number;
   endlessBest: number;
   carnageBest: number;
+  blitzBest?: number;
+  blitzCleared?: number;
   coins: number;
   gems: number;
   kills: number;
@@ -114,7 +116,7 @@ export interface RunSettleTarget {
 }
 
 export interface RunSettleInput {
-  mode: 'defense' | 'campaign' | 'endless' | 'carnage';
+  mode: 'defense' | 'campaign' | 'endless' | 'blitz' | 'carnage';
   level: number;
   won: boolean;
   retreated: boolean;
@@ -147,6 +149,24 @@ export function settleRun(save: RunSettleTarget, input: RunSettleInput): RunSett
   if (mode === 'carnage') {
     save.carnageBest = Math.max(save.carnageBest, kills);
     return { coins: 0, bonusCoins: 0, bonusGems: 0, dist, record: false };
+  }
+  if (mode === 'blitz') {
+    const prevBest = save.blitzBest ?? 0;
+    const record = !retreated && kills > prevBest;
+    save.blitzBest = Math.max(prevBest, kills);
+    save.kills += Math.max(0, Math.floor(kills));
+    const stageLevel = level === 2 ? 10 : 5;
+    const baseCoins = Math.max(0, Math.floor(runCoins));
+    const bonusCoins = won && !retreated ? Math.round(clearBonus(stageLevel) * 0.8) : 0;
+    const bonusGems = won && !retreated && level > (save.blitzCleared ?? 0) ? 2 : 0;
+    if (won) {
+      save.wins += 1;
+      save.blitzCleared = Math.max(save.blitzCleared ?? 0, Math.min(2, level));
+    }
+    const total = baseCoins + bonusCoins;
+    save.coins += total;
+    save.gems += Math.max(0, Math.floor(runGems)) + bonusGems;
+    return { coins: total, bonusCoins, bonusGems, dist, record };
   }
   save.gems += Math.max(0, Math.floor(runGems));
   save.kills += Math.max(0, Math.floor(kills));

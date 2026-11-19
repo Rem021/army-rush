@@ -14,6 +14,7 @@ import {
   FORMATION_SPACING,
   GIANT_SMASH_INTERVAL,
   HIVE_INTERVAL,
+  MAX_BLITZ_COUNT,
   MAX_COUNT,
   MAX_DEFENSE_COUNT,
   MAX_SOLDIERS_SIM,
@@ -36,6 +37,7 @@ import {
   type BossKind,
   type ZombieKind,
 } from './config';
+import { BLITZ_LANES } from './blitz';
 import { segCircle, SpatialBins } from './collision';
 import { computeFormation, formationLaneCap, slotX, slotZ, type FormationParams } from './formation';
 import {
@@ -71,6 +73,8 @@ const SAW_RADIUS = 0.8;
 const STRIKE_RADIUS = 2.8;
 /** 本局射速加成（射速门、射速箱）最多到 180%，不会一局就翻好几倍 */
 const MAX_RATE_BONUS = 1.8;
+/** 广告奇袭模式允许更高射速叠加，爽感更强 */
+const MAX_BLITZ_RATE_BONUS = 2.8;
 /** 防线门道堵车时，前后两样东西之间至少隔多远 */
 const JAM_GAP = 7;
 /** 防线里丧尸的速度倍数 */
@@ -134,6 +138,9 @@ export interface Barrel extends BarrelSpec {
   armed: boolean;
   /** 防线：血量已经定好（进视野那一刻定，之后不再变） */
   priced: boolean;
+  /** 广告奇袭：重装坦克开火倒计时与炮管后坐力 */
+  fireTimer: number;
+  recoil: number;
 }
 
 export interface Zombie {
@@ -258,6 +265,8 @@ export type GameEvent =
   | { type: 'banner'; text: string; tone: BannerSpec['tone'] }
   | { type: 'trap'; x: number; d: number }
   | { type: 'blocked'; barrel: Barrel }
+  | { type: 'shieldBlock'; x: number; d: number; remaining: number }
+  | { type: 'tankFire'; barrel: Barrel; proj: Projectile }
   | { type: 'won' }
   | { type: 'lost' };
 
@@ -336,8 +345,8 @@ export class World {
   private readonly zSpatial = new SpatialBins<Zombie>(Z_BIN);
   /** 用完的子弹对象，下次开枪直接复用，少给垃圾回收添活 */
   private readonly bulletPool: Bullet[] = [];
-  /** 子弹种类（局外射速升级进化） */
-  readonly ammo: AmmoDef;
+  /** 子弹种类（局外射速升级进化，广告奇袭中亦可局内捡拾升级） */
+  ammo: AmmoDef;
   private readonly rng: Rng;
   private shotAcc = 0;
   private nextId = 1;
@@ -373,6 +382,20 @@ export class World {
     burstUntil: 0,
     clears: 0,
   };
+  readonly blitz = {
+    stage: 1 as 1 | 2,
+    drones: 0,
+    multishot: 1,
+    shield: 0,
+    damageBonus: 0,
+    tanksDestroyed: 0,
+    totalTanks: 0,
+    buffsCollected: 0,
+    combo: 0,
+    bestCombo: 0,
+    lastKill: -10,
+  };
+  private droneAt = 1.6;
   private rocketAt = 3;
   private novaActive = false;
   private carnageStage = 0;
@@ -381,8 +404,8 @@ export class World {
     this.spec = spec;
     this.opts = opts;
     this.rng = mulberry32(opts.seed ?? spec.level * 31 + 7);
-    // 防线里丧尸跑得快得多，直接冲到脸上
-    this.zombieSpeed = spec.mode === 'carnage' ? 0.72 : spec.defense ? DEFENSE_ZOMBIE_SPEED : 1;
+    // 防线里丧尸跑得快得多，直接冲到脸上；广告奇袭三路节奏偏稳，方便左右拉扯
+    this.zombieSpeed = spec.mode === 'carnage' ? 0.72 : spec.mode === 'blitz' ? 1.15 : spec.defense ? DEFENSE_ZOMBIE_SPEED : 1;
     this.damage = opts.damageMult;
     this.ammo =
       spec.mode === 'carnage'
@@ -390,16 +413,25 @@ export class World {
         : AMMO[Math.max(0, Math.min(AMMO.length - 1, opts.ammo ?? 0))];
     this.endless = opts.endless ?? null;
     this.defense = spec.defense;
+    this.blitz.stage = spec.level === 2 ? 2 : 1;
     this.gates = [];
     this.barrels = [];
     this.zombies = [];
     this.hazards = [];
     this.walls = [];
     this.addContent(spec);
+    if (spec.mode === 'blitz') {
+      let total = 0;
+      for (let i = 0; i < this.barrels.length; i++) if (this.barrels[i].tank) total++;
+      this.blitz.totalTanks = total;
+    }
     for (const b of spec.bosses) this.bosses.push(this.makeBoss(b, spec.length + 6));
     if (this.bosses.length > 1) for (const b of this.bosses) b.pair = true;
-    // 防线开局站在门道上，第一组门直接吃到
-    if (spec.defense) this.squad.x = this.squad.targetX = spec.mode === 'carnage' ? 1.55 : spec.defense.gateSide * (TRACK_HALF / 2);
+    // 防线开局站在门道上，第一组门直接吃到；广告奇袭开局站左路立刻打 +1 门
+    if (spec.defense) {
+      this.squad.x = this.squad.targetX =
+        spec.mode === 'carnage' ? 1.55 : spec.mode === 'blitz' ? BLITZ_LANES.left : spec.defense.gateSide * (TRACK_HALF / 2);
+    }
     this.squad.count = Math.max(1, Math.min(this.countCap, Math.round(opts.startSoldiers)));
     this.squad.tier = opts.startTier ?? 0;
     this.squad.rate = opts.rateBonus ?? 1;
@@ -421,7 +453,19 @@ export class World {
       const reward: Reward =
         b.reward.kind === 'weapon' && b.reward.tier <= start ? { kind: 'soldiers', amount: 1 + Math.ceil(this.spec.level / 3) } : b.reward;
       const look = reward !== b.reward && b.look === 'tires' ? 'armor' : b.look;
-      this.barrels.push({ ...b, reward, look, id: this.nextId++, maxHp: b.hp, alive: true, bump: 0, armed: false, priced: false });
+      this.barrels.push({
+        ...b,
+        reward,
+        look,
+        id: this.nextId++,
+        maxHp: b.hp,
+        alive: true,
+        bump: 0,
+        armed: false,
+        priced: false,
+        fireTimer: b.tank ? b.tank.fireInterval * 0.7 : 0,
+        recoil: 0,
+      });
     }
     for (const z of spec.zombies) this.zombies.push(this.makeZombie(z));
     for (const h of spec.hazards) this.hazards.push({ ...h, id: this.nextId++, phase: this.rng() * 6, x: (h.x0 + h.x1) / 2 });
@@ -661,7 +705,7 @@ export class World {
   }
 
   private get countCap(): number {
-    return this.spec.mode === 'carnage' ? 240 : this.defense ? MAX_DEFENSE_COUNT : MAX_COUNT;
+    return this.spec.mode === 'carnage' ? 240 : this.spec.mode === 'blitz' ? MAX_BLITZ_COUNT : this.defense ? MAX_DEFENSE_COUNT : MAX_COUNT;
   }
 
   get fireRate(): number {
@@ -674,7 +718,7 @@ export class World {
 
   /** 当前每秒总伤害，UI 和平衡脚本用 */
   dps(): number {
-    return this.squad.count * this.fireRate * this.weapon.damage * this.damage;
+    return this.squad.count * this.fireRate * this.weapon.damage * this.damage * (this.spec.mode === 'blitz' ? this.blitz.multishot : 1);
   }
 
   update(dt: number) {
@@ -701,6 +745,7 @@ export class World {
     if (this.defense) {
       sq.moving = false;
       if (this.spec.mode === 'carnage') this.runCarnage(dt);
+      else if (this.spec.mode === 'blitz') this.runBlitz(dt);
       else this.runDefense(dt);
     } else if (this.state === 'run') {
       sq.d += SQUAD_SPEED * dt;
@@ -738,8 +783,343 @@ export class World {
 
     if (sq.count <= 0) this.lose();
     else if (this.defense && this.spawnIdx >= this.defense.spawns.length && this.state === 'run') {
-      // 最终 Boss 都倒下就赢，剩下的丧尸一起清掉
-      if (this.bosses.length > 0 && this.bosses.every((b) => !b.alive)) this.win();
+      if (this.spec.mode === 'blitz') {
+        const bossesDone = this.bosses.length > 0 && this.bosses.every((b) => !b.alive);
+        const tanksDone = this.blitz.tanksDestroyed >= this.blitz.totalTanks;
+        if (bossesDone && tanksDone) this.win();
+      } else if (this.bosses.length > 0 && this.bosses.every((b) => !b.alive)) {
+        // 最终 Boss 都倒下就赢，剩下的丧尸一起清掉
+        this.win();
+      }
+    }
+  }
+
+  // ---------- 广告奇袭三路模式 ----------
+
+  private blitzEnemyKind(p: number): ZombieKind {
+    const r = this.rng();
+    const s2 = this.blitz.stage === 2;
+    if (p > 0.45 && r < (s2 ? 0.1 : 0.06)) return 'brute';
+    if (p > 0.3 && r < (s2 ? 0.2 : 0.13)) return 'exploder';
+    if (p > 0.15 && r < (s2 ? 0.48 : 0.36)) return 'runner';
+    return 'walker';
+  }
+
+  private runBlitz(dt: number) {
+    const def = this.defense!;
+    const p = Math.min(1, this.time / def.duration);
+    const s2 = this.blitz.stage === 2;
+    let alive = 0;
+    for (let i = 0; i < this.zombies.length; i++) if (this.zombies[i].alive) alive++;
+
+    let added = false;
+    while (this.spawnIdx < def.spawns.length && def.spawns[this.spawnIdx].t <= this.time) {
+      const sp = def.spawns[this.spawnIdx++];
+      if (sp.banner) this.events.push({ type: 'banner', text: sp.banner.text, tone: sp.banner.tone });
+      if (sp.zombie) {
+        const z = this.makeZombie({ ...sp.zombie, d: def.spawnD - 8 + sp.zombie.d });
+        z.active = true;
+        this.zombies.push(z);
+        alive++;
+        added = true;
+      }
+      if (sp.wave) {
+        const n = Math.min(sp.wave, Math.max(0, 145 - alive));
+        const baseHp = s2 ? 10 + p * 58 : 7 + p * 34;
+        const cols = 5;
+        for (let i = 0; i < n; i++) {
+          const row = Math.floor(i / cols);
+          const col = i % cols;
+          const kind = this.blitzEnemyKind(p);
+          const z = this.makeZombie({
+            kind,
+            x: -1.4 + col * 0.7 + (row % 2 ? 0.2 : -0.1),
+            d: def.spawnD - 6 + row * 0.95,
+            hp: baseHp * ZOMBIES[kind].hp,
+          });
+          z.active = true;
+          this.zombies.push(z);
+          alive++;
+        }
+        if (n > 0) added = true;
+      }
+      if (sp.boss) {
+        const b = this.makeBoss(sp.boss, def.spawnD - 18);
+        b.final = sp.t >= def.duration - 0.01;
+        b.pair = s2;
+        b.active = true;
+        this.bosses.push(b);
+        this.events.push({ type: 'bossStart', bosses: [b] });
+        added = true;
+      }
+    }
+
+    // 中路持续敌军流
+    let bossAlive = false;
+    for (let i = 0; i < this.bosses.length; i++) if (this.bosses[i].alive) bossAlive = true;
+    const tanksRemain = this.blitz.tanksDestroyed < this.blitz.totalTanks;
+    if (this.time > 1.5 && (this.time < def.duration || bossAlive || tanksRemain) && alive < 130) {
+      const rate = (s2 ? 2.4 + p * 3.8 : 1.9 + p * 3.0) * (this.time > def.duration ? 0.45 : 1);
+      this.streamAcc += rate * dt;
+      const baseHp = (s2 ? 10 + p * 54 : 7 + p * 30) * (bossAlive ? 0.65 : 1);
+      while (this.streamAcc >= 1 && alive < 130) {
+        this.streamAcc -= 1;
+        const kind = this.blitzEnemyKind(p);
+        const z = this.makeZombie({
+          kind,
+          x: randRange(this.rng, -1.55, 1.55),
+          d: def.spawnD - 4 + randRange(this.rng, 0, 2.2),
+          hp: baseHp * ZOMBIES[kind].hp,
+        });
+        z.active = true;
+        this.zombies.push(z);
+        alive++;
+        added = true;
+      }
+    }
+    if (added) this.version++;
+
+    if (this.time > this.blitz.lastKill + 2.5) this.blitz.combo = 0;
+
+    // 无人机追踪火箭飞行与爆破
+    for (let i = this.rockets.length - 1; i >= 0; i--) {
+      const rocket = this.rockets[i];
+      rocket.t += dt;
+      if (rocket.t >= rocket.T) {
+        this.blitzRocketBlast(rocket.x, rocket.d, 2.8, rocket.damage);
+        this.rockets[i] = this.rockets[this.rockets.length - 1];
+        this.rockets.pop();
+      }
+    }
+    if (this.blitz.drones > 0 && this.time >= this.droneAt && this.squad.count > 0) {
+      this.droneAt = this.time + Math.max(0.55, 1.65 - this.blitz.drones * 0.16);
+      const frontTank = this.frontBlitzTank();
+      let boss: Boss | null = null;
+      for (let i = 0; i < this.bosses.length; i++) {
+        if (this.bosses[i].alive && this.bosses[i].active) {
+          boss = this.bosses[i];
+          break;
+        }
+      }
+      const targets = this.carnageTargets;
+      targets.length = 0;
+      for (let i = 0; i < this.zombies.length; i++) {
+        const z = this.zombies[i];
+        if (z.alive && z.d > 2 && z.d < 46) targets.push(z);
+      }
+      if ((frontTank && frontTank.d < 36) || boss || targets.length > 0) {
+        const dmg = (95 + this.squad.tier * 48) * this.damage;
+        for (let i = 0; i < this.blitz.drones; i++) {
+          let tx = 0;
+          let td = 24;
+          if (i % 2 === 0 && frontTank && frontTank.d < 36) {
+            tx = frontTank.x;
+            td = frontTank.d;
+          } else if (boss && (i % 2 === 1 || !frontTank)) {
+            tx = boss.x;
+            td = boss.d;
+          } else if (targets.length > 0) {
+            const pick = targets[Math.floor(this.rng() * targets.length)];
+            tx = pick.x;
+            td = pick.d;
+          } else if (frontTank) {
+            tx = frontTank.x;
+            td = frontTank.d;
+          } else if (boss) {
+            tx = boss.x;
+            td = boss.d;
+          }
+          const side = i % 2 === 0 ? -1 : 1;
+          const ring = Math.floor(i / 2) + 1;
+          this.rockets.push({
+            x0: this.squad.x + side * (0.9 + ring * 0.45),
+            d0: this.squad.d + 0.5,
+            x: tx,
+            d: td,
+            t: 0,
+            T: 0.48 + i * 0.05,
+            damage: dmg,
+          });
+        }
+      }
+    }
+
+    this.moveBlitzQueue(dt);
+  }
+
+  private frontBlitzTank(): Barrel | null {
+    let front: Barrel | null = null;
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
+      if (!b.alive || !b.tank) continue;
+      if (!front || b.d < front.d) front = b;
+    }
+    return front;
+  }
+
+  private moveBlitzQueue(dt: number) {
+    const def = this.defense!;
+    // 左路：源源不断的 +1 数字门匀速滑下
+    const leftStep = 3.2 * dt;
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
+      if (!g.consumed && g.blitzLane === 'left') g.d -= leftStep;
+    }
+
+    // 中路：爆裂红油桶随敌军推进
+    const midStep = 2.6 * dt;
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
+      if (!b.alive || b.blitzLane !== 'mid') continue;
+      b.d -= midStep;
+      if (b.d < -4) b.alive = false;
+    }
+
+    // 右路：重装坦克推进至 stopD 驻停开炮，身后奖励紧紧排成一列，击毁坦克瞬间全线冲下供玩家扫货！
+    if (this.time > 0.6) this.queueV += (def.conveyor - this.queueV) * Math.min(1, dt * 6);
+    const frontTank = this.frontBlitzTank();
+    const surgeStep = 8.8 * dt;
+    const queueStep = this.queueV * dt;
+
+    if (frontTank) {
+      if (!frontTank.priced && frontTank.d < DEFENSE_VIEW_D) frontTank.priced = true;
+      const brake = Math.max(3, (frontTank.d - def.stopD) * 3);
+      frontTank.d = Math.max(def.stopD, frontTank.d - Math.min(this.queueV, brake) * dt);
+      if (!frontTank.armed && frontTank.d <= def.stopD + 0.05) {
+        frontTank.armed = true;
+        frontTank.bump = 1;
+        this.events.push({ type: 'blocked', barrel: frontTank });
+      }
+      if (frontTank.armed && frontTank.tank) {
+        frontTank.fireTimer -= dt;
+        if (frontTank.fireTimer <= 0) {
+          frontTank.fireTimer = frontTank.tank.fireInterval;
+          this.fireTank(frontTank);
+        }
+      }
+    }
+
+    const queue = this.queueScratch;
+    queue.length = 0;
+    let poolIdx = 0;
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
+      if (g.consumed || g.blitzLane !== 'right') continue;
+      if (!frontTank || g.d < frontTank.d) {
+        g.d -= surgeStep;
+      } else {
+        const entry = this.queuePool[poolIdx] ?? (this.queuePool[poolIdx] = { d: 0, r: 0, item: g });
+        entry.d = g.d;
+        entry.r = 0.6;
+        entry.item = g;
+        queue.push(entry);
+        poolIdx++;
+      }
+    }
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
+      if (!b.alive || b.blitzLane !== 'right' || b === frontTank) continue;
+      if (!frontTank || b.d < frontTank.d) {
+        b.d -= surgeStep;
+        if (b.d < -2.5) b.alive = false;
+      } else {
+        const entry = this.queuePool[poolIdx] ?? (this.queuePool[poolIdx] = { d: 0, r: 0, item: b });
+        entry.d = b.d;
+        entry.r = b.r;
+        entry.item = b;
+        queue.push(entry);
+        poolIdx++;
+      }
+    }
+    if (frontTank && queue.length > 0) {
+      queue.sort((a, b) => a.d - b.d);
+      let floor = frontTank.d + frontTank.r + 2.2;
+      for (let i = 0; i < queue.length; i++) {
+        const q = queue[i];
+        const d = Math.max(floor + q.r, q.d - queueStep);
+        q.item.d = d;
+        floor = d + q.r + 2.2;
+      }
+    }
+  }
+
+  private fireTank(tank: Barrel) {
+    const sq = this.squad;
+    if (sq.count <= 0) return;
+    tank.recoil = 1;
+    tank.bump = 0.85;
+    const shots = tank.tank?.twin ? 2 : 1;
+    for (let i = 0; i < shots; i++) {
+      const spread = i === 0 ? randRange(this.rng, -0.8, 0.8) : sq.x < 0 ? 3.8 : -3.8;
+      const tx = Math.max(this.lo + 1.1, Math.min(this.hi - 1.1, sq.x + spread));
+      const td = sq.d + randRange(this.rng, Math.max(-1.2, this.back * 0.5), this.front * 0.5 + 0.4);
+      const proj: Projectile = {
+        id: this.nextId++,
+        x0: tank.x,
+        d0: tank.d - tank.r,
+        tx,
+        td,
+        t: 0,
+        T: 1.95 * (this.opts.warnMult ?? 1),
+      };
+      this.projectiles.push(proj);
+      this.events.push({ type: 'tankFire', barrel: tank, proj });
+    }
+  }
+
+  private blitzRocketBlast(x: number, d: number, r: number, damage: number) {
+    this.events.push({ type: 'carnageBlast', x, d, r, nova: false });
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
+      if (!z.alive) continue;
+      const dx = z.x - x;
+      const dd = z.d - d;
+      const lim = r + z.r;
+      if (dx * dx + dd * dd < lim * lim) this.damageZombie(z, damage);
+    }
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
+      if (!b.alive || !b.active) continue;
+      const dx = b.x - x;
+      const dd = b.d - d;
+      const lim = r + b.r;
+      if (dx * dx + dd * dd < lim * lim) this.damageBoss(b, damage * 1.4);
+    }
+    for (let i = 0; i < this.barrels.length; i++) {
+      const br = this.barrels[i];
+      if (!br.alive || !br.tank) continue;
+      const dx = br.x - x;
+      const dd = br.d - d;
+      const lim = r + br.r;
+      if (dx * dx + dd * dd < lim * lim) {
+        br.hp -= damage * 1.65;
+        br.bump = 1;
+        this.events.push({ type: 'hit', x: br.x, d: br.d, y: 1.2, target: 'barrel', color: 0x38bdf8, dmg: damage * 1.65, id: br.id });
+        if (br.hp <= 0) this.breakBarrel(br);
+      }
+    }
+  }
+
+  /** 广告奇袭中路红油桶爆破：高伤清敌且绝不误伤己方士兵 */
+  private blitzBombExplode(x: number, d: number, radius: number) {
+    this.events.push({ type: 'explode', x, d, r: radius, source: 'strike', killed: 0 });
+    const rr = radius * radius;
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
+      if (!z.alive) continue;
+      const dx = z.x - x;
+      const dd = z.d - d;
+      if (dx * dx + dd * dd > rr + z.r * z.r) continue;
+      if (z.kind === 'giant') this.damageZombie(z, z.maxHp * 0.32);
+      else if (z.kind === 'brute') this.damageZombie(z, z.maxHp * 0.75);
+      else this.killZombie(z, true);
+    }
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
+      if (!b.alive || !b.active) continue;
+      const dx = b.x - x;
+      const dd = b.d - d;
+      if (dx * dx + dd * dd < (radius + b.r) * (radius + b.r)) this.damageBoss(b, b.maxHp * 0.06);
     }
   }
 
@@ -1154,6 +1534,11 @@ export class World {
   private killSoldier(index: number, cause: LossCause) {
     const s = this.soldiers[index];
     if (!s) return;
+    if (this.spec.mode === 'blitz' && this.blitz.shield > 0) {
+      this.blitz.shield--;
+      this.events.push({ type: 'shieldBlock', x: this.squad.x + s.ox, d: this.squad.d + s.oz, remaining: this.blitz.shield });
+      return;
+    }
     this.stats.lose(cause, 1);
     this.events.push({ type: 'soldierDie', x: this.squad.x + s.ox, d: this.squad.d + s.oz });
     // 用最后一个人补这个空位：阵型按编号排，从中间删会让后面所有人换位置（看起来整队抽搐）
@@ -1312,7 +1697,8 @@ export class World {
       this.events.push({ type: 'gatePass', gate: g, before, after: sq.tier });
     } else {
       const before = Math.round(sq.rate * 100);
-      sq.rate = Math.max(0.4, Math.min(MAX_RATE_BONUS, sq.rate * (1 + g.value / 100)));
+      const maxRate = this.spec.mode === 'blitz' ? MAX_BLITZ_RATE_BONUS : MAX_RATE_BONUS;
+      sq.rate = Math.max(0.4, Math.min(maxRate, sq.rate * (1 + g.value / 100)));
       this.events.push({ type: 'gatePass', gate: g, before, after: Math.round(sq.rate * 100) });
     }
   }
@@ -1325,11 +1711,22 @@ export class World {
     g.hits += hits;
     g.bump = 1;
     const L = this.spec.level;
+    const isBlitz = this.spec.mode === 'blitz';
     let changed = false;
     for (;;) {
       if (g.kind === 'weapon' && g.value >= Math.min(WEAPONS.length - 1, maxWeaponTier(L) + 1)) break;
       if (g.kind === 'rate' && g.value >= RATE_GATE_MAX) break;
-      const step = g.kind === 'weapon' ? weaponGateStep(L, g.value) : g.kind === 'rate' ? rateGateStep(L, g.value) : gateStep(L, g.value);
+      const step = isBlitz
+        ? g.kind === 'rate'
+          ? 5
+          : g.value < 0
+            ? 2
+            : Math.max(2, 2 + Math.floor(g.value / 5))
+        : g.kind === 'weapon'
+          ? weaponGateStep(L, g.value)
+          : g.kind === 'rate'
+            ? rateGateStep(L, g.value)
+            : gateStep(L, g.value);
       if (g.hits < step) break;
       g.hits -= step;
       g.value++;
@@ -1356,13 +1753,14 @@ export class World {
     if (sq.count <= 0 || this.soldiers.length === 0) return;
     const w = this.weapon;
     const emitters = Math.min(sq.count, EMIT_CAP);
-    let shotsPerSec = emitters * this.fireRate;
+    const streams = this.spec.mode === 'blitz' ? this.blitz.multishot : 1;
+    let shotsPerSec = emitters * this.fireRate * streams;
     let dmg = w.damage * this.damage * (sq.count / emitters);
     if (shotsPerSec > MAX_SHOTS_PER_SEC) {
       dmg *= shotsPerSec / MAX_SHOTS_PER_SEC;
       shotsPerSec = MAX_SHOTS_PER_SEC;
     }
-    const gateHits = (sq.count * this.fireRate) / Math.max(0.001, shotsPerSec);
+    const gateHits = (sq.count * this.fireRate * streams) / Math.max(0.001, shotsPerSec);
     this.shotAcc += shotsPerSec * dt;
     // 只有冲锋终点的 Boss 战，正对着 Boss 的那几列兵会把子弹稍微偏过去；
     // 防线里不偏——以前所有子弹都被 Boss 吸过去，旁边的小怪就没人打了
@@ -1370,10 +1768,11 @@ export class World {
     while (this.shotAcc >= 1) {
       this.shotAcc -= 1;
       const s = this.soldiers[Math.floor(this.rng() * this.soldiers.length)];
-      const x = sq.x + s.ox + 0.12;
+      const laneJitter = streams > 1 ? (Math.floor(this.rng() * streams) - (streams - 1) * 0.5) * 0.22 : 0;
+      const x = sq.x + s.ox + 0.12 + laneJitter;
       const d = sq.d + s.oz + 0.35;
       // 每种枪的弹道不一样：冲锋枪、加特林泼得开，战术步枪又快又准，等离子炮慢而大
-      let vx = randRange(this.rng, -w.spread, w.spread);
+      let vx = randRange(this.rng, -w.spread, w.spread) + laneJitter * 1.4;
       let vd = BULLET_SPEED * w.speed;
       if (aim) {
         let target: Boss | null = null;
@@ -1412,6 +1811,7 @@ export class World {
   private prepareHits() {
     const lo = this.squad.d + this.back - 3;
     const hi = this.squad.d + BULLET_RANGE + 6;
+    const frontTank = this.spec.mode === 'blitz' ? this.frontBlitzTank() : null;
     this.hitGates.length = 0;
     for (let i = 0; i < this.gates.length; i++) {
       const g = this.gates[i];
@@ -1420,7 +1820,10 @@ export class World {
     this.hitBarrels.length = 0;
     for (let i = 0; i < this.barrels.length; i++) {
       const br = this.barrels[i];
-      if (br.alive && br.d + br.r >= lo && br.d - br.r <= hi) this.hitBarrels.push(br);
+      if (!br.alive || br.d + br.r < lo || br.d - br.r > hi) continue;
+      // 广告奇袭：未击毁前排重装坦克前，身后的右路奖励受坦克护甲掩护不可隔山打牛
+      if (frontTank && br.blitzLane === 'right' && !br.tank && br.d > frontTank.d) continue;
+      this.hitBarrels.push(br);
     }
     this.zSpatial.build(this.near, lo, hi);
   }
@@ -1545,20 +1948,25 @@ export class World {
     return true;
   }
 
-  /** 爆裂弹/电磁弹：打中处一圈的丧尸也掉血 */
+  /** 爆裂弹/电磁弹：打中处一圈的丧尸也掉血（复用已构建的纵向空间分桶，避免全表扫描 near） */
   private splash(x: number, d: number, dmg: number, skip: number) {
     const a = this.ammo;
     if (a.splash <= 0) return;
     const r2 = a.splash * a.splash;
     let hit = false;
-    for (let i = 0; i < this.near.length; i++) {
-      const z = this.near[i];
-      if (!z.alive || z.id === skip) continue;
-      const dx = z.x - x;
-      const dd = z.d - d;
-      if (dx * dx + dd * dd > r2 + z.r * z.r) continue;
-      this.damageZombie(z, dmg * a.splashDmg * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1));
-      hit = true;
+    const [b0, b1] = this.zSpatial.range(d - a.splash - 1.2, d + a.splash + 1.2);
+    const bins = this.zSpatial.bins;
+    for (let bi = b0; bi <= b1; bi++) {
+      const bin = bins[bi];
+      for (let k = 0; k < bin.length; k++) {
+        const z = bin[k];
+        if (!z.alive || z.id === skip) continue;
+        const dx = z.x - x;
+        const dd = z.d - d;
+        if (dx * dx + dd * dd > r2 + z.r * z.r) continue;
+        this.damageZombie(z, dmg * a.splashDmg * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1));
+        hit = true;
+      }
     }
     if (hit && this.rng() < 0.4) this.events.push({ type: 'splash', x, d, r: a.splash });
   }
@@ -1572,6 +1980,11 @@ export class World {
     this.stats.supplies++;
     // 卡住的大障碍被打掉：队列重新起步
     if (br.block && br.armed) this.queueV = 0;
+    if (br.tank) {
+      this.blitz.tanksDestroyed++;
+      this.addGems(1, br.x, br.d);
+      this.events.push({ type: 'banner', text: `${br.tank.name} 击毁！右路奖励全线释放！`, tone: 'info' });
+    }
     this.events.push({ type: 'barrelBreak', barrel: br });
     if (br.carnage) {
       this.carnage.shells = Math.min(9999, this.carnage.shells + (br.carnage === 'battery' ? 99 : 20));
@@ -1582,18 +1995,45 @@ export class World {
   private applyReward(reward: Reward, x: number, d: number) {
     let upgraded = true;
     const sq = this.squad;
+    const isBlitz = this.spec.mode === 'blitz';
     if (reward.kind === 'weapon') {
       upgraded = reward.tier > sq.tier;
       if (upgraded) sq.tier = reward.tier;
+      if (isBlitz) this.blitz.buffsCollected++;
     } else if (reward.kind === 'soldiers') {
       sq.count = Math.min(this.countCap, sq.count + reward.amount);
       this.syncSoldiers();
     } else if (reward.kind === 'coins') {
       this.coins += reward.amount;
     } else if (reward.kind === 'rate') {
-      sq.rate = Math.min(MAX_RATE_BONUS, sq.rate * (1 + reward.amount / 100));
+      const maxRate = isBlitz ? MAX_BLITZ_RATE_BONUS : MAX_RATE_BONUS;
+      sq.rate = Math.min(maxRate, sq.rate * (1 + reward.amount / 100));
+      if (isBlitz) this.blitz.buffsCollected++;
+    } else if (reward.kind === 'drone') {
+      this.blitz.drones = Math.min(6, this.blitz.drones + reward.amount);
+      this.blitz.buffsCollected++;
+    } else if (reward.kind === 'multishot') {
+      upgraded = this.blitz.multishot < 3;
+      this.blitz.multishot = Math.min(3, this.blitz.multishot + reward.amount);
+      this.blitz.buffsCollected++;
+    } else if (reward.kind === 'ammo') {
+      const targetIdx = Math.max(0, Math.min(AMMO.length - 1, reward.level));
+      const curIdx = AMMO.indexOf(this.ammo);
+      upgraded = targetIdx > curIdx;
+      if (upgraded) this.ammo = AMMO[targetIdx];
+      this.blitz.buffsCollected++;
+    } else if (reward.kind === 'damage') {
+      this.damage *= 1 + reward.amount / 100;
+      this.blitz.damageBonus += reward.amount;
+      this.blitz.buffsCollected++;
+    } else if (reward.kind === 'shield') {
+      this.blitz.shield = Math.min(30, this.blitz.shield + reward.amount);
+      this.blitz.buffsCollected++;
+    } else if (reward.kind === 'boom') {
+      this.blitzBombExplode(x, d, reward.radius);
     } else {
       this.launchAirstrike();
+      if (isBlitz) this.blitz.buffsCollected++;
     }
     this.events.push({ type: 'reward', reward, x, d, upgraded });
   }
@@ -1604,6 +2044,13 @@ export class World {
       const br = this.barrels[k];
       if (!br.alive) continue;
       if (br.d - br.r > sq.d + this.front + 0.4 || br.d + br.r < sq.d + this.back - 0.4) continue;
+      // 广告奇袭：右路已放行的奖励舱碰到队伍立刻无伤拾取，畅享连吃加成爽感！
+      if (br.blitzLane === 'right' && !br.tank) {
+        if (Math.abs(sq.x - br.x) <= this.halfWidth + br.r + 0.35) {
+          this.breakBarrel(br);
+        }
+        continue;
+      }
       const rr = (br.r + 0.25) * (br.r + 0.25);
       for (let i = this.soldiers.length - 1; i >= 0; i--) {
         const s = this.soldiers[i];
@@ -1642,6 +2089,10 @@ export class World {
         this.carnage.lastKill = this.time;
         this.carnage.bestCombo = Math.max(this.carnage.bestCombo, this.carnage.combo);
         if (!this.novaActive) this.carnage.charge = Math.min(100, this.carnage.charge + 0.85);
+      } else if (this.spec.mode === 'blitz') {
+        this.blitz.combo = this.time - this.blitz.lastKill < 2.5 ? this.blitz.combo + 1 : 1;
+        this.blitz.lastKill = this.time;
+        this.blitz.bestCombo = Math.max(this.blitz.bestCombo, this.blitz.combo);
       }
       this.coins += coins;
       if (this.rng() < GEMS.drop[z.kind]) this.addGems(1, z.x, z.d);
@@ -1673,8 +2124,21 @@ export class World {
       const dd = b.d - d;
       if (dx * dx + dd * dd < (radius + b.r) * (radius + b.r)) this.damageBoss(b, b.maxHp * (source === 'strike' ? 0.04 : 0.01));
     }
+    if (source === 'strike') {
+      for (let i = 0; i < this.barrels.length; i++) {
+        const br = this.barrels[i];
+        if (!br.alive || !br.tank) continue;
+        const dx = br.x - x;
+        const dd = br.d - d;
+        if (dx * dx + dd * dd < (radius + br.r) * (radius + br.r)) {
+          br.hp -= br.maxHp * 0.14;
+          br.bump = 1;
+          if (br.hp <= 0) this.breakBarrel(br);
+        }
+      }
+    }
     if (source === 'impact') {
-      // 投弹：红圈里的士兵全部炸死——看到红圈就得躲。
+      // 投弹/坦克炮击：红圈里的士兵先由护盾抵挡，剩余全部炸死——看到红圈就得躲。
       // 单趟扫描避免边杀边 syncSoldiers 把溢出兵补进来重复炸死。
       const beforeSim = Math.max(1, this.soldiers.length);
       const per = this.squad.count / beforeSim;
@@ -1686,6 +2150,11 @@ export class World {
         const dx = sx + s.ox - x;
         const dd = sd + s.oz - d;
         if (dx * dx + dd * dd < rr) {
+          if (this.spec.mode === 'blitz' && this.blitz.shield > 0) {
+            this.blitz.shield--;
+            this.events.push({ type: 'shieldBlock', x: sx + s.ox, d: sd + s.oz, remaining: this.blitz.shield });
+            continue;
+          }
           this.events.push({ type: 'soldierDie', x: sx + s.ox, d: sd + s.oz });
           const last = this.soldiers.pop()!;
           if (i < this.soldiers.length) this.soldiers[i] = last;
@@ -2054,6 +2523,10 @@ export class World {
   private launchAirstrike() {
     const sq = this.squad;
     const targets: { x: number; d: number }[] = [];
+    if (this.spec.mode === 'blitz') {
+      const tank = this.frontBlitzTank();
+      if (tank && tank.d < sq.d + 46) targets.push({ x: tank.x, d: tank.d + 1.5 });
+    }
     const ahead: Zombie[] = [];
     for (let i = 0; i < this.zombies.length; i++) {
       const z = this.zombies[i];
@@ -2098,6 +2571,7 @@ export class World {
 
   private decay(dt: number) {
     const gStep = dt * 6;
+    const rStep = dt * 4;
     for (let i = 0; i < this.gates.length; i++) {
       const g = this.gates[i];
       if (g.bump > 0) g.bump = Math.max(0, g.bump - gStep);
@@ -2105,6 +2579,7 @@ export class World {
     for (let i = 0; i < this.barrels.length; i++) {
       const b = this.barrels[i];
       if (b.bump > 0) b.bump = Math.max(0, b.bump - gStep);
+      if (b.recoil > 0) b.recoil = Math.max(0, b.recoil - rStep);
     }
     const zStep = dt * 8;
     for (let i = 0; i < this.near.length; i++) {

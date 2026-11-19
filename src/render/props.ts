@@ -561,3 +561,93 @@ export function armorGeometry(r: number): Part {
   }
   return merged(parts);
 }
+
+const TANK_PALETTES = [
+  { hull: 0x4f633e, armor: 0x3b4b2e, accent: 0x98b56c, barrel: 0x2c322c }, // Tier 1 轻甲绿
+  { hull: 0x8f7a53, armor: 0x6b5a3c, accent: 0xe6c36a, barrel: 0x33302b }, // Tier 2 沙漠重甲
+  { hull: 0x8d2b2b, armor: 0x5c1d1d, accent: 0xff7847, barrel: 0x2a2626 }, // Tier 3 赤焰双管
+  { hull: 0xc99628, armor: 0x7a5713, accent: 0xfff08a, barrel: 0x2e2a22 }, // Tier 4 黄金天启
+] as const;
+
+/** 3D 重装坦克底盘（车体 + 双侧履带 + 负重轮 + 反应装甲 + 前大灯） */
+export function tankHullGeometry(tier: 1 | 2 | 3 | 4, r: number): Part {
+  const pal = TANK_PALETTES[Math.min(3, Math.max(0, tier - 1))];
+  const sc = r / 1.5;
+  const parts: Part[] = [];
+  // 左右重型履带与裙甲
+  for (const s of [-1, 1]) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.62 * sc, 0.68 * sc, 3.1 * sc), s * 1.12 * sc, 0.38 * sc, 0), 0x1e2024));
+    parts.push(paint(at(new THREE.BoxGeometry(0.14 * sc, 0.44 * sc, 2.9 * sc), s * 1.44 * sc, 0.56 * sc, 0), pal.armor));
+    for (let i = -2; i <= 2; i++) {
+      parts.push(
+        paint(
+          at(new THREE.CylinderGeometry(0.24 * sc, 0.24 * sc, 0.66 * sc, 10), s * 1.12 * sc, 0.25 * sc, i * 0.58 * sc, 0, 0, Math.PI / 2),
+          0x484d55,
+        ),
+      );
+    }
+  }
+  // 主装甲车体 + 前倾斜装甲
+  parts.push(paint(at(new THREE.BoxGeometry(1.92 * sc, 0.72 * sc, 2.85 * sc), 0, 0.7 * sc, 0), pal.hull));
+  parts.push(paint(at(new THREE.BoxGeometry(1.88 * sc, 0.46 * sc, 0.65 * sc), 0, 0.62 * sc, 1.5 * sc, 0.42), pal.armor));
+  // 警示涂装条与前灯（面向 +z 玩家方向）
+  parts.push(paint(at(new THREE.BoxGeometry(1.75 * sc, 0.14 * sc, 0.12 * sc), 0, 0.88 * sc, 1.45 * sc), pal.accent));
+  for (const s of [-0.65, 0.65]) {
+    parts.push(paint(at(new THREE.SphereGeometry(0.11 * sc, 8, 6), s * sc, 0.82 * sc, 1.62 * sc), 0xfff3b0));
+  }
+  // 车尾散热格栅
+  parts.push(paint(at(new THREE.BoxGeometry(1.4 * sc, 0.14 * sc, 0.65 * sc), 0, 1.09 * sc, -0.95 * sc), 0x26292e));
+  return merged(parts);
+}
+
+/** 3D 坦克旋转炮塔（炮塔本体 + 指挥塔 + 单管或天启双管主炮，炮口朝 +z） */
+export function tankTurretGeometry(tier: 1 | 2 | 3 | 4, r: number, twin = false): Part {
+  const pal = TANK_PALETTES[Math.min(3, Math.max(0, tier - 1))];
+  const sc = r / 1.5;
+  const parts: Part[] = [];
+  // 炮塔座圈与装甲外壳
+  parts.push(paint(at(new THREE.CylinderGeometry(0.92 * sc, 1.05 * sc, 0.58 * sc, 8), 0, 0.29 * sc, -0.1 * sc), pal.hull));
+  parts.push(paint(at(new THREE.BoxGeometry(1.48 * sc, 0.54 * sc, 1.55 * sc), 0, 0.3 * sc, -0.15 * sc), pal.hull));
+  parts.push(paint(at(new THREE.BoxGeometry(1.56 * sc, 0.14 * sc, 1.25 * sc), 0, 0.58 * sc, -0.15 * sc), pal.accent));
+  // 车长观察塔 + 天线
+  parts.push(paint(at(new THREE.CylinderGeometry(0.32 * sc, 0.36 * sc, 0.24 * sc, 10), -0.35 * sc, 0.72 * sc, -0.35 * sc), pal.armor));
+  parts.push(paint(at(new THREE.CylinderGeometry(0.03 * sc, 0.03 * sc, 0.9 * sc, 5), 0.52 * sc, 0.98 * sc, -0.65 * sc), 0x1e2024));
+  // 主炮管（单管或双管）
+  const xs = twin ? [-0.28 * sc, 0.28 * sc] : [0];
+  for (const bx of xs) {
+    parts.push(paint(at(new THREE.CylinderGeometry(0.14 * sc, 0.18 * sc, 2.15 * sc, 10), bx, 0.34 * sc, 1.42 * sc, Math.PI / 2), pal.barrel));
+    // 炮口制退器 + 高亮环
+    parts.push(paint(at(new THREE.CylinderGeometry(0.21 * sc, 0.19 * sc, 0.32 * sc, 10), bx, 0.34 * sc, 2.48 * sc, Math.PI / 2), 0x1c1e22));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.19 * sc, 0.19 * sc, 0.12 * sc, 10), bx, 0.34 * sc, 2.15 * sc, Math.PI / 2), pal.accent));
+  }
+  return merged(parts);
+}
+
+/** 广告奇袭中路爆裂红油桶：高亮红漆 + 黄黑警示环 + 顶部引信灯 */
+export function bombBarrelGeometry(r: number): Part {
+  const h = r * 2.05;
+  const parts: Part[] = [
+    paint(at(new THREE.CylinderGeometry(r * 0.78, r * 0.82, h, 14), 0, h / 2, 0), 0xe02828),
+    paint(at(new THREE.CylinderGeometry(r * 0.85, r * 0.85, h * 0.16, 14), 0, h * 0.5, 0), 0xfacc15),
+    paint(at(new THREE.CylinderGeometry(r * 0.86, r * 0.86, h * 0.06, 14), 0, h * 0.22, 0), 0x222226),
+    paint(at(new THREE.CylinderGeometry(r * 0.86, r * 0.86, h * 0.06, 14), 0, h * 0.78, 0), 0x222226),
+    paint(at(new THREE.SphereGeometry(r * 0.26, 10, 8), 0, h + r * 0.1, 0), 0xffdd33),
+  ];
+  return merged(parts);
+}
+
+/** 战斗支援无人机（既作奖励浮空图标，也作小队护航实体） */
+export function droneGeometry(scale = 1): Part {
+  const s = scale;
+  const parts: Part[] = [
+    paint(at(new THREE.OctahedronGeometry(0.28 * s, 1), 0, 0, 0, 0, 0, 0, 1.35, 0.55, 1.35), 0x2563eb),
+    paint(at(new THREE.SphereGeometry(0.14 * s, 10, 8), 0, 0.05 * s, -0.18 * s), 0x67e8f9),
+  ];
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      parts.push(paint(at(new THREE.BoxGeometry(0.45 * s, 0.05 * s, 0.07 * s), sx * 0.22 * s, 0.04 * s, sz * 0.22 * s, 0, sx * sz * 0.78), 0x334155));
+      parts.push(paint(at(new THREE.TorusGeometry(0.17 * s, 0.03 * s, 6, 12), sx * 0.36 * s, 0.08 * s, sz * 0.36 * s, Math.PI / 2), 0x38bdf8));
+    }
+  }
+  return merged(parts);
+}

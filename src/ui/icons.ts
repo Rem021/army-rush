@@ -65,6 +65,12 @@ export const ICON = {
   ),
   arrow: svg(`<path d="M3 12h13M11 5.5L18 12l-7 6.5" stroke="#fff" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`),
   endless: svg(`<path d="M6.5 8.5c-2 0-3.5 1.6-3.5 3.5s1.5 3.5 3.5 3.5c3.2 0 7.8-7 11-7 2 0 3.5 1.6 3.5 3.5s-1.5 3.5-3.5 3.5c-3.2 0-7.8-7-11-7z" stroke="#fff" stroke-width="2.4" fill="none"/>`),
+  tank: svg(
+    `<rect x="3" y="13.5" width="18" height="5.5" rx="2.7" fill="#fff" opacity=".95"/>
+     <circle cx="6.5" cy="16.2" r="1.2" fill="#2c3e26"/><circle cx="10.2" cy="16.2" r="1.2" fill="#2c3e26"/><circle cx="13.8" cy="16.2" r="1.2" fill="#2c3e26"/><circle cx="17.5" cy="16.2" r="1.2" fill="#2c3e26"/>
+     <path d="M6.5 13.5l1.5-4.5h8l1.5 4.5z" fill="#ffe699"/>
+     <rect x="14" y="9.8" width="7.5" height="2.4" rx="1" fill="#fff"/>`,
+  ),
 };
 
 /** 军衔盾牌（玩家等级徽章），viewBox 0 0 40 44 */
@@ -84,6 +90,7 @@ export const EMBLEM = svg(
 );
 
 export const MODE_STYLE: Record<string, { icon: string; bg: string }> = {
+  blitz: { icon: ICON.tank, bg: 'linear-gradient(150deg,#ffbd45,#e85826 55%,#7c2ae8)' },
   carnage: { icon: ICON.bolt, bg: 'linear-gradient(145deg,#ffce55,#f05b3b 48%,#a329ef)' },
   defense: { icon: ICON.defense, bg: 'linear-gradient(160deg,#5f9bff,#2448b8)' },
   campaign: { icon: ICON.campaign, bg: 'linear-gradient(160deg,#ff8f52,#d63a1e)' },

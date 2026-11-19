@@ -1,6 +1,18 @@
-import { AMMO, BOSSES, MODES, SKINS, UPGRADES, WEAPONS, soldierDps, type GameMode, type UpgradeId } from '../game/config';
-import { modeUnlocked, progressLevel } from '../game/access';
-export { modeUnlocked, progressLevel } from '../game/access';
+import {
+  AMMO,
+  BLITZ_STAGES,
+  BOSSES,
+  MODES,
+  SKINS,
+  UPGRADES,
+  WEAPONS,
+  soldierDps,
+  type BlitzStage,
+  type GameMode,
+  type UpgradeId,
+} from '../game/config';
+import { blitzStageUnlocked, clearedStages, modeUnlocked, progressLevel } from '../game/access';
+export { blitzStageUnlocked, clearedStages, modeUnlocked, progressLevel } from '../game/access';
 import { isBossLevel, recommendUpgrade, upgradeGain } from '../game/economy';
 import { TACTICS, type TacticId } from '../game/tactics';
 import type { Boss, World } from '../game/world';
@@ -15,6 +27,8 @@ export interface UIHandlers {
   upgrade(id: UpgradeId): void;
   skin(id: string): void;
   mode(id: GameMode): void;
+  blitzStage(stage: BlitzStage): void;
+  tryMode(mode: GameMode, stage?: BlitzStage): void;
   next(): void;
   retry(): void;
   home(): void;
@@ -32,6 +46,13 @@ export interface UIHandlers {
   resetProgress(): void;
 }
 
+export interface UnlockCallout {
+  title: string;
+  desc: string;
+  mode: GameMode;
+  stage?: BlitzStage;
+}
+
 export interface ResultInfo {
   mode: GameMode;
   won: boolean;
@@ -47,6 +68,7 @@ export interface ResultInfo {
   advice?: string;
   detail?: string;
   practice?: boolean;
+  unlockedCallout?: UnlockCallout;
 }
 
 type Screen = 'menu' | 'hud' | 'result' | 'pause';
@@ -95,6 +117,7 @@ function nextEvolution(u: (typeof UPGRADES)[number], lvl: number) {
 const MODE_TIPS: Partial<Record<GameMode, string>> = {
   defense: '左右拖动换道：门道打门、拆补给变强，另一边的尸潮别让它冲到脚下',
   campaign: '左右拖动选道，子弹只打正前方',
+  blitz: '左道射 +1 门养兵 · 中道打红油桶清怪 · 右道集火重装坦克解锁满仓神器！',
   carnage: '左侧 +1 增兵 · 黄色 +99 装弹 · 右侧拆炮架 · 中路清红军',
   endless: '越往后越难，看你能撑多远',
 };
@@ -155,6 +178,13 @@ export class UI {
   private readonly hudRateText: HTMLElement;
   private readonly hudAmmoEl: HTMLElement;
   private readonly hudAmmoText: HTMLElement;
+  private readonly blitzHudEl: HTMLElement;
+  private readonly blitzTanksEl: HTMLElement;
+  private readonly blitzDronesEl: HTMLElement;
+  private readonly blitzMultiEl: HTMLElement;
+  private readonly blitzShieldEl: HTMLElement;
+  private readonly blitzDmgEl: HTMLElement;
+  private readonly blitzStagesEl: HTMLElement;
   private readonly carnageHudEl: HTMLElement;
   private readonly carnageComboEl: HTMLElement;
   private readonly carnageCountEl: HTMLElement;
@@ -172,6 +202,7 @@ export class UI {
   private readonly weaponUpEl: HTMLElement;
   private readonly resultBalanceEl: HTMLElement;
   private readonly resultTacticBtn: HTMLElement;
+  private readonly resultUnlockEl: HTMLElement;
 
   // Dirty-checking state for HUD
   private lastPct = -1;
@@ -185,6 +216,11 @@ export class UI {
   private lastCueVisible = false;
   private lastResumeHidden = true;
   private lastResumeText = '';
+  private lastBlitzTanks = '';
+  private lastBlitzDrones = -1;
+  private lastBlitzMulti = -1;
+  private lastBlitzShield = -1;
+  private lastBlitzDmg = -1;
   private lastCarnageCombo = -1;
   private lastCarnageKills = -1;
   private lastCarnageSquad = -1;
@@ -194,6 +230,7 @@ export class UI {
   private lastNovaReady = false;
   private lastNovaTitle = '';
   private lastNovaCharge = -1;
+  private pendingUnlock: UnlockCallout | null = null;
 
   private bossBars: BossBarNodes[] = [];
   private bossKey = '';
@@ -236,6 +273,13 @@ export class UI {
             <div class="pill hud-gems" id="hud-gems-pill"><span class="gem-ico">${ICON.gem}</span><span id="hud-gems">0</span></div>
           </div>
         </div>
+        <div id="blitz-hud" class="blitz-hud" hidden>
+          <span class="blitz-chip tank" id="blitz-tanks">坦克 0/3</span>
+          <span class="blitz-chip drone" id="blitz-drones" hidden>无人机 ×0</span>
+          <span class="blitz-chip multi" id="blitz-multi" hidden>多发 ×1</span>
+          <span class="blitz-chip shield" id="blitz-shield" hidden>护盾 0</span>
+          <span class="blitz-chip dmg" id="blitz-dmg" hidden>火力 +0%</span>
+        </div>
         <div class="hud-row">
           <div class="weapon-badge" id="hud-weapon"><div class="wb-gun">${ICON.gun}</div><div class="wb-text"><b>手枪</b><div class="wb-pips">${WEAPONS.map(() => '<i></i>').join('')}</div></div></div>
           <div class="chip" id="hud-rate">${ICON.bolt}<span>射速 100%</span></div>
@@ -271,6 +315,7 @@ export class UI {
         <div class="logo"><div class="logo-emblem">${EMBLEM}</div><div class="logo-title">军团冲锋</div><div class="logo-sub">ARMY RUSH</div></div>
         <div class="menu-dock">
           <button class="panel mode-card" id="mode-card"></button>
+          <div class="blitz-stages" id="blitz-stages" hidden></div>
           <div class="home-ups" id="home-ups"></div>
           <div class="carnage-loadout" hidden>固定蓝军 · 36 人加特林 · 主线升级和皮肤不用于本模式</div>
           <div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
@@ -314,6 +359,7 @@ export class UI {
           <div class="ribbon" id="result-ribbon">胜利</div>
           <div class="stars" id="result-stars"></div>
           <div class="result-sub" id="result-sub"></div>
+          <div class="result-unlock" id="result-unlock" hidden></div>
           <div class="result-stats" id="result-stats"></div>
           <div class="result-advice" id="result-advice"></div>
           <div class="result-detail" id="result-detail"></div>
@@ -367,6 +413,13 @@ export class UI {
     this.hudRateText = el(this.hudRateEl, 'span');
     this.hudAmmoEl = el(root, '#hud-ammo');
     this.hudAmmoText = el(this.hudAmmoEl, 'span');
+    this.blitzHudEl = el(root, '#blitz-hud');
+    this.blitzTanksEl = el(root, '#blitz-tanks');
+    this.blitzDronesEl = el(root, '#blitz-drones');
+    this.blitzMultiEl = el(root, '#blitz-multi');
+    this.blitzShieldEl = el(root, '#blitz-shield');
+    this.blitzDmgEl = el(root, '#blitz-dmg');
+    this.blitzStagesEl = el(root, '#blitz-stages');
     this.carnageHudEl = el(root, '#carnage-hud');
     this.carnageComboEl = el(root, '#carnage-combo');
     this.carnageCountEl = el(root, '#carnage-count');
@@ -384,6 +437,7 @@ export class UI {
     this.weaponUpEl = el(root, '#weapon-up');
     this.resultBalanceEl = el(root, '#result-balance');
     this.resultTacticBtn = el(root, '.result-tactic');
+    this.resultUnlockEl = el(root, '#result-unlock');
 
     const btnNext = el(root, '#btn-next');
     const on = (sel: string, fn: () => void) => el(root, sel).addEventListener('click', fn);
@@ -401,6 +455,24 @@ export class UI {
     btnNext.addEventListener('click', () => {
       if (btnNext.dataset.mode === 'retry') h.retry();
       else h.next();
+    });
+    this.resultUnlockEl.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement).closest<HTMLElement>('[data-try-unlock]');
+      if (btn && this.pendingUnlock) {
+        h.tryMode(this.pendingUnlock.mode, this.pendingUnlock.stage);
+      }
+    });
+    this.blitzStagesEl.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement).closest<HTMLElement>('[data-blitz-stage]');
+      if (!btn) return;
+      const stage = Number(btn.dataset.blitzStage) as BlitzStage;
+      if (btn.classList.contains('locked')) {
+        const meta = BLITZ_STAGES.find((x) => x.stage === stage);
+        const cleared = clearedStages(this.save);
+        this.toast(`防线或冲锋通关第 ${meta?.unlock ?? 10} 关解锁（当前 ${cleared}/${meta?.unlock ?? 10}）`);
+        return;
+      }
+      h.blitzStage(stage);
     });
     this.sheetWrapEl.addEventListener('click', (ev) => {
       if (ev.target === ev.currentTarget) this.closeSheet();
@@ -420,12 +492,35 @@ export class UI {
       if (up) h.upgrade(up.dataset.up as UpgradeId);
       const skin = t.closest<HTMLElement>('[data-skin]');
       if (skin) h.skin(skin.dataset.skin!);
+      const blitzBtn = t.closest<HTMLElement>('[data-blitz-stage]');
+      if (blitzBtn) {
+        const stage = Number(blitzBtn.dataset.blitzStage) as BlitzStage;
+        if (blitzBtn.classList.contains('locked')) {
+          const meta = BLITZ_STAGES.find((x) => x.stage === stage);
+          const cleared = clearedStages(this.save);
+          this.toast(`防线或冲锋通关第 ${meta?.unlock ?? 10} 关解锁（当前 ${cleared}/${meta?.unlock ?? 10}）`);
+        } else {
+          h.blitzStage(stage);
+          h.mode('blitz');
+          this.closeSheet();
+        }
+        return;
+      }
       const mode = t.closest<HTMLElement>('[data-mode]');
       if (mode) {
         if (mode.classList.contains('locked')) {
           const id = mode.dataset.mode as GameMode;
-          const m = MODES.find((x) => x.id === id);
-          this.toast(id === 'carnage' ? '防线或冲锋通关第 30 关解锁火力狂潮' : `防线或冲锋通关第 ${m?.unlock ?? 3} 关解锁该模式`);
+          const cleared = clearedStages(this.save);
+          if (id === 'carnage') {
+            this.toast(`防线或冲锋通关第 30 关解锁火力狂潮（当前 ${cleared}/30）`);
+          } else if (id === 'blitz') {
+            this.toast(`防线或冲锋通关第 5 关解锁重装突袭（当前 ${cleared}/5）`);
+          } else if (id === 'endless') {
+            this.toast('防线或冲锋通关第 1 关解锁无尽模式');
+          } else {
+            const m = MODES.find((x) => x.id === id);
+            this.toast(`防线或冲锋通关第 ${m?.unlock ?? 1} 关解锁该模式`);
+          }
         } else {
           h.mode(mode.dataset.mode as GameMode);
           this.closeSheet();
@@ -685,6 +780,7 @@ export class UI {
     const s = this.save;
     if (this.current === 'menu') {
       this.root.classList.toggle('carnage-mode', s.mode === 'carnage');
+      this.root.classList.toggle('blitz-mode', s.mode === 'blitz');
     }
     const coins = formatNumber(s.coins);
     el(this.root, '#menu-coins').textContent = coins;
@@ -701,6 +797,10 @@ export class UI {
     el(this.root, '#menu-gems').textContent = String(s.gems);
     el(this.root, '#result-gems').textContent = String(s.gems);
     el(this.root, '.carnage-loadout').hidden = s.mode !== 'carnage';
+    this.blitzStagesEl.hidden = s.mode !== 'blitz';
+    if (s.mode === 'blitz') {
+      this.blitzStagesEl.innerHTML = this.blitzStageButtons();
+    }
     const def = MODES.find((m) => m.id === s.mode)!;
     const style = MODE_STYLE[s.mode];
     const { tag, desc, start } = this.modeSummary(s.mode);
@@ -710,6 +810,20 @@ export class UI {
       <div class="mode-switch">切换${ICON.chevron}</div>`;
     el(this.root, '#start-sub').textContent = start;
     if (this.sheet) this.renderSheet(true);
+  }
+
+  private blitzStageButtons(): string {
+    const s = this.save;
+    return BLITZ_STAGES.map((st) => {
+      const unlocked = blitzStageUnlocked(s, st.stage);
+      const active = s.mode === 'blitz' && s.blitzStage === st.stage;
+      const cleared = s.blitzCleared >= st.stage;
+      const badge = !unlocked ? `过${st.unlock}关解锁` : cleared ? '已通关' : '已解锁';
+      return `<button type="button" class="blitz-stage-btn ${active ? 'active' : ''} ${unlocked ? '' : 'locked'}" data-blitz-stage="${st.stage}" aria-pressed="${active}">
+        <span class="bs-top"><b>${st.stage === 1 ? 'I' : 'II'} · ${st.name}</b><i>${badge}</i></span>
+        <small>${st.short}</small>
+      </button>`;
+    }).join('');
   }
 
   /** 五张永久升级卡片（主页底部和结算弹窗共用）：角标是等级，下面一排点是离下一次进化还差几级，点满就进化 */
@@ -744,6 +858,19 @@ export class UI {
     const s = this.save;
     const def = MODES.find((m) => m.id === mode)!;
     switch (mode) {
+      case 'blitz': {
+        const meta = BLITZ_STAGES.find((x) => x.stage === s.blitzStage) ?? BLITZ_STAGES[0];
+        const tag = s.blitzAdmin
+          ? `试玩 · ${meta.name}`
+          : s.blitzCleared >= 2
+            ? '双阶全通'
+            : `${meta.name}`;
+        return {
+          tag,
+          desc: meta.desc,
+          start: `重装突袭 · ${meta.name}`,
+        };
+      }
       case 'carnage':
         return { tag: s.carnageAdmin ? '管理员已解锁' : '已通关解锁', desc: def.desc, start: '火力狂潮 · 90 秒释放' };
       case 'defense': {
@@ -806,17 +933,30 @@ export class UI {
         }).join('')}</div>`;
         break;
       case 'modes': {
+        const cleared = clearedStages(s);
         const modesHtml = MODES.map((m) => {
           const locked = !modeUnlocked(s, m.id);
           const style = MODE_STYLE[m.id];
           const { tag, desc } = this.modeSummary(m.id);
+          const lockLabel =
+            m.id === 'carnage'
+              ? `通关 30 关解锁 (${Math.min(cleared, 30)}/30)`
+              : m.id === 'blitz'
+                ? `通关 5 关解锁 (${Math.min(cleared, 5)}/5)`
+                : m.id === 'endless'
+                  ? '通关第 1 关解锁'
+                  : `第 ${m.unlock} 关解锁`;
+          const extra =
+            m.id === 'blitz'
+              ? `<div class="blitz-mode-stages">${this.blitzStageButtons()}</div>`
+              : '';
           return `<button class="row ${s.mode === m.id ? 'active' : ''} ${locked ? 'locked' : ''}" data-mode="${m.id}" aria-pressed="${s.mode === m.id}" style="text-align:left">
             <div class="mode-tile" style="background:${style.bg}">${locked ? ICON.lock : style.icon}</div>
             <div class="row-main">
-              <div class="row-title">${m.name}<span class="lv">${locked ? (m.id === 'carnage' ? '通关第 30 关解锁' : `第 ${m.unlock} 关解锁`) : tag}</span></div>
+              <div class="row-title">${m.name}<span class="lv">${locked ? lockLabel : tag}</span></div>
               <div class="row-sub">${desc}</div>
             </div>
-          </button>`;
+          </button>${extra}`;
         }).join('');
         const practiceHtml = (['defense', 'campaign'] as const)
           .map((id) => {
@@ -828,6 +968,7 @@ export class UI {
           .join('');
         body.innerHTML =
           modesHtml +
+          `<div class="guide-note blitz-note">重装突袭：过 5 关解锁「重装坦克道」，过 10 关解锁「广告大乱斗」。左道养 +1 数字门，中道轰炸尸潮，右道击毁重装坦克收割无人机、多发弹道、高能护盾等满屏神器，通关额外赢钻石与大量金币！</div>` +
           `<div class="guide-note carnage-note">火力狂潮：${s.carnageAdmin ? '管理员试玩已开启，可直接进入。' : '防线或冲锋通关第 30 关解锁。'}独立火力与击杀纪录，不发主线金币或钻石。</div>` +
           `<div class="guide-note">已通关关卡可随时演练：使用当前升级和战术，不消耗资源，也不结算金币、钻石和战绩。</div>` +
           practiceHtml;
@@ -839,6 +980,7 @@ export class UI {
         body.innerHTML = `<div class="stat-grid">
           ${stat(ICON.defense, MODE_STYLE.defense.bg, '防线最高', `第 ${s.defenseBest} 关`)}
           ${stat(ICON.campaign, MODE_STYLE.campaign.bg, '冲锋最高', `第 ${s.best} 关`)}
+          ${stat(ICON.tank, MODE_STYLE.blitz.bg, '突袭通关 / 最高击杀', `${s.blitzCleared}/2 · ${formatNumber(s.blitzBest)}`)}
           ${stat(ICON.bolt, MODE_STYLE.carnage.bg, '狂潮最佳击杀', formatNumber(s.carnageBest))}
           ${stat(ICON.endless, MODE_STYLE.endless.bg, '无尽最远', `${formatNumber(s.endlessBest)} 米`)}
           ${stat(ICON.trophy, 'linear-gradient(160deg,#4a5a80,#25304d)', '胜利场次', String(s.wins))}
@@ -852,7 +994,7 @@ export class UI {
         body.innerHTML = `<div class="guide-note">免费切换，下一局生效。敌人不会因为你变强而加血。</div>${TACTICS.map((t) => `<button class="row tactic-row ${s.tactic === t.id ? 'active' : ''}" data-tactic="${t.id}" aria-pressed="${s.tactic === t.id}"><div class="row-main"><div class="row-title">${t.name}${s.tactic === t.id ? ' · 已选择' : ''}</div><div class="row-sub">${t.desc}</div></div></button>`).join('')}<div class="guide-note">数字门按命中次数涨数；连射更擅长养门。破甲对装甲目标的持续伤害比均衡高约 15%，但养门更慢、清普通尸潮稍弱。关卡路线固定，可用演练比较打法。</div>`;
         break;
       case 'help':
-        body.innerHTML = `<div class="guide"><h3>单手就能玩</h3><p>按住空白处左右拖动，子弹自动打向正前方。手指放在屏幕下部也能换道。设置里可调灵敏度。</p><h3>防线：两条道，两件事</h3><p>开局先拆门道障碍，打破后回到门道接住一串增益门。尸潮接近桥头时切去清怪；一直贪补给会被包围。</p><h3>看清数字，再选路</h3><p>+ 是加人，− 是减员，× 是人数倍率，枪和闪电分别升级武器和射速。红门可以射成正数；数字门按命中次数成长，敌人和障碍按伤害掉血。</p><h3>Boss：先躲，再打</h3><p>砸击先锁红色危险带，整队移出去；两次慢砸后有三连击，停顿时再集火。油桶红圈内的士兵都会被炸。</p><h3>失败也有进步</h3><p>战斗所得会保留，结算会告诉你怎样损兵。免费换战术，升级前到军械库看真实收益。模式页可演练已通关关卡；撤退和主动重试保留战利品，但没有额外新手补贴。</p></div>`;
+        body.innerHTML = `<div class="guide"><h3>单手就能玩</h3><p>按住空白处左右拖动，子弹自动打向正前方。手指放在屏幕下部也能换道。设置里可调灵敏度。</p><h3>防线：两条道，两件事</h3><p>开局先拆门道障碍，打破后回到门道接住一串增益门。尸潮接近桥头时切去清怪；一直贪补给会被包围。</p><h3>重装突袭（过 5 / 10 关解锁）</h3><p>经典三道爽游玩法：左道持续输送可射击升级的 +1 数字门与变绿翻盘门；中道是汹涌尸潮与可引爆清场的红油桶；右道由重装坦克严密守卫，身后藏着无人机、多发弹道、能量护盾、空袭与顶级武器，轰碎坦克即可瞬间收割整排奖励！</p><h3>看清数字，再选路</h3><p>+ 是加人，− 是减员，× 是人数倍率，枪和闪电分别升级武器和射速。红门可以射成正数；数字门按命中次数成长，敌人和障碍按伤害掉血。</p><h3>Boss：先躲，再打</h3><p>砸击先锁红色危险带，整队移出去；两次慢砸后有三连击，停顿时再集火。油桶红圈内的士兵都会被炸。</p><h3>失败也有进步</h3><p>战斗所得会保留，结算会告诉你怎样损兵。免费换战术，升级前到军械库看真实收益。模式页可演练已通关关卡；撤退和主动重试保留战利品，但没有额外新手补贴。</p></div>`;
         break;
       case 'settings':
         body.innerHTML = `
@@ -861,7 +1003,7 @@ export class UI {
           <button class="row" data-toggle="motion" style="text-align:left"><div class="row-main"><div class="row-title">动态效果：${s.motion === 'system' ? '跟随系统' : s.motion === 'reduced' ? '减少' : '完整'}</div><div class="row-sub">减少时关闭镜头震动、推进和全屏闪光</div></div></button>
           <button class="row" data-toggle="sensitivity" style="text-align:left"><div class="row-main"><div class="row-title">拖动灵敏度：${s.sensitivity === 1 ? '标准' : s.sensitivity < 1 ? '精细' : '灵敏'}</div><div class="row-sub">切换精细 / 标准 / 灵敏，移动速度由机动升级决定</div></div></button>
           <button class="row danger-row" data-reset style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#ff6b6b,#b5121f)">${ICON.close}</div><div class="row-main"><div class="row-title" id="reset-title">重置全部进度</div><div class="row-sub">关卡、金币、钻石、升级、皮肤、战绩全部清零，从头开始</div></div></button>
-          ${s.carnageAdmin ? '<button class="row" data-revoke-admin><div class="row-main"><div class="row-title">管理员试玩 · 已开启</div><div class="row-sub">点击关闭狂潮直通权限，正常通关解锁仍保留</div></div></button>' : ''}
+          ${s.carnageAdmin || s.blitzAdmin ? '<button class="row" data-revoke-admin><div class="row-main"><div class="row-title">管理员试玩 · 已开启</div><div class="row-sub">点击关闭试玩直通权限，正常通关解锁仍保留</div></div></button>' : ''}
           <div class="credits">人物、丧尸、Boss 和道具模型：Quaternius（CC0 公共领域）</div>`;
         break;
       default:
@@ -872,7 +1014,7 @@ export class UI {
 
   // ---------- 游戏内 ----------
 
-  resetHud(title: string, marks: number[] = []) {
+  resetHud(mode: GameMode, title: string, marks: number[] = []) {
     window.clearTimeout(this.weaponUpTimer);
     window.clearTimeout(this.weaponUpEndTimer);
     this.weaponUpReturn?.cancel();
@@ -887,9 +1029,12 @@ export class UI {
     }
     this.flying = 0;
     this.hudTitleEl.textContent = title;
-    const isCarnage = title.startsWith('火力狂潮');
+    const isCarnage = mode === 'carnage';
+    const isBlitz = mode === 'blitz';
     this.carnageHudEl.hidden = !isCarnage;
+    this.blitzHudEl.hidden = !isBlitz;
     this.root.classList.toggle('carnage-mode', isCarnage);
+    this.root.classList.toggle('blitz-mode', isBlitz);
     this.hudMarksEl.innerHTML = marks.map((f) => `<i class="hud-mark" style="left:${(f * 100).toFixed(1)}%">${ICON.skull}</i>`).join('');
     this.marks = [...this.hudMarksEl.querySelectorAll<HTMLElement>('.hud-mark')].map((e, i) => ({ el: e, at: marks[i] * 100 }));
     this.hudCueEl.textContent = '';
@@ -903,6 +1048,15 @@ export class UI {
     this.lastCoins = -1;
     this.lastGems = -1;
     this.lastAmmoName = '';
+    this.lastBlitzTanks = '';
+    this.lastBlitzDrones = -1;
+    this.lastBlitzMulti = -1;
+    this.lastBlitzShield = -1;
+    this.lastBlitzDmg = -1;
+    this.blitzDronesEl.hidden = true;
+    this.blitzMultiEl.hidden = true;
+    this.blitzShieldEl.hidden = true;
+    this.blitzDmgEl.hidden = true;
     this.lastCarnageCombo = -1;
     this.lastCarnageKills = -1;
     this.lastCarnageSquad = -1;
@@ -976,6 +1130,34 @@ export class UI {
         this.lastNovaCharge = chargePct;
         this.novaChargeEl.textContent = `${chargePct}%`;
         this.novaFillEl.style.width = `${chargePct}%`;
+      }
+    } else if (w.spec.mode === 'blitz') {
+      const b = w.blitz;
+      const tankText = `坦克 ${b.tanksDestroyed}/${b.totalTanks}`;
+      if (tankText !== this.lastBlitzTanks) {
+        this.lastBlitzTanks = tankText;
+        this.blitzTanksEl.textContent = tankText;
+      }
+      if (b.drones !== this.lastBlitzDrones) {
+        this.lastBlitzDrones = b.drones;
+        this.blitzDronesEl.hidden = b.drones <= 0;
+        if (b.drones > 0) this.blitzDronesEl.textContent = `无人机 ×${b.drones}`;
+      }
+      if (b.multishot !== this.lastBlitzMulti) {
+        this.lastBlitzMulti = b.multishot;
+        this.blitzMultiEl.hidden = b.multishot <= 1;
+        if (b.multishot > 1) this.blitzMultiEl.textContent = `多发 ×${b.multishot}`;
+      }
+      if (b.shield !== this.lastBlitzShield) {
+        this.lastBlitzShield = b.shield;
+        this.blitzShieldEl.hidden = b.shield <= 0;
+        if (b.shield > 0) this.blitzShieldEl.textContent = `护盾 ${b.shield}`;
+      }
+      const dmgPct = Math.round(b.damageBonus * 100);
+      if (dmgPct !== this.lastBlitzDmg) {
+        this.lastBlitzDmg = dmgPct;
+        this.blitzDmgEl.hidden = dmgPct <= 0;
+        if (dmgPct > 0) this.blitzDmgEl.textContent = `火力 +${dmgPct}%`;
       }
     }
 
@@ -1057,7 +1239,21 @@ export class UI {
       }
     }
     let released = false;
-    if (w.spec.mode !== 'carnage' && w.defense) {
+    let blitzRewardRush = false;
+    if (w.spec.mode === 'blitz') {
+      let tankD = Infinity;
+      for (let i = 0; i < w.barrels.length; i++) {
+        const br = w.barrels[i];
+        if (br.alive && br.look === 'tank') tankD = Math.min(tankD, br.d);
+      }
+      for (let i = 0; i < w.barrels.length; i++) {
+        const br = w.barrels[i];
+        if (br.alive && br.blitzLane === 'right' && br.look !== 'tank' && br.d < tankD && br.d > w.squad.d && br.d < 22) {
+          blitzRewardRush = true;
+          break;
+        }
+      }
+    } else if (w.spec.mode !== 'carnage' && w.defense) {
       for (let i = 0; i < w.gates.length; i++) {
         const g = w.gates[i];
         if (!g.consumed && g.d > w.squad.d && g.d < 16) {
@@ -1068,12 +1264,16 @@ export class UI {
     }
     const danger = w.projectiles.length > 0 || attackingBoss !== null;
     const text = w.projectiles.length
-      ? '油桶将落地 · 整队移出红圈'
+      ? w.spec.mode === 'blitz'
+        ? '坦克炮弹预警 · 整队移出红圈！'
+        : '油桶将落地 · 整队移出红圈'
       : attackingBoss
         ? `${attackingBoss.comboStep < 2 ? '蓄力重击' : '快速连击'} ${attackingBoss.comboStep + 1}/5 · 移出危险带`
-        : released
-          ? '补给已放行 · 回门道接门'
-          : '';
+        : blitzRewardRush
+          ? '坦克已破防 · 右道冲刺收割满仓神器！'
+          : released
+            ? '补给已放行 · 回门道接门'
+            : '';
     if (text !== this.lastCueText) {
       this.lastCueText = text;
       this.hudCueEl.textContent = text;
@@ -1256,6 +1456,17 @@ export class UI {
       stars.innerHTML = [0, 1, 2].map((i) => (i < info.stars! ? ICON.star.replace('<svg', '<svg class="on"') : ICON.starOff)).join('');
     }
     el(this.root, '#result-sub').textContent = info.sub;
+    this.pendingUnlock = info.unlockedCallout ?? null;
+    if (info.unlockedCallout) {
+      this.resultUnlockEl.hidden = false;
+      this.resultUnlockEl.innerHTML = `<div class="unlock-card">
+        <div class="unlock-copy"><span class="unlock-badge">新模式解锁</span><b>${info.unlockedCallout.title}</b><small>${info.unlockedCallout.desc}</small></div>
+        <button type="button" class="btn btn-blue unlock-cta" data-try-unlock>立即体验</button>
+      </div>`;
+    } else {
+      this.resultUnlockEl.hidden = true;
+      this.resultUnlockEl.innerHTML = '';
+    }
     el(this.root, '#result-advice').textContent = info.advice ?? '';
     el(this.root, '#result-detail').textContent = info.detail ?? '';
     for (const sel of ['.reward', '.result-ups-title', '#result-ups']) {
@@ -1264,6 +1475,7 @@ export class UI {
     this.resultTacticBtn.style.display = info.mode === 'carnage' ? 'none' : '';
     this.screens.result.classList.toggle('practice', !!info.practice);
     this.root.classList.toggle('carnage-mode', info.mode === 'carnage');
+    this.root.classList.toggle('blitz-mode', info.mode === 'blitz');
     el(this.root, '#result-stats').innerHTML = info.stats.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
     const next = el(this.root, '#btn-next');
     next.style.display = info.next ? '' : 'none';

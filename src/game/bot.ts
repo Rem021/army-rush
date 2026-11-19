@@ -1,3 +1,4 @@
+import { BLITZ_LANES } from './blitz';
 import { CARNAGE_LANES } from './carnage';
 import { BOSS_STRIKE_HALF, HALVES, LANES, THROW_RADIUS, WEAPONS, soldierDps } from './config';
 import type { Rng } from './rng';
@@ -25,9 +26,93 @@ export class Bot {
 
   target(w: World): number {
     if (w.spec.mode === 'carnage') return this.dodge(w, this.carnageTarget(w));
+    if (w.spec.mode === 'blitz') return this.dodge(w, this.blitzTarget(w));
     // 红圈里的兵全死，看到就躲（防线里就是换到另一条道）
     if (w.defense) return this.dodge(w, this.defenseTarget(w));
     return w.state === 'boss' ? this.dodge(w, this.bossTarget(w)) : this.runTarget(w);
+  }
+
+  /** 广告奇袭三路决策：右路放行奖励立刻吃、左路正门快到顺手吃、中路油桶/贴脸尸潮及时清、其余时间火力轰重坦或终局 Boss */
+  private blitzTarget(w: World): number {
+    const sq = w.squad;
+    let frontTankD = Infinity;
+    let frontTank: (typeof w.barrels)[number] | null = null;
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
+      if (b.alive && b.tank && b.d < frontTankD) {
+        frontTankD = b.d;
+        frontTank = b;
+      }
+    }
+
+    // 1. 右路刚放行的奖励舱或增益门：最高优先级立刻切右吃满！
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
+      if (b.alive && b.blitzLane === 'right' && !b.tank && b.d < frontTankD && b.d > -1 && b.d < 15) {
+        return BLITZ_LANES.right;
+      }
+    }
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
+      if (!g.consumed && g.blitzLane === 'right' && g.d < frontTankD && g.d > 0 && g.d < 13) {
+        return BLITZ_LANES.right;
+      }
+    }
+
+    // 2. 紧贴阵型的中路危险尸潮或巨尸：先拉中路清场保兵力
+    let urgentMid = 0;
+    let nearestMidX: number = BLITZ_LANES.mid;
+    let nearestMidD = Infinity;
+    for (let i = 0; i < w.zombies.length; i++) {
+      const z = w.zombies[i];
+      if (!z.alive || z.d > 14) continue;
+      urgentMid += (THREAT[z.kind] ?? 1) * (z.d < 8 ? 2 : 1);
+      if (z.d < nearestMidD) {
+        nearestMidD = z.d;
+        nearestMidX = z.x;
+      }
+    }
+    if (urgentMid >= Math.max(4, sq.count * 0.12)) return nearestMidX;
+
+    // 3. 中路爆裂红油桶周围有尸潮：点爆清屏
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
+      if (b.alive && b.blitzLane === 'mid' && b.d > 6 && b.d < 26) {
+        return b.x;
+      }
+    }
+
+    // 4. 左路 +1 / 射速 / 倍率正门快滑到脚下时，切左白嫖扩军（红门先打翻再吃）
+    let nearLeft: Gate | null = null;
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
+      if (!g.consumed && g.blitzLane === 'left' && g.d > 0 && g.d < 11 && (!nearLeft || g.d < nearLeft.d)) {
+        nearLeft = g;
+      }
+    }
+    if (nearLeft) {
+      if (nearLeft.kind !== 'add' || nearLeft.value > 0) {
+        if (sq.count < 110 || nearLeft.d < 4.5) return BLITZ_LANES.left;
+      } else if (nearLeft.d > 4.5) {
+        // 翻转红门，提前射成绿门
+        return BLITZ_LANES.left;
+      }
+    }
+
+    // 5. 前期兵力偏少先在左路攒兵；够火力后优先集火右路重装坦克爆神装，或集火终局 Boss
+    let boss: (typeof w.bosses)[number] | null = null;
+    for (let i = 0; i < w.bosses.length; i++) {
+      const b = w.bosses[i];
+      if (b.alive && b.active) {
+        boss = b;
+        break;
+      }
+    }
+    if (boss && boss.d < 24) return boss.x;
+    if (sq.count < 24) return BLITZ_LANES.left;
+    if (frontTank && frontTank.d <= 25) return BLITZ_LANES.right;
+    if (boss) return boss.x;
+    return BLITZ_LANES.left;
   }
 
   /** 狂潮自动驾驶：兼顾左侧蓝门增兵、中央弹药牌、右侧火箭炮架拆解与终局巨人集火 */

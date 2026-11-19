@@ -1,5 +1,5 @@
 import { TACTICS, type TacticId } from './game/tactics';
-import { MODES, SKINS, UPGRADES, type GameMode, type UpgradeId } from './game/config';
+import { MODES, SKINS, UPGRADES, type BlitzStage, type GameMode, type UpgradeId } from './game/config';
 
 export interface SaveData {
   /** 冲锋当前关 */
@@ -11,6 +11,14 @@ export interface SaveData {
   carnageBest: number;
   /** 本浏览器的狂潮试玩通行证，不授予账号或服务器权限。 */
   carnageAdmin: boolean;
+  /** 广告奇袭最佳击杀 */
+  blitzBest: number;
+  /** 广告奇袭最高通关幕数（0/1/2） */
+  blitzCleared: number;
+  /** 广告奇袭当前选择的幕数（1：重装坦克道，2：广告大乱斗） */
+  blitzStage: BlitzStage;
+  /** 广告奇袭本地试玩通行证 */
+  blitzAdmin: boolean;
   /** 上次选的模式 */
   mode: GameMode;
   coins: number;
@@ -47,6 +55,10 @@ function defaults(): SaveData {
     endlessBest: 0,
     carnageBest: 0,
     carnageAdmin: false,
+    blitzBest: 0,
+    blitzCleared: 0,
+    blitzStage: 1,
+    blitzAdmin: false,
     mode: 'defense',
     coins: 0,
     gems: 0,
@@ -101,6 +113,10 @@ export function loadSave(): SaveData {
       endlessBest: cleanInt(data.endlessBest, base.endlessBest, 0),
       carnageBest: cleanInt(data.carnageBest, base.carnageBest, 0),
       carnageAdmin: data.carnageAdmin === true,
+      blitzBest: cleanInt(data.blitzBest, base.blitzBest, 0),
+      blitzCleared: cleanInt(data.blitzCleared, base.blitzCleared, 0, 2),
+      blitzStage: data.blitzStage === 2 ? 2 : 1,
+      blitzAdmin: data.blitzAdmin === true,
       mode,
       coins: cleanInt(data.coins, base.coins, 0),
       gems: cleanInt(data.gems, base.gems, 0),

@@ -1,8 +1,20 @@
 import './ui/style.css';
 import { Sfx, vibrate } from './audio';
+import { blitzOptions, generateBlitz } from './game/blitz';
 import { CARNAGE_OPTIONS, generateCarnage } from './game/carnage';
 import { Bot } from './game/bot';
-import { BOSSES, MODES, SKINS, TRACK_HALF, UPGRADES, upgradeEffects, type GameMode, type UpgradeId } from './game/config';
+import {
+  BLITZ_STAGES,
+  BOSSES,
+  MODES,
+  SKINS,
+  TRACK_HALF,
+  UPGRADES,
+  upgradeEffects,
+  type BlitzStage,
+  type GameMode,
+  type UpgradeId,
+} from './game/config';
 import { generateCampaign, generateDefense, generateEndlessStart } from './game/level';
 import { LOSS_INFO } from './game/feedback';
 import { applyTactic, type TacticId } from './game/tactics';
@@ -15,7 +27,7 @@ import { renderGunIcons, renderPortraits } from './render/characters';
 import { GameRenderer } from './render/renderer';
 import { loadSave, resetSave, writeSave } from './save';
 import { ICON } from './ui/icons';
-import { UI, modeUnlocked, type ResultInfo, type UIHandlers } from './ui/ui';
+import { UI, blitzStageUnlocked, modeUnlocked, type ResultInfo, type UIHandlers, type UnlockCallout } from './ui/ui';
 
 function clampInt(raw: string | null, min: number, max: number): number {
   if (raw === null) return 0;
@@ -24,11 +36,12 @@ function clampInt(raw: string | null, min: number, max: number): number {
   return Math.max(min, Math.min(max, Math.floor(n)));
 }
 
-// 调试参数：?mode=campaign 指定模式（defense / campaign / endless / carnage），?level=5 指定关卡，?autoplay 自动驾驶，?speed=3 加速，?coins=999 给钱，?up=3 全部升级到 3 级
+// 调试参数：?mode=blitz 指定模式（defense / campaign / endless / blitz / carnage），?stage=1|2 指定重装突袭阶段，?level=5 指定关卡，?autoplay 自动驾驶，?speed=3 加速，?coins=999 给钱，?up=3 全部升级到 3 级
 const params = new URLSearchParams(location.search);
 const debug = {
   autoplay: params.has('autoplay'),
   level: clampInt(params.get('level'), 0, 999),
+  stage: clampInt(params.get('stage'), 0, 2),
   speed: Math.max(1, Math.min(8, clampInt(params.get('speed'), 1, 8) || 1)),
   coins: clampInt(params.get('coins'), 0, 1_000_000_000),
   gems: clampInt(params.get('gems'), 0, 1_000_000),
@@ -44,8 +57,13 @@ function persistSave() {
 }
 
 // 仅授予当前浏览器的试玩通行证，不伪造主线通关或发放资源。
-if (params.get('admin') === 'carnage') {
-  save.carnageAdmin = true;
+const adminParam = params.get('admin');
+if (adminParam === 'carnage' || adminParam === 'blitz') {
+  if (adminParam === 'carnage') save.carnageAdmin = true;
+  if (adminParam === 'blitz') {
+    save.blitzAdmin = true;
+    if (!debug.mode) save.mode = 'blitz';
+  }
   persistSave();
   params.delete('admin');
   history.replaceState(null, '', `${location.pathname}${params.size ? '?' + params : ''}${location.hash}`);
@@ -61,11 +79,17 @@ if (debug.up > 0) {
     save.upgrades[u.id] = Math.min(u.max, debug.up);
   }
 }
+if (debug.stage === 1 || debug.stage === 2) {
+  if (blitzStageUnlocked(save, debug.stage)) save.blitzStage = debug.stage;
+}
 if (debug.mode && MODES.some((m) => m.id === debug.mode)) {
   save.mode = debug.mode;
   if (modeUnlocked(save, save.mode)) persistSave();
 }
-if (!modeUnlocked(save, save.mode) && (!debug.mode || save.mode === 'carnage')) save.mode = 'defense';
+if (!modeUnlocked(save, save.mode) && (!debug.mode || save.mode === 'carnage' || save.mode === 'blitz')) {
+  save.mode = 'defense';
+}
+if (!blitzStageUnlocked(save, save.blitzStage)) save.blitzStage = 1;
 
 const app = document.getElementById('app')!;
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -139,7 +163,9 @@ const handlers: UIHandlers = {
   },
   revokeAdmin() {
     save.carnageAdmin = false;
-    if (save.mode === 'carnage' && !modeUnlocked(save, 'carnage')) save.mode = 'defense';
+    save.blitzAdmin = false;
+    if ((save.mode === 'carnage' || save.mode === 'blitz') && !modeUnlocked(save, save.mode)) save.mode = 'defense';
+    if (!blitzStageUnlocked(save, save.blitzStage)) save.blitzStage = 1;
     persistSave();
     buildWorld();
     ui.refreshMenu();
@@ -223,9 +249,31 @@ const handlers: UIHandlers = {
     sfx.click();
     practice = null;
     save.mode = id;
+    if (id === 'blitz' && !blitzStageUnlocked(save, save.blitzStage)) save.blitzStage = 1;
     persistSave();
     buildWorld();
     ui.refreshMenu();
+  },
+  blitzStage(stage: BlitzStage) {
+    if (!blitzStageUnlocked(save, stage)) return;
+    sfx.unlock();
+    sfx.click();
+    practice = null;
+    save.blitzStage = stage;
+    persistSave();
+    if (save.mode === 'blitz') buildWorld();
+    ui.refreshMenu();
+  },
+  tryMode(mode: GameMode, stage?: BlitzStage) {
+    if (!modeUnlocked(save, mode)) return;
+    if (mode === 'blitz' && stage && blitzStageUnlocked(save, stage)) save.blitzStage = stage;
+    sfx.unlock();
+    sfx.click();
+    practice = null;
+    save.mode = mode;
+    persistSave();
+    buildWorld();
+    startGame();
   },
   tactic(id: TacticId) {
     if (phase !== 'menu' && phase !== 'result') return;
@@ -261,6 +309,10 @@ const handlers: UIHandlers = {
   next() {
     if (phase !== 'result') return;
     sfx.click();
+    if (world.spec.mode === 'blitz' && world.spec.level === 1 && blitzStageUnlocked(save, 2)) {
+      save.blitzStage = 2;
+      persistSave();
+    }
     buildWorld();
     startGame();
   },
@@ -369,6 +421,10 @@ function hudTitle(): string {
   const mode = world.spec.mode;
   const level = world.spec.level;
   if (mode === 'carnage') return '火力狂潮 · 重炮阵列';
+  if (mode === 'blitz') {
+    const meta = BLITZ_STAGES.find((x) => x.stage === level) ?? BLITZ_STAGES[0];
+    return `重装突袭 · ${meta.name}`;
+  }
   if (mode === 'endless') return '无尽';
   return `${practice ? '演练 · ' : ''}${mode === 'defense' ? '防线' : '冲锋'} · 第 ${level} 关${isBossLevel(level) ? ' · Boss 关' : ''}`;
 }
@@ -383,6 +439,16 @@ function buildWorld() {
     case 'carnage':
       world = new World(generateCarnage(), CARNAGE_OPTIONS);
       break;
+    case 'blitz': {
+      const stage: BlitzStage = blitzStageUnlocked(save, save.blitzStage) ? save.blitzStage : 1;
+      const base = blitzOptions(stage);
+      world = new World(generateBlitz(stage), {
+        ...base,
+        coinMult: Math.max(base.coinMult ?? 1, opts.coinMult ?? 1),
+        steerMult: Math.max(base.steerMult ?? 1, opts.steerMult ?? 1),
+      });
+      break;
+    }
     case 'defense':
       world = new World(generateDefense(practice?.level ?? save.defenseLevel), opts);
       break;
@@ -396,10 +462,10 @@ function buildWorld() {
   }
   world.squad.moving = false;
   renderer.loadLevel(world);
-  // 防线：进度条上标出中途每批 Boss 的位置
+  // 防线 / 重装突袭：进度条上标出中途每批 Boss 的位置
   const def = world.spec.defense;
   const marks = def ? [...new Set(def.spawns.filter((sp) => sp.boss && sp.t < def.duration - 0.01).map((sp) => sp.t / def.duration))] : [];
-  ui.resetHud(hudTitle(), marks);
+  ui.resetHud(world.spec.mode, hudTitle(), marks);
   input.target = world.squad.x;
   resultShown = false;
   peak = world.squad.count;
@@ -409,7 +475,7 @@ function buildWorld() {
 }
 
 function startGame() {
-  if (!modeUnlocked(save, world.spec.mode) && world.spec.mode === 'carnage') return;
+  if (!modeUnlocked(save, world.spec.mode) && (world.spec.mode === 'carnage' || world.spec.mode === 'blitz')) return;
   if (phase === 'play') return;
   phase = 'play';
   renderer.menu = false;
@@ -423,9 +489,11 @@ function startGame() {
       ui.banner(
         world.spec.mode === 'carnage'
           ? '左 +1 · 右重炮 · 开火！'
-          : world.defense
-            ? `${hudTitle()} · ${bosses} 只 Boss`
-            : `${hudTitle()} · 开战！`,
+          : world.spec.mode === 'blitz'
+            ? `左+1养门 · 右炸坦克抢神器！`
+            : world.defense
+              ? `${hudTitle()} · ${bosses} 只 Boss`
+              : `${hudTitle()} · 开战！`,
         'info',
       );
     }
@@ -440,15 +508,54 @@ function hapticsFor(events: GameEvent[]) {
   for (const e of events) {
     if (e.type === 'gatePass') haptic(e.after >= e.before ? 18 : [35, 40, 35]);
     else if (e.type === 'barrelBreak') haptic(25);
+    else if (e.type === 'tankFire') haptic(35);
+    else if (e.type === 'shieldBlock') haptic(15);
     else if (e.type === 'blocked') haptic(30);
     else if (e.type === 'bossSmash') haptic(e.combo === 4 ? 75 : e.combo >= 2 ? 38 : 65);
     else if (e.type === 'giantSmash') haptic(70);
     else if (e.type === 'explode' && e.source === 'impact') haptic(90);
-    else if (e.type === 'reward' && e.reward.kind === 'weapon' && e.upgraded) haptic([20, 30, 20]);
-    else if (e.type === 'bossDie') haptic([40, 40, 80]);
+    else if (e.type === 'reward' && (e.reward.kind === 'weapon' || e.reward.kind === 'drone' || e.reward.kind === 'multishot') && e.upgraded) {
+      haptic([20, 30, 20]);
+    } else if (e.type === 'bossDie') haptic([40, 40, 80]);
     else if (e.type === 'won') haptic([40, 60, 40, 60, 140]);
     else if (e.type === 'lost') haptic(260);
   }
+}
+
+function detectUnlock(
+  before: { endless: boolean; blitz1: boolean; blitz2: boolean; carnage: boolean },
+): UnlockCallout | undefined {
+  if (!before.carnage && modeUnlocked(save, 'carnage')) {
+    return {
+      title: '火力狂潮已解锁！',
+      desc: '通关 30 关达成！90 秒重炮倾泻与无限爽刷开启',
+      mode: 'carnage',
+    };
+  }
+  if (!before.blitz2 && blitzStageUnlocked(save, 2)) {
+    return {
+      title: '重装突袭 · 广告大乱斗',
+      desc: '通关 10 关解锁终极玩法：变绿翻盘门、电锯与黄金坦克！',
+      mode: 'blitz',
+      stage: 2,
+    };
+  }
+  if (!before.blitz1 && blitzStageUnlocked(save, 1)) {
+    return {
+      title: '重装突袭 · 重装坦克道',
+      desc: '通关 5 关解锁三道爽游：左 +1 门、中炸尸潮、右破坦克抢神器！',
+      mode: 'blitz',
+      stage: 1,
+    };
+  }
+  if (!before.endless && modeUnlocked(save, 'endless')) {
+    return {
+      title: '无尽模式已解锁！',
+      desc: '无限推进挑战最高推进纪录',
+      mode: 'endless',
+    };
+  }
+  return undefined;
 }
 
 function finish(retreated = false) {
@@ -458,6 +565,12 @@ function finish(retreated = false) {
   const won = world.state === 'won';
   const kills = world.kills;
   const mode = world.spec.mode;
+  const beforeUnlock = {
+    endless: modeUnlocked(save, 'endless'),
+    blitz1: blitzStageUnlocked(save, 1),
+    blitz2: blitzStageUnlocked(save, 2),
+    carnage: modeUnlocked(save, 'carnage'),
+  };
   const settled = settleRun(save, {
     mode,
     level: world.spec.level,
@@ -470,6 +583,7 @@ function finish(retreated = false) {
     progress: world.progress,
     distance: world.squad.d,
   });
+  const unlockedCallout = !practice && won ? detectUnlock(beforeUnlock) : undefined;
 
   let info: ResultInfo;
   const lostSub = retreated
@@ -519,6 +633,31 @@ function finish(retreated = false) {
       home: '返回主页',
       stars: null,
     };
+  } else if (mode === 'blitz') {
+    const meta = BLITZ_STAGES.find((x) => x.stage === world.spec.level) ?? BLITZ_STAGES[0];
+    const { coins, bonusCoins, bonusGems } = settled;
+    const stats: [string, string][] = [
+      ['击杀', `${formatNumber(kills)} · ${formatNumber(Math.floor(world.coins))} 金币`],
+      ['击毁坦克', `${world.blitz.tanksDestroyed} / ${world.blitz.totalTanks}`],
+      ['收割神器', `${world.blitz.buffsCollected} 个（无人机 ×${world.blitz.drones} · 多发 ×${world.blitz.multishot}）`],
+    ];
+    if (bonusCoins > 0) stats.push([won ? '突袭通关赏金' : '推进补给', `+${formatNumber(bonusCoins)}`]);
+    if (world.gems + bonusGems > 0) stats.push(['钻石', `+${world.gems + bonusGems}`]);
+    if (won) stats.push(['剩余兵力', String(world.squad.count)]);
+    const keep = world.squad.count / Math.max(1, peak);
+    const canAdvance = won && world.spec.level === 1 && blitzStageUnlocked(save, 2);
+    info = {
+      mode,
+      won,
+      title: won ? '突袭完胜！' : retreated ? '撤退结算' : '突袭受阻',
+      sub: won ? `${meta.name} 全歼！` : lostSub,
+      stats,
+      coins,
+      next: canAdvance ? '挑战广告大乱斗' : won ? '再爽一局' : '再来一次',
+      home: '返回主页',
+      stars: won ? (keep >= 0.55 ? 3 : keep >= 0.25 ? 2 : 1) : null,
+      unlockedCallout,
+    };
   } else if (mode === 'endless') {
     const { dist, record, coins } = settled;
     info = {
@@ -561,6 +700,7 @@ function finish(retreated = false) {
       next: won ? '下一关' : '再来一次',
       home: '返回主页',
       stars: won ? (keep >= 0.6 ? 3 : keep >= 0.3 ? 2 : 1) : null,
+      unlockedCallout,
     };
   }
   const cause = world.stats.mainLoss;
@@ -568,9 +708,11 @@ function finish(retreated = false) {
   info.advice =
     mode === 'carnage'
       ? '左侧 +1 蓝门增兵，黄色 +99 牌装弹；巨人挥剑前，把整队移出红色危险带。'
-      : retreated
-        ? '调整战术或升级后可重试；同一关的路线保持不变。'
-        : world.stats.advice(won, !!world.defense);
+      : mode === 'blitz'
+        ? '左道持续把 +1 门射大养兵，中道点爆红油桶清怪，兵力成型后切右道集火坦克，击破即可吃满整排神器！'
+        : retreated
+          ? '调整战术或升级后可重试；同一关的路线保持不变。'
+          : world.stats.advice(won, !!world.defense);
   info.detail = `接门 ${world.stats.gatesTaken} · 漏门 ${world.stats.gatesMissed} · 拆补给 ${world.stats.supplies} · 躲砸击 ${world.stats.dodges}`;
   if (!practice) persistSave();
   phase = 'result';

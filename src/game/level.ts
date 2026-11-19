@@ -29,11 +29,19 @@ export type Reward =
   | { kind: 'soldiers'; amount: number }
   | { kind: 'coins'; amount: number }
   | { kind: 'airstrike' }
-  | { kind: 'rate'; amount: number };
+  | { kind: 'rate'; amount: number }
+  | { kind: 'drone'; amount: number }
+  | { kind: 'multishot'; amount: number }
+  | { kind: 'ammo'; level: number }
+  | { kind: 'damage'; amount: number }
+  | { kind: 'shield'; amount: number }
+  | { kind: 'boom'; radius: number };
 
 export interface GateSpec {
   /** 狂潮复刻：固定蓝色 +1 / 黄色 +99 弹药牌。 */
   carnage?: 'recruit' | 'ammo';
+  /** 广告奇袭分道：左路持续 +1 成长门，右路坦克后方奖励门 */
+  blitzLane?: 'left' | 'right';
   kind: GateKind;
   x0: number;
   x1: number;
@@ -44,15 +52,28 @@ export interface GateSpec {
   group: number;
 }
 
+export interface TankSpec {
+  tier: 1 | 2 | 3 | 4;
+  name: string;
+  /** 炮击间隔（秒），0 表示不炮击 */
+  fireInterval: number;
+  /** 双管炮塔（半血后双发齐射） */
+  twin?: boolean;
+}
+
 export interface BarrelSpec {
   /** 狂潮专用多管火箭架；数字为剩余耐久。 */
   carnage?: 'battery' | 'pod';
+  /** 广告奇袭分道：中路爆裂油桶，右路坦克与奖励箱队列 */
+  blitzLane?: 'mid' | 'right';
+  /** 重装坦克配置 */
+  tank?: TankSpec;
   x: number;
   d: number;
   r: number;
   hp: number;
   reward: Reward;
-  look: 'barrel' | 'tires' | 'cage' | 'crate' | 'armor';
+  look: 'barrel' | 'tires' | 'cage' | 'crate' | 'armor' | 'tank' | 'bomb';
   /** 防线门道里的大障碍：停在 stopD 挡住后面的门 */
   block?: boolean;
 }
