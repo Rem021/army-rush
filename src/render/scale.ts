@@ -2,4 +2,4 @@
  * 画面中所有实体/物品的统一视觉缩放倍率（保持相机 FOV 与赛道宽度不变，仅缩小物体视觉尺寸，
  * 让视野更通透、队列与尸潮更精致清晰、互不遮挡）。
  */
-export const ITEM_SCALE = 0.74;
+export const ITEM_SCALE = 0.62;
