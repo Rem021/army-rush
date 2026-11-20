@@ -22,7 +22,9 @@ import {
 } from './config';
 import { mulberry32, pickWeighted, randInt, randRange, shuffle, type Rng } from './rng';
 
-export type GateKind = 'add' | 'mul' | 'weapon' | 'rate';
+export type HeroKind = 'pyro' | 'railgun' | 'commander';
+
+export type GateKind = 'add' | 'mul' | 'weapon' | 'rate' | 'mystery';
 
 export type Reward =
   | { kind: 'weapon'; tier: number }
@@ -35,7 +37,11 @@ export type Reward =
   | { kind: 'ammo'; level: number }
   | { kind: 'damage'; amount: number }
   | { kind: 'shield'; amount: number }
-  | { kind: 'boom'; radius: number };
+  | { kind: 'boom'; radius: number }
+  | { kind: 'freeze'; radius: number }
+  | { kind: 'hero'; hero: HeroKind }
+  | { kind: 'turret'; duration?: number }
+  | { kind: 'mystery' };
 
 export interface GateSpec {
   /** 狂潮复刻：固定蓝色 +1 / 黄色 +99 弹药牌。 */
@@ -46,10 +52,13 @@ export interface GateSpec {
   x0: number;
   x1: number;
   d: number;
-  /** add：人数；mul：倍数；weapon：武器等级；rate：射速百分比 */
+  /** add：人数；mul：倍数；weapon：武器等级；rate：射速百分比；mystery：随机大奖 */
   value: number;
   /** 同组的门只能穿过一个 */
   group: number;
+  /** 经典广告横移门：横向摆动幅度（米）与角速度（rad/s） */
+  slideAmp?: number;
+  slideSpeed?: number;
 }
 
 export interface TankSpec {
@@ -61,19 +70,32 @@ export interface TankSpec {
   twin?: boolean;
 }
 
+export interface LootTruckSpec {
+  /** 沿桥面向前/向玩家高速行驶的速度（m/s） */
+  speed: number;
+  /** 左右蛇形机动幅度（米） */
+  sway: number;
+  /** 蛇形机动频率 */
+  swaySpeed: number;
+  /** 击毁保底金币赏金 */
+  coins: number;
+}
+
 export interface BarrelSpec {
   /** 狂潮专用多管火箭架；数字为剩余耐久。 */
   carnage?: 'battery' | 'pod';
-  /** 广告奇袭分道：中路爆裂油桶，右路坦克与奖励箱队列 */
+  /** 广告奇袭分道：中路爆裂/冰冻油桶，右路坦克与奖励箱队列 */
   blitzLane?: 'mid' | 'right';
   /** 重装坦克配置 */
   tank?: TankSpec;
+  /** 逃逸中的黄金武装军火补给车（不碰撞伤兵，打爆爆大奖！） */
+  truck?: LootTruckSpec;
   x: number;
   d: number;
   r: number;
   hp: number;
   reward: Reward;
-  look: 'barrel' | 'tires' | 'cage' | 'crate' | 'armor' | 'tank' | 'bomb';
+  look: 'barrel' | 'tires' | 'cage' | 'crate' | 'armor' | 'tank' | 'bomb' | 'cryo' | 'mystery' | 'hero' | 'turret' | 'truck';
   /** 防线门道里的大障碍：停在 stopD 挡住后面的门 */
   block?: boolean;
 }
@@ -124,6 +146,8 @@ export interface SpawnSpec {
   banner?: BannerSpec;
   /** 一大波尸潮的人数，血量按当时的尸潮算 */
   wave?: number;
+  /** 定时驶入的黄金武装军火补给车 */
+  truck?: { hp: number; speed: number; sway: number; coins: number; reward: Reward };
   /** 门道里窜出几只疾行尸 */
 }
 
@@ -540,21 +564,26 @@ export function generateDefense(level: number): LevelSpec {
   let d = DEFENSE_TUNING.stopD + 3;
   let tier = 0;
   const topTier = maxWeaponTier(L);
-  const blockers: ('weapon' | 'armor' | 'strike' | 'rate')[] = [];
+  const blockers: ('weapon' | 'armor' | 'strike' | 'rate' | 'hero' | 'turret')[] = [];
+  const heroCycle: HeroKind[] = ['pyro', 'railgun', 'commander'];
   // 奖励门按固定顺序轮换，免得某一关运气好连出几个 ×2、另一关一个都没有
-  const bonusCycle: ('rate' | 'mul' | 'weapon')[] = L >= 3 ? ['rate', 'weapon', 'mul', 'rate', 'weapon', 'rate'] : ['rate', 'weapon', 'rate'];
+  const bonusCycle: ('rate' | 'mul' | 'weapon' | 'mystery')[] = L >= 3 ? ['rate', 'mystery', 'mul', 'weapon', 'rate', 'mystery'] : ['rate', 'weapon', 'mystery'];
   for (let seg = 0; d < 760; seg++) {
-    // 大障碍：先给武器，武器给满后轮换装甲路障（给人）/补给箱（空袭）/射速箱。
+    // 大障碍：先给武器，武器给满后轮换装甲路障/英雄舱/自动炮台/空袭/射速箱。
     // 血量一个比一个高很多（见 blockerHp），关卡里直接写好，出现时看到的数字之后不变
     let kind: (typeof blockers)[number];
     if (tier < topTier && (seg % 2 === 0 || seg < 2)) kind = 'weapon';
-    else kind = (['armor', 'strike', 'armor', 'rate'] as const)[seg % 4];
+    else kind = (['hero', 'turret', 'armor', 'strike', 'rate'] as const)[seg % 5];
     blockers.push(kind);
     const r = 2.0;
     const hp = Math.round(DEFENSE_TUNING.blockerHp(L, seg));
     if (kind === 'weapon') {
       tier = Math.min(topTier, tier + 1);
       spec.barrels.push({ x: gx, d, r, hp, reward: { kind: 'weapon', tier }, look: 'tires', block: true });
+    } else if (kind === 'hero') {
+      spec.barrels.push({ x: gx, d, r, hp, reward: { kind: 'hero', hero: heroCycle[seg % heroCycle.length] }, look: 'hero', block: true });
+    } else if (kind === 'turret') {
+      spec.barrels.push({ x: gx, d, r, hp, reward: { kind: 'turret', duration: 24 }, look: 'turret', block: true });
     } else if (kind === 'armor') {
       spec.barrels.push({ x: gx, d, r, hp, reward: { kind: 'soldiers', amount: Math.round(1 + L / 2 + seg * 0.5) }, look: 'armor', block: true });
     } else if (kind === 'strike') {
@@ -574,9 +603,11 @@ export function generateDefense(level: number): LevelSpec {
         gate =
           bonus === 'mul'
             ? { kind: 'mul', x0: gx0, x1: gx1, d, value: 1.25, group: g.group++ }
-            : bonus === 'rate'
-              ? { kind: 'rate', x0: gx0, x1: gx1, d, value: randInt(rng, 2, 6) * 2, group: g.group++ }
-              : { kind: 'weapon', x0: gx0, x1: gx1, d, value: Math.max(1, tier), group: g.group++ };
+            : bonus === 'mystery'
+              ? { kind: 'mystery', x0: gx0, x1: gx1, d, value: 1, group: g.group++ }
+              : bonus === 'rate'
+                ? { kind: 'rate', x0: gx0, x1: gx1, d, value: randInt(rng, 2, 6) * 2, group: g.group++ }
+                : { kind: 'weapon', x0: gx0, x1: gx1, d, value: Math.max(1, tier), group: g.group++ };
       } else {
         // 门道全是正门（越往后数字越大），朝它开枪还能再往上打
         const value = TUNING.addGate(L) + 1 + randInt(rng, 0, 1) + Math.min(3, Math.floor(seg / 5));
@@ -594,6 +625,18 @@ export function generateDefense(level: number): LevelSpec {
     spawns.push({ t, wave: DEFENSE_TUNING.waveSize(L, t / T) });
     if (wave++ % 2 === 1) spawns.push({ t, banner: { d: 0, text: '尸潮来袭！', tone: 'danger' } });
   }
+  // 广告彩蛋：中盘冲出一辆黄金武装军火补给车，集火打爆掉落超级盲盒+金币钻石！
+  spawns.push({
+    t: T * 0.44,
+    banner: { d: 0, text: '黄金军火补给车现身！集火打爆抢大奖！', tone: 'info' },
+    truck: {
+      hp: Math.round(DEFENSE_TUNING.blockerHp(L, 1) * 0.65),
+      speed: 3.1,
+      sway: 1.4,
+      coins: 120 + L * 25,
+      reward: { kind: 'mystery' },
+    },
+  });
   // Boss 一批一批来，最后是最终 Boss；中间夹一只巨尸（血量都由世界在刷出时按火力算）
   const mids = defenseMidTimes(L);
   const finals = defenseBosses(L);
@@ -690,6 +733,7 @@ function triad(g: Gen, d: number, mood: 'easy' | 'normal' = 'normal'): number {
     patterns.push([[{ kind: 'weapon', value: Math.max(1, g.tier) }, { kind: 'add', value: good }], 1.6]);
   }
   if (feats.rateGates) patterns.push([[{ kind: 'rate', value: randInt(rng, 3, 6) * 2 }, { kind: 'add', value: Math.round(bad * 0.5) }], 1.3]);
+  patterns.push([[{ kind: 'mystery', value: 1 }, { kind: 'add', value: Math.max(2, Math.round(good * 0.6)) }], 1.2]);
   const opts = pickWeighted(rng, patterns);
   const [a, b] = rng() < 0.5 ? opts : [opts[1], opts[0]];
   const group = g.group++;
@@ -705,7 +749,7 @@ function triad(g: Gen, d: number, mood: 'easy' | 'normal' = 'normal'): number {
   return gd + 6;
 }
 
-/** 一半是门，一半是尸潮（尸潮后面有人质笼） */
+/** 一半是门，一半是尸潮（尸潮后面有人质笼，概率带横移门与液氮冰冻桶） */
 function sideHorde(g: Gen, d: number): number {
   const { rng, L, feats } = g;
   const side = rng() < 0.5 ? -1 : 1;
@@ -714,12 +758,28 @@ function sideHorde(g: Gen, d: number): number {
   const roll = rng();
   let gate: GateOpt;
   if (feats.weaponGates && g.tier < g.topTier && roll < 0.3) gate = { kind: 'weapon', value: Math.max(1, g.tier) };
-  else if (roll < 0.55 && L >= 3) gate = { kind: 'mul', value: 1.5 };
+  else if (roll < 0.5 && L >= 3) gate = { kind: 'mul', value: 1.5 };
+  else if (roll < 0.72) gate = { kind: 'mystery', value: 1 };
   else gate = { kind: 'add', value: TUNING.addGate(L) + randInt(rng, 0, 3) };
-  g.spec.gates.push({ ...gate, x0: gx0, x1: gx0 + TRACK_HALF, d: gd, group: g.group++ });
+  const slide = L >= 2 && rng() < 0.5;
+  g.spec.gates.push(
+    slide
+      ? { ...gate, x0: -1.7, x1: 1.7, d: gd, group: g.group++, slideAmp: 2.2, slideSpeed: 1.9 }
+      : { ...gate, x0: gx0, x1: gx0 + TRACK_HALF, d: gd, group: g.group++ },
+  );
   const hx0 = side < 0 ? 0.2 : -TRACK_HALF + 0.2;
   const count = hordeSize(g, 1);
   horde(g, hx0, hx0 + TRACK_HALF - 0.4, d + 4, count, mix(g));
+  if (rng() < 0.45) {
+    g.spec.barrels.push({
+      x: hx0 + (TRACK_HALF - 0.4) * 0.5,
+      d: d + 5.2,
+      r: 0.78,
+      hp: Math.max(8, Math.round(crateHp(g, 0.2))),
+      look: 'cryo',
+      reward: { kind: 'freeze', radius: 6.0 },
+    });
+  }
   const amount = cageSoldiers(L, g.E);
   addBarrel(g, -side * HALVES[1], d + 26, crateHp(g, 0.8), { kind: 'soldiers', amount });
   const gateSide = outcomePower(g, gate);
@@ -730,7 +790,7 @@ function sideHorde(g: Gen, d: number): number {
   return d + 32;
 }
 
-/** 整排尸潮，打过去后有一组门 */
+/** 整排尸潮，打过去后有一组门（混入液氮冰冻桶/爆破红油桶，门可能横移或带 ? 盲盒门） */
 function fullHorde(g: Gen, d: number): number {
   const { rng, L } = g;
   const count = hordeSize(g, 1.7);
@@ -738,9 +798,39 @@ function fullHorde(g: Gen, d: number): number {
   m.exploder = (m.exploder ?? 0) * 1.6;
   m.runner = (m.runner ?? 0) * 1.3;
   horde(g, -TRACK_HALF + 0.3, TRACK_HALF - 0.3, d + 2, count, m);
+  // 广告爽点：尸潮中混入液氮冰冻桶或爆破红油桶，一枪清场/全场急冻！
+  const hazardRoll = rng();
+  if (hazardRoll < 0.55) {
+    const bx = randRange(rng, -2.4, 2.4);
+    const isCryo = hazardRoll < 0.32;
+    g.spec.barrels.push({
+      x: bx,
+      d: d + 4.2,
+      r: 0.8,
+      hp: Math.max(8, Math.round(crateHp(g, 0.22))),
+      look: isCryo ? 'cryo' : 'bomb',
+      reward: isCryo ? { kind: 'freeze', radius: 6.2 } : { kind: 'boom', radius: 5.4 },
+    });
+  }
   loseToHorde(g, count * 0.7);
   const good = TUNING.addGate(L) + randInt(rng, 2, 5);
-  pairGates(g, d + 26, { kind: 'add', value: good }, { kind: 'add', value: Math.max(1, Math.round(good / 3)) });
+  if (L >= 2 && rng() < 0.38) {
+    // 经典广告左右横移奖励门 + 盲盒命运门
+    const group = g.group++;
+    const slideGate: GateSpec =
+      rng() < 0.5
+        ? { kind: 'mystery', x0: -1.7, x1: 1.7, d: d + 26, value: 1, group, slideAmp: 2.3, slideSpeed: 1.9 }
+        : { kind: 'add', x0: -1.7, x1: 1.7, d: d + 26, value: good + 3, group, slideAmp: 2.4, slideSpeed: 2.1 };
+    g.spec.gates.push(slideGate);
+    g.E += good;
+  } else {
+    pairGates(
+      g,
+      d + 26,
+      { kind: 'add', value: good },
+      rng() < 0.35 ? { kind: 'mystery', value: 1 } : { kind: 'add', value: Math.max(1, Math.round(good / 3)) },
+    );
+  }
   return d + 32;
 }
 
@@ -794,15 +884,21 @@ function pickLane(g: Gen, d: number): number {
   return d + len + 6;
 }
 
-/** 一排桶：武器、人质笼、空袭箱 */
-function crateRow(g: Gen, d: number, force?: ('weapon' | 'cage' | 'airstrike' | 'coins')[]): number {
+/** 一排桶：武器、人质笼、英雄救援舱、自动机枪炮台、黄金盲盒、空袭箱 */
+function crateRow(g: Gen, d: number, force?: ('weapon' | 'cage' | 'airstrike' | 'coins' | 'hero' | 'turret' | 'mystery')[]): number {
   const { rng, L } = g;
   const kinds = force ? [...force] : [];
   if (!force) {
     if (g.tier < g.topTier) kinds.push('weapon');
     kinds.push('cage');
-    if (rng() < 0.5) kinds.push(rng() < 0.6 ? 'airstrike' : 'coins');
+    const extra = rng();
+    if (extra < 0.22) kinds.push('hero');
+    else if (extra < 0.44) kinds.push('turret');
+    else if (extra < 0.66) kinds.push('mystery');
+    else if (extra < 0.85) kinds.push('airstrike');
+    else kinds.push('coins');
   }
+  const heroes: HeroKind[] = ['pyro', 'railgun', 'commander'];
   const lanes = force && kinds.length === 2 ? shuffle(rng, [0, 2]) : shuffle(rng, [0, 1, 2]).slice(0, kinds.length);
   kinds.forEach((k, i) => {
     const x = force && kinds.length === 1 ? HALVES[rng() < 0.5 ? 0 : 1] : LANES[lanes[i]];
@@ -815,6 +911,13 @@ function crateRow(g: Gen, d: number, force?: ('weapon' | 'cage' | 'airstrike' | 
       const amount = cageSoldiers(L, g.E);
       addBarrel(g, x, dd, crateHp(g, 0.8), { kind: 'soldiers', amount });
       g.E += amount * 0.5;
+    } else if (k === 'hero') {
+      const hero = heroes[randInt(rng, 0, heroes.length - 1)];
+      addBarrel(g, x, dd, crateHp(g, 0.72), { kind: 'hero', hero });
+    } else if (k === 'turret') {
+      addBarrel(g, x, dd, crateHp(g, 0.65), { kind: 'turret', duration: 24 });
+    } else if (k === 'mystery') {
+      addBarrel(g, x, dd, crateHp(g, 0.55), { kind: 'mystery' });
     } else if (k === 'airstrike') {
       addBarrel(g, x, dd, crateHp(g, 0.6), { kind: 'airstrike' });
     } else {
@@ -960,7 +1063,23 @@ function pairGates(g: Gen, d: number, a: GateOpt, b: GateOpt, fixed = false) {
 
 function addBarrel(g: Gen, x: number, d: number, hp: number, reward: Reward) {
   const look: BarrelSpec['look'] =
-    reward.kind === 'weapon' ? 'tires' : reward.kind === 'soldiers' ? 'cage' : reward.kind === 'coins' ? 'barrel' : 'crate';
+    reward.kind === 'weapon'
+      ? 'tires'
+      : reward.kind === 'soldiers'
+        ? 'cage'
+        : reward.kind === 'coins'
+          ? 'barrel'
+          : reward.kind === 'hero'
+            ? 'hero'
+            : reward.kind === 'turret'
+              ? 'turret'
+              : reward.kind === 'mystery'
+                ? 'mystery'
+                : reward.kind === 'freeze'
+                  ? 'cryo'
+                  : reward.kind === 'boom'
+                    ? 'bomb'
+                    : 'crate';
   g.spec.barrels.push({ x, d, r: 1.2, hp: Math.max(5, Math.round(hp)), reward, look });
 }
 
@@ -1052,6 +1171,7 @@ function outcomePower(g: Gen, o: GateOpt): Outcome {
   if (o.kind === 'add') E = Math.max(0, E + o.value + shootGain(g, 'add', o.value));
   else if (o.kind === 'mul') E = E * o.value;
   else if (o.kind === 'weapon') tier = Math.min(WEAPONS.length - 1, Math.max(tier, o.value + (g.E > 30 ? 1 : 0)));
+  else if (o.kind === 'mystery') E = E * 1.18 + 3;
   else rate = Math.max(0.4, Math.min(1.8, rate * (1 + Math.min(25, o.value + shootGain(g, 'rate', o.value)) / 100)));
   return { E, tier, rate, P: E * soldierDps(tier) * rate };
 }

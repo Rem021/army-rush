@@ -326,6 +326,7 @@ export class Bot {
     if (g.kind === 'add') st.n += g.value + (g.value < 0 ? Math.min(-g.value, 3) : 1);
     else if (g.kind === 'mul') st.n *= g.value;
     else if (g.kind === 'weapon') st.tier = Math.max(st.tier, Math.min(WEAPONS.length - 1, g.value));
+    else if (g.kind === 'mystery') st.n = st.n * 1.18 + 3;
     else st.rate *= 1 + g.value / 100;
   }
 
@@ -375,6 +376,9 @@ export class Bot {
       const b = w.barrels[i];
       if (!b.alive || b.d < d0 || b.d > d1 || Math.abs(b.x - x) > 1.8) continue;
       if (b.reward.kind === 'weapon' && b.reward.tier > w.squad.tier) score += 0.5;
+      else if (b.reward.kind === 'hero' || b.reward.kind === 'turret') score += 0.42;
+      else if (b.reward.kind === 'mystery' || b.truck) score += 0.36;
+      else if (b.reward.kind === 'freeze' || b.reward.kind === 'boom') score += 0.28;
       else if (b.reward.kind === 'soldiers') score += 0.2;
       else if (b.reward.kind === 'airstrike') score += 0.1;
     }

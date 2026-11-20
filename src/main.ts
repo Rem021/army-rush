@@ -531,6 +531,13 @@ function haptic(pattern: number | number[]) {
 function hapticsFor(events: GameEvent[]) {
   for (const e of events) {
     if (e.type === 'gatePass') haptic(e.after >= e.before ? 18 : [35, 40, 35]);
+    else if (e.type === 'gateFlip') haptic([18, 22, 32]);
+    else if (e.type === 'cryoNova') haptic([22, 24, 50]);
+    else if (e.type === 'mysteryRoll') haptic([15, 22, 15, 22, 42]);
+    else if (e.type === 'heroJoin') haptic([24, 28, 55]);
+    else if (e.type === 'turretDeploy') haptic([20, 24, 34]);
+    else if (e.type === 'feverStart') haptic([25, 25, 55]);
+    else if (e.type === 'truckBreak') haptic([35, 30, 75]);
     else if (e.type === 'barrelBreak') haptic(25);
     else if (e.type === 'tankFire') haptic(35);
     else if (e.type === 'shieldBlock') haptic(15);
@@ -935,6 +942,18 @@ function route(events: GameEvent[]) {
               ui.flyCoin(p.x, p.y, '#hud-gems-pill .gem-ico', true, ICON.gem);
             }
           }, i * 90);
+        }
+      }
+    } else if (e.type === 'truckBreak') {
+      slowmo = Math.max(slowmo, 0.14);
+      const p = renderer.toScreen(e.x, 1.8, e.d);
+      if (p) {
+        for (let i = 0; i < 8; i++) {
+          window.setTimeout(() => {
+            if (runId === eventRun && phase === 'play') {
+              ui.flyCoin(p.x + (Math.random() - 0.5) * 70, p.y + (Math.random() - 0.5) * 45, undefined, true);
+            }
+          }, i * 42);
         }
       }
     } else if (e.type === 'zombieDie' && e.coins > 0 && now - lastCoinFly > 90) {

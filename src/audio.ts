@@ -411,6 +411,82 @@ export class Sfx {
             this.tone('sine', 1319, 1760, 0.22, 0.12, 0.14);
           }
           break;
+        case 'gateFlip':
+          // 红转蓝大反转门：清亮升调双和弦
+          if (this.ready('gateFlip', 0.14)) {
+            this.tone('triangle', 587, 880, 0.11, 0.16);
+            this.tone('triangle', 880, 1319, 0.16, 0.18, 0.06);
+            this.tone('sine', 1319, 1760, 0.2, 0.14, 0.12);
+          }
+          break;
+        case 'cryoNova':
+          // 液氮冰冻冲击波：高频晶莹冰裂 + 低温嘶鸣
+          if (this.ready('cryoNova', 0.15)) {
+            this.hiss(0.45, 0.24, 'highpass', 3400, 900);
+            this.tone('sine', 1960, 620, 0.22, 0.12);
+            this.tone('triangle', 2637, 1319, 0.18, 0.09, 0.06);
+            this.tone('sine', 110, 42, 0.25, 0.22);
+          }
+          break;
+        case 'mysteryRoll':
+          // 神秘盲盒开奖：老虎机三连叮咚大奖音
+          if (this.ready('mysteryRoll', 0.15)) {
+            this.tone('triangle', 659, 659, 0.08, 0.14);
+            this.tone('triangle', 880, 880, 0.08, 0.15, 0.07);
+            this.tone('triangle', 1175, 1175, 0.1, 0.16, 0.14);
+            this.tone('sine', 1568, 2093, 0.24, 0.16, 0.21);
+          }
+          break;
+        case 'heroJoin':
+          // 传奇英雄入队：史诗铜管号角三连音
+          if (this.ready('heroJoin', 0.2)) {
+            this.tone('sawtooth', 392, 523, 0.14, 0.11);
+            this.tone('triangle', 523, 659, 0.16, 0.16, 0.08);
+            this.tone('triangle', 659, 1047, 0.28, 0.18, 0.16);
+            this.tone('sine', 130, 58, 0.28, 0.22, 0.04);
+          }
+          break;
+        case 'heroSkill':
+          // 英雄特技释放：火浪 / 电磁狙击 / 号角鼓舞
+          if (this.ready('heroSkill', 0.12)) {
+            if (e.kind === 'pyro') {
+              this.hiss(0.32, 0.22, 'bandpass', 1200, 340);
+              this.tone('sawtooth', 240, 95, 0.24, 0.09);
+            } else if (e.kind === 'railgun') {
+              this.tone('sine', 2200, 260, 0.2, 0.14);
+              this.hiss(0.14, 0.2, 'highpass', 3000, 1200);
+            } else {
+              this.tone('triangle', 523, 784, 0.12, 0.13);
+              this.tone('triangle', 784, 1047, 0.16, 0.13, 0.08);
+            }
+          }
+          break;
+        case 'turretDeploy':
+          // 自动加特林炮台落地锁定：金属液压声 + 电机预转
+          if (this.ready('turretDeploy', 0.16)) {
+            this.tone('square', 220, 440, 0.09, 0.1);
+            this.hiss(0.18, 0.18, 'bandpass', 1800, 700, 0.04);
+            this.tone('triangle', 520, 980, 0.16, 0.12, 0.1);
+          }
+          break;
+        case 'feverStart':
+          // 30 连击 FEVER 时刻：高能电子号角连奏
+          if (this.ready('feverStart', 0.35)) {
+            this.hiss(0.38, 0.24, 'bandpass', 600, 3600);
+            this.tone('triangle', 587, 880, 0.12, 0.15);
+            this.tone('triangle', 880, 1175, 0.14, 0.16, 0.07);
+            this.tone('triangle', 1175, 1760, 0.28, 0.18, 0.14);
+          }
+          break;
+        case 'truckBreak':
+          // 击毁黄金军火补给车：厚重爆破 + 漫天金币钻石雨
+          if (this.ready('truckBreak', 0.2)) {
+            this.boom(2.2);
+            for (let i = 0; i < CHORD_GEM.length; i++) {
+              this.tone('triangle', CHORD_GEM[i], CHORD_GEM[i], 0.14, 0.11, 0.1 + i * 0.06);
+            }
+          }
+          break;
         case 'reward':
           // 换枪的声音由 weaponUp 统一放；无人机/多弹道/弹药进化给高亮科技和弦
           if (e.reward.kind === 'drone' || e.reward.kind === 'multishot' || e.reward.kind === 'ammo') {
@@ -418,7 +494,14 @@ export class Sfx {
               this.tone('triangle', 660, 990, 0.12, 0.12);
               this.tone('triangle', 990, 1480, 0.18, 0.12, 0.07);
             }
-          } else if (e.reward.kind !== 'weapon' && e.reward.kind !== 'boom') {
+          } else if (
+            e.reward.kind !== 'weapon' &&
+            e.reward.kind !== 'boom' &&
+            e.reward.kind !== 'freeze' &&
+            e.reward.kind !== 'hero' &&
+            e.reward.kind !== 'turret' &&
+            e.reward.kind !== 'mystery'
+          ) {
             this.coin();
           }
           break;

@@ -172,11 +172,13 @@ describe('Blitz core mechanics', () => {
 
     // Right-lane reward auto-collects with zero soldier loss
     const beforeCount = w.squad.count;
-    reward.alive = true;
-    reward.d = 1.0;
+    const liveReward = w.barrels.find((b) => b.alive && b.blitzLane === 'right' && b.look !== 'tank') ?? reward;
+    if (!w.barrels.includes(liveReward)) w.barrels.push(liveReward);
+    liveReward.alive = true;
+    liveReward.d = 1.0;
     w.squad.x = BLITZ_LANES.right;
     w.update(0.05);
-    expect(reward.alive).toBe(false);
+    expect(liveReward.alive).toBe(false);
     expect(w.squad.count).toBeGreaterThanOrEqual(beforeCount);
     expect(w.blitz.buffsCollected).toBeGreaterThanOrEqual(1);
   });

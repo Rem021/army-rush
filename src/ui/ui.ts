@@ -198,7 +198,11 @@ export class UI {
   private readonly xpLevelEl: HTMLElement;
   private readonly xpFillEl: HTMLElement;
   private readonly comboPillEl: HTMLElement;
+  private readonly feverPillEl: HTMLElement;
   private readonly perkStripEl: HTMLElement;
+  private readonly allyStripEl: HTMLElement;
+  private readonly allyHeroesEl: HTMLElement;
+  private readonly allyTurretsEl: HTMLElement;
   private readonly btnOverdrive: HTMLButtonElement;
   private readonly odTitleEl: HTMLElement;
   private readonly odPctEl: HTMLElement;
@@ -245,6 +249,9 @@ export class UI {
   private lastXpPct = -1;
   private lastXpLevel = -1;
   private lastCombo = -1;
+  private lastFeverText = '';
+  private lastAllyHeroes = -1;
+  private lastAllyTurrets = -1;
   private lastPerkKey = '';
   private lastOdCharge = -1;
   private lastOdActive = false;
@@ -307,8 +314,13 @@ export class UI {
           <span class="xp-lv" id="xp-lv">LV.0</span>
           <div class="xp-track"><i id="xp-fill"></i></div>
           <span class="combo-pill" id="combo-pill" hidden>0 连击</span>
+          <span class="fever-pill" id="fever-pill" hidden>FEVER · 2×金币</span>
         </div>
         <div id="perk-strip" class="perk-strip" hidden></div>
+        <div id="ally-strip" class="ally-strip" hidden>
+          <span class="ally-chip hero" id="ally-heroes" hidden>英雄 ×0</span>
+          <span class="ally-chip turret" id="ally-turrets" hidden>炮台 ×0</span>
+        </div>
         <div id="blitz-hud" class="blitz-hud" hidden>
           <span class="blitz-chip tank" id="blitz-tanks">坦克 0/3</span>
           <span class="blitz-chip drone" id="blitz-drones" hidden>无人机 ×0</span>
@@ -476,7 +488,11 @@ export class UI {
     this.xpLevelEl = el(root, '#xp-lv');
     this.xpFillEl = el(root, '#xp-fill');
     this.comboPillEl = el(root, '#combo-pill');
+    this.feverPillEl = el(root, '#fever-pill');
     this.perkStripEl = el(root, '#perk-strip');
+    this.allyStripEl = el(root, '#ally-strip');
+    this.allyHeroesEl = el(root, '#ally-heroes');
+    this.allyTurretsEl = el(root, '#ally-turrets');
     this.btnOverdrive = el<HTMLButtonElement>(root, '#btn-overdrive');
     this.odTitleEl = el(root, '#od-title');
     this.odPctEl = el(root, '#od-pct');
@@ -1176,12 +1192,19 @@ export class UI {
     this.lastXpPct = -1;
     this.lastXpLevel = -1;
     this.lastCombo = -1;
+    this.lastFeverText = '';
+    this.lastAllyHeroes = -1;
+    this.lastAllyTurrets = -1;
     this.lastPerkKey = '';
     this.lastOdCharge = -1;
     this.lastOdActive = false;
     this.lastOdReady = false;
     this.lastOdDisabled = true;
     this.lastOdTitle = '';
+    this.feverPillEl.hidden = true;
+    this.allyStripEl.hidden = true;
+    this.allyHeroesEl.hidden = true;
+    this.allyTurretsEl.hidden = true;
     this.blitzDronesEl.hidden = true;
     this.blitzMultiEl.hidden = true;
     this.blitzShieldEl.hidden = true;
@@ -1246,6 +1269,23 @@ export class UI {
           void this.comboPillEl.offsetWidth;
           this.comboPillEl.classList.add('pop');
         }
+      }
+      const feverText = w.fever.active > 0 ? `FEVER · 2×金币 ${w.fever.active.toFixed(1)}s` : '';
+      if (feverText !== this.lastFeverText) {
+        this.lastFeverText = feverText;
+        this.feverPillEl.hidden = !feverText;
+        if (feverText) this.feverPillEl.textContent = feverText;
+      }
+      const heroN = w.allyHeroes.length;
+      const turretN = w.allyTurrets.length;
+      if (heroN !== this.lastAllyHeroes || turretN !== this.lastAllyTurrets) {
+        this.lastAllyHeroes = heroN;
+        this.lastAllyTurrets = turretN;
+        this.allyStripEl.hidden = heroN === 0 && turretN === 0;
+        this.allyHeroesEl.hidden = heroN === 0;
+        this.allyTurretsEl.hidden = turretN === 0;
+        if (heroN > 0) this.allyHeroesEl.textContent = `英雄 ×${heroN}`;
+        if (turretN > 0) this.allyTurretsEl.textContent = `炮台 ×${turretN}`;
       }
       let perkKey = '';
       for (let i = 0; i < rl.order.length; i++) {
@@ -1439,6 +1479,14 @@ export class UI {
     }
     let released = false;
     let blitzRewardRush = false;
+    let lootTruckOnRoad = false;
+    for (let i = 0; i < w.barrels.length; i++) {
+      const br = w.barrels[i];
+      if (br.alive && br.truck && br.d > w.squad.d && br.d < w.squad.d + 36) {
+        lootTruckOnRoad = true;
+        break;
+      }
+    }
     if (w.spec.mode === 'blitz') {
       let tankD = Infinity;
       for (let i = 0; i < w.barrels.length; i++) {
@@ -1468,11 +1516,13 @@ export class UI {
         : '油桶将落地 · 整队移出红圈'
       : attackingBoss
         ? `${attackingBoss.comboStep < 2 ? '蓄力重击' : '快速连击'} ${attackingBoss.comboStep + 1}/5 · 移出危险带`
-        : blitzRewardRush
-          ? '坦克已破防 · 右道冲刺收割满仓神器！'
-          : released
-            ? '补给已放行 · 回门道接门'
-            : '';
+        : lootTruckOnRoad
+          ? '黄金补给车逃窜中 · 集火截击爆金币与钻石！'
+          : blitzRewardRush
+            ? '坦克已破防 · 右道冲刺收割满仓神器！'
+            : released
+              ? '补给已放行 · 回门道接门'
+              : '';
     if (text !== this.lastCueText) {
       this.lastCueText = text;
       this.hudCueEl.textContent = text;

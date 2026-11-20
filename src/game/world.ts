@@ -52,6 +52,7 @@ import {
   type Gen,
   type GateSpec,
   type HazardSpec,
+  type HeroKind,
   type LevelSpec,
   type Reward,
   type WallSpec,
@@ -128,6 +129,12 @@ export interface Gate extends GateSpec {
   taken: boolean;
   /** 被打中时的跳动，渲染用 */
   bump: number;
+  /** 横移门的基准左右边界与相位 */
+  baseX0?: number;
+  baseX1?: number;
+  slidePhase?: number;
+  /** 是否已完成红转蓝大反转（每扇门只触发一次反转奖励） */
+  flipped?: boolean;
 }
 
 export interface Barrel extends BarrelSpec {
@@ -142,6 +149,9 @@ export interface Barrel extends BarrelSpec {
   /** 广告奇袭：重装坦克开火倒计时与炮管后坐力 */
   fireTimer: number;
   recoil: number;
+  /** 黄金武装补给车的横向机动基准与相位 */
+  truckBaseX?: number;
+  truckPhase?: number;
 }
 
 export interface Zombie {
@@ -169,7 +179,7 @@ export interface Zombie {
   weight: number;
   /** 电磁弹减速计时（秒） */
   slow?: number;
-  /** 极寒冻弹冰冻脆化计时（秒）与等级 */
+  /** 极寒冻弹 / 液氮冰冻桶脆化计时（秒）与等级（4 表示液氮深冻） */
   cryo?: number;
   cryoLvl?: number;
 }
@@ -245,6 +255,42 @@ export interface Strike {
   T: number;
 }
 
+export const HERO_INFO: Record<HeroKind, { name: string; title: string; color: number; pill: string }> = {
+  pyro: { name: '烈焰先锋', title: '火焰喷射横扫', color: 0xf97316, pill: '#ea580c' },
+  railgun: { name: '雷霆狙击', title: '电磁穿甲光束', color: 0x38bdf8, pill: '#0284c7' },
+  commander: { name: '战地指挥官', title: '增兵补盾号令', color: 0xfacc15, pill: '#b45309' },
+};
+
+/** 营救入队的传奇英雄：独特 3D 装甲造型 + 周期招牌大招 */
+export interface AllyHero {
+  id: number;
+  kind: HeroKind;
+  name: string;
+  slot: number;
+  x: number;
+  d: number;
+  yaw: number;
+  fireTimer: number;
+  skillTimer: number;
+  recoil: number;
+  phase: number;
+  skillFlash: number;
+}
+
+/** 桥面空降双管自动加特林炮台：旋转索敌持续倾泻弹雨 */
+export interface AllyTurret {
+  id: number;
+  slot: number;
+  x: number;
+  d: number;
+  yaw: number;
+  fireTimer: number;
+  spin: number;
+  recoil: number;
+  life: number;
+  maxLife: number;
+}
+
 export type HitTarget = 'zombie' | 'giant' | 'barrel' | 'gate' | 'boss';
 
 export type GameEvent =
@@ -258,12 +304,28 @@ export type GameEvent =
   /** 爆裂弹/电磁弹溅射 */
   | { type: 'splash'; x: number; d: number; r: number }
   | { type: 'gateUp'; gate: Gate }
+  /** 红门射穿 0 反转为绿门的大反转奖励事件 */
+  | { type: 'gateFlip'; gate: Gate; bonus: number }
   | { type: 'gatePass'; gate: Gate; before: number; after: number }
   | { type: 'zombieDie'; x: number; d: number; kind: ZombieKind; coins: number; look: number }
   | { type: 'soldierDie'; x: number; d: number }
   | { type: 'barrelBreak'; barrel: Barrel }
   | { type: 'reward'; reward: Reward; x: number; d: number; upgraded: boolean }
   | { type: 'explode'; x: number; d: number; r: number; source: 'exploder' | 'impact' | 'strike'; killed: number }
+  /** 液氮冰冻桶引爆：冰封全场 + 碎冰脆化 */
+  | { type: 'cryoNova'; x: number; d: number; r: number; count: number }
+  /** 黄金盲盒 / ? 命运门开奖 */
+  | { type: 'mysteryRoll'; x: number; d: number; label: string; color: number }
+  /** 英雄救援舱破开：传奇英雄入队 */
+  | { type: 'heroJoin'; hero: AllyHero; x: number; d: number }
+  /** 传奇英雄释放招牌大招 */
+  | { type: 'heroSkill'; hero: AllyHero; kind: HeroKind; x: number; d: number; tx: number; td: number }
+  /** 自动加特林机枪炮台部署落地 */
+  | { type: 'turretDeploy'; turret: AllyTurret; x: number; d: number }
+  /** 连击狂热 FEVER 时刻开启 */
+  | { type: 'feverStart'; duration: number; combo: number }
+  /** 击毁黄金武装补给车爆发金币大奖 */
+  | { type: 'truckBreak'; x: number; d: number; coins: number }
   | { type: 'giantSmash'; x: number; d: number; killed: number }
   | { type: 'bossStart'; bosses: Boss[] }
   | { type: 'bossSmash'; boss: Boss; x: number; d: number; killed: number; combo: number }
@@ -457,6 +519,15 @@ export class World {
   readonly allyTanks: AllyTank[] = [];
   readonly allyShells: AllyShell[] = [];
   readonly allyMechs: AllyMech[] = [];
+  readonly allyHeroes: AllyHero[] = [];
+  readonly allyTurrets: AllyTurret[] = [];
+  /** 连击狂热 FEVER 时刻：高连击自动触发，射速 +25%、金币 2× */
+  readonly fever = {
+    active: 0,
+    duration: 6.0,
+    nextCombo: 30,
+    triggers: 0,
+  };
   /** 局内通用能量护盾（Blitz 护盾补给 + 肉鸽「宙斯护盾矩阵」统一共用） */
   shield = 0;
   readonly roguelike = {
@@ -547,7 +618,18 @@ export class World {
     const start = this.opts.startTier ?? 0;
     for (const g of spec.gates) {
       const value = g.kind === 'add' && g.value > 0 ? Math.round(g.value * bonus) : g.kind === 'weapon' ? Math.max(g.value, start) : g.value;
-      this.gates.push({ ...g, value, id: this.nextId++, hits: 0, consumed: false, taken: false, bump: 0 });
+      this.gates.push({
+        ...g,
+        value,
+        id: this.nextId++,
+        hits: 0,
+        consumed: false,
+        taken: false,
+        bump: 0,
+        baseX0: g.x0,
+        baseX1: g.x1,
+        slidePhase: this.rng() * Math.PI * 2,
+      });
     }
     for (const b of spec.barrels) {
       const reward: Reward =
@@ -565,6 +647,8 @@ export class World {
         priced: false,
         fireTimer: b.tank ? b.tank.fireInterval * 0.7 : 0,
         recoil: 0,
+        truckBaseX: b.truck ? b.x : undefined,
+        truckPhase: b.truck ? this.rng() * Math.PI * 2 : undefined,
       });
     }
     for (const z of spec.zombies) this.zombies.push(this.makeZombie(z));
@@ -821,7 +905,8 @@ export class World {
     const oc = this.perkLevel('overclock');
     const ocMult = oc === 0 ? 1 : oc === 1 ? 1.24 : oc === 2 ? 1.44 : 1.68;
     const odMult = this.overdrive.active > 0 ? 1.45 : 1;
-    return this.weapon.rate * this.opts.rateMult * this.squad.rate * ocMult * odMult * (this.spec.mode === 'carnage' && this.time < this.carnage.burstUntil ? 2 : 1);
+    const feverMult = this.fever.active > 0 ? 1.25 : 1;
+    return this.weapon.rate * this.opts.rateMult * this.squad.rate * ocMult * odMult * feverMult * (this.spec.mode === 'carnage' && this.time < this.carnage.burstUntil ? 2 : 1);
   }
 
   setTarget(x: number) {
@@ -926,6 +1011,429 @@ export class World {
     this.events.push({ type: 'mechDrop', mech });
   }
 
+  /** 营救传奇英雄入队：最多 4 位英雄在前锋领阵作战 */
+  private spawnAllyHero(kind: HeroKind, fromX: number, fromD: number) {
+    const info = HERO_INFO[kind];
+    if (this.allyHeroes.length >= 4) {
+      // 满编时强化火力并补充 6 名精锐士兵
+      this.squad.count = Math.min(this.countCap, this.squad.count + 6);
+      this.syncSoldiers(false);
+      this.damage *= 1.12;
+      this.events.push({ type: 'banner', text: `【${info.name}】满编晋升！全军 +6 精锐 · 火力 +12%！`, tone: 'info' });
+      return;
+    }
+    const slot = this.allyHeroes.length;
+    const sq = this.squad;
+    const hero: AllyHero = {
+      id: this.nextId++,
+      kind,
+      name: info.name,
+      slot,
+      x: sq.x,
+      d: sq.d + 1.35,
+      yaw: 0,
+      fireTimer: 0.2,
+      skillTimer: 0.9,
+      recoil: 0,
+      phase: slot * 1.3,
+      skillFlash: 1,
+    };
+    this.allyHeroes.push(hero);
+    this.version++;
+    this.events.push({ type: 'heroJoin', hero, x: fromX, d: fromD });
+    this.events.push({ type: 'banner', text: `传奇英雄【${info.name}】营救入队！（${info.title}）`, tone: 'info' });
+  }
+
+  /** 在队伍侧翼空降部署双管自动加特林炮台 */
+  private deployAllyTurret(duration: number, fromX: number, fromD: number) {
+    const sq = this.squad;
+    if (this.allyTurrets.length >= 3) {
+      // 炮台满编时刷新剩余最短炮台的持续时间并加满火力
+      let oldest = this.allyTurrets[0];
+      for (let i = 1; i < this.allyTurrets.length; i++) {
+        if (this.allyTurrets[i].life < oldest.life) oldest = this.allyTurrets[i];
+      }
+      oldest.life = Math.max(oldest.life, duration);
+      oldest.maxLife = Math.max(oldest.maxLife, duration);
+      this.events.push({ type: 'turretDeploy', turret: oldest, x: fromX, d: fromD });
+      return;
+    }
+    const slot = this.allyTurrets.length;
+    const side = slot % 2 === 0 ? -1 : 1;
+    const turret: AllyTurret = {
+      id: this.nextId++,
+      slot,
+      x: Math.max(-TRACK_HALF + 0.9, Math.min(TRACK_HALF - 0.9, sq.x + side * (Math.max(1.3, this.halfWidth + 0.7)))),
+      d: sq.d + 0.55 + Math.floor(slot / 2) * 1.2,
+      yaw: 0,
+      fireTimer: 0.15,
+      spin: 0,
+      recoil: 0,
+      life: duration,
+      maxLife: duration,
+    };
+    this.allyTurrets.push(turret);
+    this.version++;
+    this.events.push({ type: 'turretDeploy', turret, x: fromX, d: fromD });
+  }
+
+  /** 液氮冰冻桶 / 极寒急冻爆发：大范围深度冰封 + 碎冰脆化（0.18× 移速、1.65× 易伤） */
+  private cryoNova(x: number, d: number, radius: number) {
+    const rr = radius * radius;
+    const shatterDmg = (95 + this.squad.tier * 55) * this.damage;
+    let frozen = 0;
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
+      if (!z.alive) continue;
+      const dx = z.x - x;
+      const dd = z.d - d;
+      if (dx * dx + dd * dd > rr + z.r * z.r) continue;
+      z.cryo = 4.5;
+      z.cryoLvl = 4;
+      this.damageZombie(z, shatterDmg);
+      frozen++;
+    }
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
+      if (!b.alive || !b.active) continue;
+      const dx = b.x - x;
+      const dd = b.d - d;
+      if (dx * dx + dd * dd <= (radius + b.r) * (radius + b.r)) {
+        b.cryo = 4.2;
+        b.cryoLvl = 4;
+        this.damageBoss(b, shatterDmg * 1.35);
+        frozen++;
+      }
+    }
+    this.events.push({ type: 'cryoNova', x, d, r: radius, count: frozen });
+  }
+
+  /** 黄金盲盒 / ? 命运门随机爆大奖 */
+  private rollMystery(x: number, d: number) {
+    const sq = this.squad;
+    const roll = this.rng();
+    const heroes: HeroKind[] = ['pyro', 'railgun', 'commander'];
+    if (roll < 0.22) {
+      const missing = heroes.filter((h) => !this.allyHeroes.some((a) => a.kind === h));
+      const pick = missing.length > 0 ? missing[Math.floor(this.rng() * missing.length)] : heroes[Math.floor(this.rng() * heroes.length)];
+      this.spawnAllyHero(pick, x, d);
+      this.events.push({ type: 'mysteryRoll', x, d, label: `SSR · ${HERO_INFO[pick].name}！`, color: HERO_INFO[pick].color });
+    } else if (roll < 0.42) {
+      this.deployAllyTurret(24, x, d);
+      this.events.push({ type: 'mysteryRoll', x, d, label: '空降双管机枪炮台！', color: 0x38bdf8 });
+    } else if (roll < 0.62) {
+      const bonus = Math.max(8, Math.round(sq.count * 0.25));
+      sq.count = Math.min(this.countCap, sq.count + bonus);
+      this.syncSoldiers();
+      this.events.push({ type: 'mysteryRoll', x, d, label: `兵力暴涨 +${bonus}！`, color: 0x22c55e });
+    } else if (roll < 0.78) {
+      if (sq.tier < WEAPONS.length - 1) {
+        sq.tier++;
+        this.events.push({ type: 'mysteryRoll', x, d, label: `武器跃迁 · ${WEAPONS[sq.tier].name}！`, color: 0xfacc15 });
+      } else {
+        this.damage *= 1.25;
+        this.blitz.damageBonus += 25;
+        this.events.push({ type: 'mysteryRoll', x, d, label: '终极超频 · 火力 +25%！', color: 0xf97316 });
+      }
+    } else if (roll < 0.9) {
+      this.launchAirstrike();
+      this.events.push({ type: 'mysteryRoll', x, d, label: '地毯式战机空袭！', color: 0xef4444 });
+    } else {
+      this.cryoNova(sq.x, sq.d + 16, 13);
+      this.addShield(10);
+      this.coins += 120;
+      this.events.push({ type: 'mysteryRoll', x, d, label: '极寒全屏冰冻 + 10 护盾！', color: 0x22d3ee });
+    }
+  }
+
+  /** 生成沿桥面疾驰的黄金武装军火补给车 */
+  private spawnLootTruck(cfg: { hp: number; speed: number; sway: number; coins: number; reward: Reward }, startD: number) {
+    const startX = (this.rng() < 0.5 ? -1 : 1) * 1.1;
+    this.barrels.push({
+      id: this.nextId++,
+      x: startX,
+      d: startD,
+      r: 1.45,
+      hp: cfg.hp,
+      maxHp: cfg.hp,
+      reward: cfg.reward,
+      look: 'truck',
+      truck: { speed: cfg.speed, sway: cfg.sway, swaySpeed: 1.75, coins: cfg.coins },
+      alive: true,
+      bump: 0,
+      armed: false,
+      priced: true,
+      fireTimer: 0,
+      recoil: 0,
+      truckBaseX: 0,
+      truckPhase: this.rng() * Math.PI * 2,
+    });
+    this.version++;
+  }
+
+  private updateSlidingGates(dt: number) {
+    for (let i = 0; i < this.gates.length; i++) {
+      const g = this.gates[i];
+      if (g.consumed || !g.slideAmp || !g.slideSpeed) continue;
+      g.slidePhase = (g.slidePhase ?? 0) + g.slideSpeed * dt;
+      const bx0 = g.baseX0 ?? g.x0;
+      const bx1 = g.baseX1 ?? g.x1;
+      const halfW = (bx1 - bx0) * 0.5;
+      const baseMid = (bx0 + bx1) * 0.5;
+      const rawMid = baseMid + Math.sin(g.slidePhase) * g.slideAmp;
+      const clampedMid = Math.max(-TRACK_HALF + halfW, Math.min(TRACK_HALF - halfW, rawMid));
+      g.x0 = clampedMid - halfW;
+      g.x1 = clampedMid + halfW;
+    }
+  }
+
+  private updateLootTrucks(dt: number) {
+    const sq = this.squad;
+    for (let i = 0; i < this.barrels.length; i++) {
+      const b = this.barrels[i];
+      if (!b.alive || !b.truck) continue;
+      b.d -= b.truck.speed * dt;
+      b.truckPhase = (b.truckPhase ?? 0) + b.truck.swaySpeed * dt;
+      const base = b.truckBaseX ?? 0;
+      b.x = Math.max(-TRACK_HALF + 1.4, Math.min(TRACK_HALF - 1.4, base + Math.sin(b.truckPhase) * b.truck.sway));
+      if (b.d < sq.d - 2.6) {
+        b.alive = false;
+      }
+    }
+  }
+
+  private updateAllyHeroes(dt: number) {
+    if (this.allyHeroes.length === 0 || this.squad.count <= 0) return;
+    const sq = this.squad;
+    const frontTank = this.frontBlitzTank();
+    const count = this.allyHeroes.length;
+    for (let i = 0; i < count; i++) {
+      const h = this.allyHeroes[i];
+      h.phase += dt * (sq.moving ? 10.5 : 5.5);
+      h.recoil = Math.max(0, h.recoil - dt * 6);
+      h.skillFlash = Math.max(0, h.skillFlash - dt * 2.2);
+
+      // 在小队正前方排成锋矢阵型领衔冲锋
+      const spread = count === 1 ? 0 : (i - (count - 1) * 0.5) * 1.15;
+      const tx = Math.max(this.lo + 0.65, Math.min(this.hi - 0.65, sq.x + spread));
+      const td = sq.d + this.front + 0.72 + (i % 2) * 0.25;
+      h.x += (tx - h.x) * Math.min(1, dt * 10);
+      h.d += (td - h.d) * Math.min(1, dt * 12);
+
+      // 自动锁敌（Boss / 敌坦 / 补给车 / 丧尸）
+      let aimX = h.x;
+      let aimD = h.d + 22;
+      let hasTarget = false;
+      let bestScore = -1;
+      for (let bi = 0; bi < this.bosses.length; bi++) {
+        const b = this.bosses[bi];
+        if (!b.alive || !b.active || b.d <= h.d + 0.5 || b.d > h.d + 46) continue;
+        const sc = 500 + (50 - (b.d - h.d));
+        if (sc > bestScore) {
+          bestScore = sc;
+          aimX = b.x;
+          aimD = b.d;
+          hasTarget = true;
+        }
+      }
+      if (!hasTarget && frontTank && frontTank.d > h.d + 1 && frontTank.d < h.d + 40) {
+        aimX = frontTank.x;
+        aimD = frontTank.d;
+        hasTarget = true;
+      }
+      if (!hasTarget) {
+        for (let zi = 0; zi < this.near.length; zi++) {
+          const z = this.near[zi];
+          if (!z.alive || z.d <= h.d + 0.5 || z.d > h.d + 40) continue;
+          const sc = (z.kind === 'giant' ? 120 : z.kind === 'brute' ? 40 : 12) + Math.max(0, 38 - (z.d - h.d));
+          if (sc > bestScore) {
+            bestScore = sc;
+            aimX = z.x;
+            aimD = z.d;
+            hasTarget = true;
+          }
+        }
+      }
+
+      const desiredYaw = hasTarget ? Math.max(-0.8, Math.min(0.8, Math.atan2(aimX - h.x, Math.max(2, aimD - h.d)))) : 0;
+      h.yaw += (desiredYaw - h.yaw) * Math.min(1, dt * 10);
+
+      // 主武器持续射击
+      if (hasTarget) {
+        h.fireTimer -= dt;
+        if (h.fireTimer <= 0) {
+          h.fireTimer = h.kind === 'pyro' ? 0.24 : h.kind === 'railgun' ? 0.42 : 0.28;
+          h.recoil = 0.85;
+          const dx = aimX - h.x;
+          const dd = Math.max(2, aimD - h.d);
+          const len = Math.hypot(dx, dd);
+          const spd = BULLET_SPEED * 1.3;
+          const dmg = (26 + this.squad.tier * 16 + this.squad.count * 0.45) * this.damage;
+          this.bullets.push({
+            x: h.x,
+            d: h.d + 0.45,
+            vx: (dx / len) * spd,
+            vd: (dd / len) * spd,
+            dmg,
+            travel: 0,
+            pierce: h.kind === 'railgun' ? 3 : 1,
+            lastHit: -1,
+            gateHits: 0,
+          });
+        }
+      }
+
+      // 传奇英雄招牌大招
+      h.skillTimer -= dt;
+      if (h.skillTimer <= 0 && (hasTarget || h.kind === 'commander')) {
+        h.skillFlash = 1;
+        h.recoil = 1;
+        if (h.kind === 'pyro') {
+          h.skillTimer = 2.2;
+          const flameDmg = (135 + this.squad.tier * 70 + this.squad.count * 2.5) * this.damage;
+          for (let zi = 0; zi < this.near.length; zi++) {
+            const z = this.near[zi];
+            if (!z.alive) continue;
+            const dd = z.d - h.d;
+            if (dd > 0 && dd < 19 && Math.abs(z.x - h.x) <= 3.6) {
+              this.damageZombie(z, flameDmg);
+            }
+          }
+          for (let bi = 0; bi < this.bosses.length; bi++) {
+            const b = this.bosses[bi];
+            if (!b.alive || !b.active) continue;
+            const dd = b.d - h.d;
+            if (dd > 0 && dd < 21 && Math.abs(b.x - h.x) <= 3.8 + b.r) {
+              this.damageBoss(b, flameDmg * 1.15);
+            }
+          }
+          this.events.push({ type: 'heroSkill', hero: h, kind: 'pyro', x: h.x, d: h.d, tx: h.x, td: h.d + 16 });
+        } else if (h.kind === 'railgun') {
+          h.skillTimer = 2.6;
+          const railDmg = (220 + this.squad.tier * 110 + this.squad.count * 4.2) * this.damage;
+          const beamX = aimX;
+          for (let zi = 0; zi < this.near.length; zi++) {
+            const z = this.near[zi];
+            if (!z.alive || z.d <= h.d || z.d > h.d + 46) continue;
+            if (Math.abs(z.x - beamX) <= 1.45 + z.r) this.damageZombie(z, railDmg);
+          }
+          for (let bi = 0; bi < this.bosses.length; bi++) {
+            const b = this.bosses[bi];
+            if (!b.alive || !b.active || b.d <= h.d) continue;
+            if (Math.abs(b.x - beamX) <= 1.55 + b.r) this.damageBoss(b, railDmg * 1.45);
+          }
+          for (let k = 0; k < this.barrels.length; k++) {
+            const br = this.barrels[k];
+            if (!br.alive || (!br.tank && !br.truck) || br.d <= h.d) continue;
+            if (Math.abs(br.x - beamX) <= 1.5 + br.r) {
+              br.hp -= railDmg * 1.3;
+              br.bump = 1;
+              if (br.hp <= 0) this.breakBarrel(br);
+            }
+          }
+          this.events.push({ type: 'heroSkill', hero: h, kind: 'railgun', x: h.x, d: h.d, tx: beamX, td: Math.max(h.d + 18, aimD) });
+        } else {
+          h.skillTimer = 4.8;
+          this.squad.count = Math.min(this.countCap, this.squad.count + 2);
+          this.syncSoldiers(false);
+          this.addShield(2);
+          this.events.push({ type: 'heroSkill', hero: h, kind: 'commander', x: h.x, d: h.d, tx: sq.x, td: sq.d });
+        }
+      }
+    }
+  }
+
+  private updateAllyTurrets(dt: number) {
+    if (this.allyTurrets.length === 0) return;
+    const sq = this.squad;
+    const frontTank = this.frontBlitzTank();
+    let removed = false;
+    for (let i = this.allyTurrets.length - 1; i >= 0; i--) {
+      const tu = this.allyTurrets[i];
+      tu.life -= dt;
+      if (tu.life <= 0) {
+        this.allyTurrets.splice(i, 1);
+        removed = true;
+        continue;
+      }
+      tu.recoil = Math.max(0, tu.recoil - dt * 8);
+      // 悬浮战术炮台在队伍侧翼伴随机动，确保冲锋/无尽/防线/突袭全模式可用
+      const side = tu.slot % 2 === 0 ? -1 : 1;
+      const row = Math.floor(tu.slot / 2);
+      const tx = Math.max(-TRACK_HALF + 0.85, Math.min(TRACK_HALF - 0.85, sq.x + side * (Math.max(1.35, this.halfWidth + 0.65) + row * 0.45)));
+      const td = sq.d + 0.45 + row * 1.35;
+      tu.x += (tx - tu.x) * Math.min(1, dt * 8);
+      tu.d += (td - tu.d) * Math.min(1, dt * 10);
+
+      let aimX = tu.x;
+      let aimD = tu.d + 20;
+      let hasTarget = false;
+      let bestDist = Infinity;
+      for (let bi = 0; bi < this.bosses.length; bi++) {
+        const b = this.bosses[bi];
+        if (!b.alive || !b.active) continue;
+        const dd = b.d - tu.d;
+        if (dd > 0.5 && dd < 44 && dd < bestDist) {
+          bestDist = dd;
+          aimX = b.x;
+          aimD = b.d;
+          hasTarget = true;
+        }
+      }
+      if (!hasTarget) {
+        for (let zi = 0; zi < this.near.length; zi++) {
+          const z = this.near[zi];
+          if (!z.alive || z.d <= tu.d + 0.5 || z.d > tu.d + 40) continue;
+          const dist = Math.hypot(z.x - tu.x, z.d - tu.d);
+          if (dist < bestDist) {
+            bestDist = dist;
+            aimX = z.x;
+            aimD = z.d;
+            hasTarget = true;
+          }
+        }
+      }
+      if (!hasTarget && frontTank && frontTank.d > tu.d + 1 && frontTank.d < tu.d + 38) {
+        aimX = frontTank.x;
+        aimD = frontTank.d;
+        hasTarget = true;
+      }
+
+      const desiredYaw = hasTarget ? Math.max(-1.0, Math.min(1.0, Math.atan2(aimX - tu.x, Math.max(2, aimD - tu.d)))) : 0;
+      tu.yaw += (desiredYaw - tu.yaw) * Math.min(1, dt * 12);
+
+      if (hasTarget && sq.count > 0) {
+        tu.spin += dt * 22;
+        tu.fireTimer -= dt;
+        if (tu.fireTimer <= 0) {
+          tu.fireTimer = 0.13;
+          tu.recoil = 0.9;
+          const dx = aimX - tu.x;
+          const dd = Math.max(2, aimD - tu.d);
+          const len = Math.hypot(dx, dd);
+          const spd = BULLET_SPEED * 1.25;
+          const dmg = (20 + this.squad.tier * 13 + this.squad.count * 0.35) * this.damage;
+          for (const barrelOff of [-0.14, 0.14]) {
+            this.bullets.push({
+              x: tu.x + barrelOff,
+              d: tu.d + 0.55,
+              vx: (dx / len) * spd + (this.rng() - 0.5) * 1.2,
+              vd: (dd / len) * spd,
+              dmg,
+              travel: 0,
+              pierce: 1,
+              lastHit: -1,
+              gateHits: 0,
+            });
+          }
+        }
+      } else {
+        tu.spin += dt * 2.5;
+      }
+    }
+    if (removed) this.version++;
+  }
+
   update(dt: number) {
     let left = Math.min(dt, 0.1);
     while (left > 1e-6) {
@@ -972,6 +1480,8 @@ export class World {
     const tx = limLo <= limHi ? Math.max(limLo, Math.min(limHi, sq.targetX)) : (this.lo + this.hi) / 2;
     sq.x += (tx - sq.x) * Math.min(1, SQUAD_STEER * (this.opts.steerMult ?? 1) * (this.overdrive.active > 0 ? 1.15 : 1) * dt);
 
+    this.updateSlidingGates(dt);
+    this.updateLootTrucks(dt);
     this.layout(dt);
     this.passGates(prevD);
     this.collectNear();
@@ -979,6 +1489,8 @@ export class World {
     this.updateBullets(dt);
     this.updateRoguelikeSystems(dt);
     this.updateAllyMechs(dt);
+    this.updateAllyHeroes(dt);
+    this.updateAllyTurrets(dt);
     this.updateZombies(dt);
     this.collideBarrels();
     this.updateHazards(dt);
@@ -1001,14 +1513,20 @@ export class World {
     }
   }
 
-  /** 局内肉鸽主动周期系统：轨道离子炮、护盾再生、连击过载衰减与追踪导弹更新 */
+  /** 局内肉鸽主动周期系统：轨道离子炮、护盾再生、连击过载/FEVER衰减与追踪导弹更新 */
   private updateRoguelikeSystems(dt: number) {
     if (this.overdrive.active > 0) {
       this.overdrive.active = Math.max(0, this.overdrive.active - dt);
     }
+    if (this.fever.active > 0) {
+      this.fever.active = Math.max(0, this.fever.active - dt);
+    }
     if (this.overdrive.comboTimer > 0) {
       this.overdrive.comboTimer = Math.max(0, this.overdrive.comboTimer - dt);
-      if (this.overdrive.comboTimer <= 0) this.overdrive.combo = 0;
+      if (this.overdrive.comboTimer <= 0) {
+        this.overdrive.combo = 0;
+        this.fever.nextCombo = 30;
+      }
     }
 
     // 宙斯护盾矩阵：周期再生能量护盾
@@ -1398,6 +1916,10 @@ export class World {
         b.active = true;
         this.bosses.push(b);
         this.events.push({ type: 'bossStart', bosses: [b] });
+        added = true;
+      }
+      if (sp.truck) {
+        this.spawnLootTruck(sp.truck, def.spawnD - 6);
         added = true;
       }
     }
@@ -1941,6 +2463,9 @@ export class World {
         this.bosses.push(b);
         this.events.push({ type: 'bossStart', bosses: [b] });
       }
+      if (sp.truck) {
+        this.spawnLootTruck(sp.truck, d);
+      }
       if (sp.banner) this.events.push({ type: 'banner', text: sp.banner.text, tone: sp.banner.tone });
       added = true;
     }
@@ -2021,7 +2546,10 @@ export class World {
     }
     if (!blocker) {
       for (let i = 0; i < this.gates.length; i++) this.gates[i].d -= v;
-      for (let i = 0; i < this.barrels.length; i++) if (this.barrels[i].alive) this.barrels[i].d -= v;
+      for (let i = 0; i < this.barrels.length; i++) {
+        const b = this.barrels[i];
+        if (b.alive && !b.truck) b.d -= v;
+      }
       return;
     }
     // 障碍前面的东西照常往前；后面的继续滑，挤到障碍身后排成一串（像堵车），复用池对象零分配
@@ -2042,7 +2570,7 @@ export class World {
     }
     for (let i = 0; i < this.barrels.length; i++) {
       const b = this.barrels[i];
-      if (!b.alive || b === blocker) continue;
+      if (!b.alive || b === blocker || b.truck) continue;
       if (b.d < blocker.d) b.d -= v;
       else {
         const entry = this.queuePool[poolIdx] ?? (this.queuePool[poolIdx] = { d: 0, r: 0, item: b });
@@ -2448,6 +2976,12 @@ export class World {
     }
     if (g.carnage === 'recruit') this.carnage.recruits++;
 
+    if (g.kind === 'mystery') {
+      this.rollMystery(sq.x, sq.d);
+      this.events.push({ type: 'gatePass', gate: g, before: 0, after: 1 });
+      return;
+    }
+
     if (g.kind === 'add' || g.kind === 'mul') {
       const before = sq.count;
       sq.count = g.kind === 'add' ? before + g.value : Math.round(before * g.value);
@@ -2468,7 +3002,7 @@ export class World {
   }
 
   private gateHit(g: Gate, hits = 1) {
-    if (g.carnage) {
+    if (g.carnage || g.kind === 'mystery') {
       g.bump = 1;
       return;
     }
@@ -2478,6 +3012,7 @@ export class World {
     g.bump = 1;
     const L = this.spec.level;
     let changed = false;
+    let flippedBonus = 0;
     for (;;) {
       if (g.kind === 'weapon' && g.value >= Math.min(WEAPONS.length - 1, maxWeaponTier(L) + 1)) break;
       if (g.kind === 'rate' && g.value >= RATE_GATE_MAX) break;
@@ -2489,10 +3024,19 @@ export class World {
             : gateStep(L, g.value);
       if (g.hits < step) break;
       g.hits -= step;
+      const wasNeg = g.value <= 0;
       g.value++;
       changed = true;
+      // 经典广告红转蓝大反转：将负数门打穿 0 翻红为绿时，直接奖励额外爆发加成！
+      if (wasNeg && g.value >= 1 && !g.flipped && (g.kind === 'add' || g.kind === 'rate')) {
+        g.flipped = true;
+        const bonus = g.kind === 'add' ? 2 : 6;
+        g.value = g.kind === 'rate' ? Math.min(RATE_GATE_MAX, g.value + bonus) : g.value + bonus;
+        flippedBonus = bonus;
+      }
     }
-    if (changed) this.events.push({ type: 'gateUp', gate: g });
+    if (flippedBonus > 0) this.events.push({ type: 'gateFlip', gate: g, bonus: flippedBonus });
+    else if (changed) this.events.push({ type: 'gateUp', gate: g });
   }
 
   // ---------- 射击 ----------
@@ -2579,7 +3123,7 @@ export class World {
     if (!isBlitz) {
       for (let i = 0; i < this.gates.length; i++) {
         const g = this.gates[i];
-        if (!g.consumed && g.kind !== 'mul' && g.d >= lo && g.d <= hi) this.hitGates.push(g);
+        if (!g.consumed && g.kind !== 'mul' && g.kind !== 'mystery' && g.d >= lo && g.d <= hi) this.hitGates.push(g);
       }
     }
     this.hitBarrels.length = 0;
@@ -2699,14 +3243,16 @@ export class World {
       const critMult = !isCrit ? 1 : ocLvl >= 3 ? 2.8 : ocLvl === 2 ? 2.5 : 2.2;
       const cryoLvl = this.perkLevel('cryo_rounds');
       if (cryoLvl > 0) {
-        z.cryo = 2.6;
-        z.cryoLvl = cryoLvl;
+        if (!z.cryo || z.cryo <= 0 || (z.cryoLvl ?? 0) <= cryoLvl) {
+          z.cryo = Math.max(z.cryo ?? 0, 2.6);
+          z.cryoLvl = cryoLvl;
+        }
       }
-      const brittle = z.cryo && z.cryo > 0 ? 1 + (z.cryoLvl === 3 ? 0.55 : z.cryoLvl === 2 ? 0.38 : 0.22) : 1;
+      const brittle = z.cryo && z.cryo > 0 ? 1 + (z.cryoLvl === 4 ? 0.65 : z.cryoLvl === 3 ? 0.55 : z.cryoLvl === 2 ? 0.38 : 0.22) : 1;
       const damage = b.dmg * critMult * brittle * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1);
       this.damageZombie(z, damage);
       const hitY = z.kind === 'giant' ? 2 : 0.7;
-      this.events.push({ type: 'hit', x: hx, d: hd, y: hitY, target: z.kind === 'giant' ? 'giant' : 'zombie', color: cryoLvl > 0 ? 0x67e8f9 : color, dmg: damage, id: z.id });
+      this.events.push({ type: 'hit', x: hx, d: hd, y: hitY, target: z.kind === 'giant' ? 'giant' : 'zombie', color: cryoLvl > 0 || z.cryoLvl === 4 ? 0x67e8f9 : color, dmg: damage, id: z.id });
       if (isCrit && this.rng() < 0.45) this.events.push({ type: 'critHit', x: hx, d: hd, y: hitY + 0.5, dmg: damage });
       this.splash(hx, hd, b.dmg, z.id);
       this.triggerChainLightning(hx, hd, hitY, damage, z.id);
@@ -2727,13 +3273,15 @@ export class World {
       const critMult = !isCrit ? 1 : ocLvl >= 3 ? 2.8 : ocLvl === 2 ? 2.5 : 2.2;
       const cryoLvl = this.perkLevel('cryo_rounds');
       if (cryoLvl > 0) {
-        boss.cryo = 2.4;
-        boss.cryoLvl = cryoLvl;
+        if (!boss.cryo || boss.cryo <= 0 || (boss.cryoLvl ?? 0) <= cryoLvl) {
+          boss.cryo = Math.max(boss.cryo ?? 0, 2.4);
+          boss.cryoLvl = cryoLvl;
+        }
       }
-      const brittle = boss.cryo && boss.cryo > 0 ? 1 + (boss.cryoLvl === 3 ? 0.55 : boss.cryoLvl === 2 ? 0.38 : 0.22) : 1;
+      const brittle = boss.cryo && boss.cryo > 0 ? 1 + (boss.cryoLvl === 4 ? 0.65 : boss.cryoLvl === 3 ? 0.55 : boss.cryoLvl === 2 ? 0.38 : 0.22) : 1;
       const damage = b.dmg * critMult * brittle * (this.opts.armorMult ?? 1);
       this.damageBoss(boss, damage);
-      this.events.push({ type: 'hit', x: hx, d: hd, y: 2.4, target: 'boss', color: cryoLvl > 0 ? 0x67e8f9 : color, dmg: damage, id: boss.id });
+      this.events.push({ type: 'hit', x: hx, d: hd, y: 2.4, target: 'boss', color: cryoLvl > 0 || boss.cryoLvl === 4 ? 0x67e8f9 : color, dmg: damage, id: boss.id });
       if (isCrit && this.rng() < 0.35) this.events.push({ type: 'critHit', x: hx, d: hd, y: 2.9, dmg: damage });
       this.splash(hx, hd, b.dmg, -1);
       this.triggerChainLightning(hx, hd, 2.2, damage * 0.65, -1);
@@ -2785,6 +3333,14 @@ export class World {
       this.captureTank(br);
       this.events.push({ type: 'banner', text: `已收编【${br.tank.name}】！开上前线协同开火，右路奖励全线释放！`, tone: 'info' });
     }
+    if (br.truck) {
+      const truckCoins = Math.round(br.truck.coins * (this.opts.coinMult ?? 1) * (this.fever.active > 0 ? 2 : 1));
+      this.coins += truckCoins;
+      this.addGems(1, br.x, br.d);
+      this.addXp(40);
+      this.events.push({ type: 'truckBreak', x: br.x, d: br.d, coins: truckCoins });
+      this.events.push({ type: 'banner', text: `黄金武装补给车拦截成功！+${truckCoins} 金币 · +1 钻石！`, tone: 'info' });
+    }
     this.events.push({ type: 'barrelBreak', barrel: br });
     if (br.carnage) {
       this.carnage.shells = Math.min(9999, this.carnage.shells + (br.carnage === 'battery' ? 99 : 20));
@@ -2831,6 +3387,17 @@ export class World {
       this.blitz.buffsCollected++;
     } else if (reward.kind === 'boom') {
       this.blitzBombExplode(x, d, reward.radius);
+    } else if (reward.kind === 'freeze') {
+      this.cryoNova(x, d, reward.radius);
+    } else if (reward.kind === 'hero') {
+      this.spawnAllyHero(reward.hero, x, d);
+      if (isBlitz) this.blitz.buffsCollected++;
+    } else if (reward.kind === 'turret') {
+      this.deployAllyTurret(reward.duration ?? 24, x, d);
+      if (isBlitz) this.blitz.buffsCollected++;
+    } else if (reward.kind === 'mystery') {
+      this.rollMystery(x, d);
+      if (isBlitz) this.blitz.buffsCollected++;
     } else {
       this.launchAirstrike();
       if (isBlitz) this.blitz.buffsCollected++;
@@ -2842,10 +3409,10 @@ export class World {
     const sq = this.squad;
     for (let k = 0; k < this.barrels.length; k++) {
       const br = this.barrels[k];
-      if (!br.alive) continue;
+      if (!br.alive || br.truck) continue;
       if (br.d - br.r > sq.d + this.front + 0.4 || br.d + br.r < sq.d + this.back - 0.4) continue;
-      // 广告奇袭：右路已放行的奖励舱、中路友军安全爆破油桶碰到队伍立刻触发，不误伤己方士兵！
-      if ((br.blitzLane === 'right' && !br.tank) || br.look === 'bomb') {
+      // 广告奇袭：右路已放行的奖励舱、中路友军安全爆破油桶/液氮急冻桶碰到队伍立刻触发，不误伤己方士兵！
+      if ((br.blitzLane === 'right' && !br.tank) || br.look === 'bomb' || br.look === 'cryo') {
         if (Math.abs(sq.x - br.x) <= this.halfWidth + br.r + 0.35) {
           this.breakBarrel(br);
         }
@@ -2881,7 +3448,8 @@ export class World {
   private killZombie(z: Zombie, byPlayer = true, chain = true) {
     if (!z.alive) return;
     z.alive = false;
-    const coins = byPlayer && this.spec.mode !== 'carnage' ? killCoins(z.kind, this.spec.level) * (this.opts.coinMult ?? 1) : 0;
+    const feverCoins = this.fever.active > 0 ? 2 : 1;
+    const coins = byPlayer && this.spec.mode !== 'carnage' ? killCoins(z.kind, this.spec.level) * (this.opts.coinMult ?? 1) * feverCoins : 0;
     if (byPlayer) {
       this.kills += 1;
       if (this.spec.mode === 'carnage') {
@@ -2899,6 +3467,14 @@ export class World {
         this.overdrive.combo++;
         this.overdrive.comboTimer = 3.2;
         if (this.overdrive.combo > this.overdrive.bestCombo) this.overdrive.bestCombo = this.overdrive.combo;
+        // 经典广告连击狂热 FEVER 时刻：30 连击自动引爆 6 秒射速 +25% · 金币 2×
+        if (this.overdrive.combo >= this.fever.nextCombo && this.fever.active <= 0) {
+          this.fever.active = this.fever.duration;
+          this.fever.nextCombo = this.overdrive.combo + 35;
+          this.fever.triggers++;
+          this.events.push({ type: 'feverStart', duration: this.fever.duration, combo: this.overdrive.combo });
+          this.events.push({ type: 'banner', text: `🔥 ${this.overdrive.combo} 连击 · FEVER 狂热时刻！射速 +25% · 2× 金币！`, tone: 'info' });
+        }
         const chargeGain = z.kind === 'giant' ? 14 : z.kind === 'brute' ? 5 : z.kind === 'exploder' ? 3 : 1.6;
         if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + chargeGain);
         // 局内肉鸽经验值
@@ -3025,7 +3601,7 @@ export class World {
       }
       if (z.cryo && z.cryo > 0) {
         z.cryo = Math.max(0, z.cryo - dt);
-        const cMult = z.cryoLvl === 3 ? 0.38 : z.cryoLvl === 2 ? 0.5 : 0.64;
+        const cMult = z.cryoLvl === 4 ? 0.18 : z.cryoLvl === 3 ? 0.38 : z.cryoLvl === 2 ? 0.5 : 0.64;
         if (cMult < slowMult) slowMult = cMult;
       }
       z.phase += dt * slowMult * (z.kind === 'runner' ? 16 : z.kind === 'giant' ? 6 : 11);
@@ -3221,7 +3797,7 @@ export class World {
       let cryoSlow = 1;
       if (b.cryo && b.cryo > 0) {
         b.cryo = Math.max(0, b.cryo - dt);
-        cryoSlow = b.cryoLvl === 3 ? 0.72 : b.cryoLvl === 2 ? 0.8 : 0.88;
+        cryoSlow = b.cryoLvl === 4 ? 0.45 : b.cryoLvl === 3 ? 0.72 : b.cryoLvl === 2 ? 0.8 : 0.88;
       }
       const rage = (b.enraged ? 1.3 : 1) * cryoSlow;
       // 横向跟着队伍，双 Boss 时各守一边；防线还在隔离墙那一段时守在自己的道上
