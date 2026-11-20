@@ -55,6 +55,19 @@ vertexMat.userData.shared = true;
 const _white = new THREE.Color(0xffffff);
 const _wallMat = new THREE.Matrix4();
 
+function sharedGeo<T extends THREE.BufferGeometry>(g: T): T {
+  g.userData.shared = true;
+  return g;
+}
+
+const SHARED_RING_GEO = sharedGeo(new THREE.RingGeometry(0.76, 1, 32));
+const SHARED_GLOW_RING_GEO = sharedGeo(new THREE.RingGeometry(0.5, 0.95, 32));
+const SHARED_DISC_GEO = sharedGeo(new THREE.CircleGeometry(1, 32));
+const SHARED_PLANE_GEO = sharedGeo(new THREE.PlaneGeometry(1, 1));
+const SHARED_HOLO_BEAM_GEO = sharedGeo(new THREE.CylinderGeometry(0.68, 0.96, 3.6, 16, 1, true));
+const SHARED_MECH_BEAM_GEO = sharedGeo(new THREE.CylinderGeometry(0.55, 0.85, 36, 16, 1, true));
+const SHARED_MYSTERY_GEM_GEO = sharedGeo(new THREE.OctahedronGeometry(0.42, 0));
+
 /** 0..1 衰减的弹跳曲线：先冲高再回落 */
 function easePop(k: number): number {
   return k <= 0 ? 0 : Math.sin(k * Math.PI) * (0.6 + 0.4 * k);
@@ -298,6 +311,7 @@ export class BarrelView {
   private readonly isPickupPod: boolean;
   private readonly podBeam?: THREE.Mesh;
   private readonly bombHalo?: THREE.Mesh;
+  private readonly bombHaloRadius: number = 1;
   private flyT = -1;
   private readonly flyFrom = new THREE.Vector3();
   /** 每个桶自己一份材质，被打时单独闪白 */
@@ -405,8 +419,9 @@ export class BarrelView {
       // 坦克与黄金补给车自带顶部血条与名牌，无需重复悬空图标遮挡车身
       this.reward.visible = false;
       if (barrel.truck) {
+        this.bombHaloRadius = 1.92;
         this.bombHalo = new THREE.Mesh(
-          new THREE.RingGeometry(1.55, 1.92, 32),
+          SHARED_RING_GEO,
           new THREE.MeshBasicMaterial({
             color: 0xfacc15,
             transparent: true,
@@ -418,6 +433,7 @@ export class BarrelView {
         );
         this.bombHalo.rotation.x = -Math.PI / 2;
         this.bombHalo.position.y = 0.06;
+        this.bombHalo.scale.setScalar(this.bombHaloRadius);
         this.group.add(this.bombHalo);
       }
     } else if (r.kind === 'weapon') {
@@ -515,8 +531,9 @@ export class BarrelView {
       s.position.y = 0.42;
       this.reward.add(s);
       // 地面警示爆破圈
+      this.bombHaloRadius = 1.48;
       this.bombHalo = new THREE.Mesh(
-        new THREE.RingGeometry(1.15, 1.48, 28),
+        SHARED_RING_GEO,
         new THREE.MeshBasicMaterial({
           color: 0xff3b30,
           transparent: true,
@@ -528,6 +545,7 @@ export class BarrelView {
       );
       this.bombHalo.rotation.x = -Math.PI / 2;
       this.bombHalo.position.y = 0.06;
+      this.bombHalo.scale.setScalar(this.bombHaloRadius);
       this.group.add(this.bombHalo);
     } else if (r.kind === 'freeze') {
       this.reward.add(glowRing(0x38bdf8));
@@ -536,8 +554,9 @@ export class BarrelView {
       const s = labelSprite(this.rewardLabel, 1.95, 0.74, false);
       s.position.y = 0.44;
       this.reward.add(s);
+      this.bombHaloRadius = 1.5;
       this.bombHalo = new THREE.Mesh(
-        new THREE.RingGeometry(1.15, 1.5, 28),
+        SHARED_RING_GEO,
         new THREE.MeshBasicMaterial({
           color: 0x38bdf8,
           transparent: true,
@@ -549,6 +568,7 @@ export class BarrelView {
       );
       this.bombHalo.rotation.x = -Math.PI / 2;
       this.bombHalo.position.y = 0.06;
+      this.bombHalo.scale.setScalar(this.bombHaloRadius);
       this.group.add(this.bombHalo);
     } else if (r.kind === 'hero') {
       const info = HERO_INFO[r.hero];
@@ -579,7 +599,7 @@ export class BarrelView {
       this.reward.add(s);
     } else if (r.kind === 'mystery') {
       beamColor = 0xa855f7;
-      const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.42, 0), new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xa855f7, emissiveIntensity: 0.45, roughness: 0.25, metalness: 0.6 }));
+      const gem = new THREE.Mesh(SHARED_MYSTERY_GEM_GEO, new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xa855f7, emissiveIntensity: 0.45, roughness: 0.25, metalness: 0.6 }));
       gem.castShadow = true;
       this.reward.add(gem);
       this.reward.add(glowRing(0xa855f7));
@@ -633,6 +653,11 @@ export class BarrelView {
   /** 缩放后的世界空间顶面高度（渲染器放特效/火花用） */
   get worldTopY(): number {
     return this.topY * ITEM_SCALE;
+  }
+
+  /** 奖励是否正在飞向小队（屏幕外不可见桶可跳过 update，但飞行中的奖励仍需更新） */
+  get isFlying(): boolean {
+    return this.flyT >= 0;
   }
 
   /** 桶被打爆后奖励飞向队伍 */
@@ -719,7 +744,7 @@ export class BarrelView {
       }
       if (this.bombHalo) {
         const sc = 0.9 + Math.sin(time * 7 + b.id) * 0.18;
-        this.bombHalo.scale.setScalar(sc);
+        this.bombHalo.scale.setScalar(this.bombHaloRadius * sc);
         (this.bombHalo.material as THREE.MeshBasicMaterial).opacity = 0.22 + Math.max(0, Math.sin(time * 7 + b.id)) * 0.24;
       }
       return;
@@ -749,7 +774,7 @@ export class BarrelView {
 
 function holoBeam(color: number): THREE.Mesh {
   const beam = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.68, 0.96, 3.6, 16, 1, true),
+    SHARED_HOLO_BEAM_GEO,
     new THREE.MeshBasicMaterial({
       color,
       transparent: true,
@@ -765,7 +790,7 @@ function holoBeam(color: number): THREE.Mesh {
 
 function glowRing(color: number): THREE.Mesh {
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.5, 0.95, 32),
+    SHARED_GLOW_RING_GEO,
     new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   );
   ring.rotation.x = -Math.PI / 2;
@@ -780,9 +805,9 @@ export class BossStrikeView {
   readonly group = new THREE.Group();
   private readonly fillMat = new THREE.MeshBasicMaterial({ color: 0xff2424, transparent: true, opacity: 0.25, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
   private readonly edgeMat = new THREE.MeshBasicMaterial({ color: 0xffb047, transparent: true, opacity: 0.9, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
-  private readonly fill = new THREE.Mesh(new THREE.PlaneGeometry(BOSS_STRIKE_HALF * 2, 1), this.fillMat);
+  private readonly fill = new THREE.Mesh(SHARED_PLANE_GEO, this.fillMat);
   private readonly edges = [-1, 1].map((side) => {
-    const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 1), this.edgeMat);
+    const edge = new THREE.Mesh(SHARED_PLANE_GEO, this.edgeMat);
     edge.position.x = side * BOSS_STRIKE_HALF;
     return edge;
   });
@@ -791,10 +816,12 @@ export class BossStrikeView {
     this.group.visible = false;
     this.fill.position.y = 0.04;
     this.fill.rotation.x = -Math.PI / 2;
+    this.fill.scale.set(BOSS_STRIKE_HALF * 2, 1, 1);
     this.fill.renderOrder = 15;
     for (const edge of this.edges) {
       edge.position.y = 0.05;
       edge.rotation.x = -Math.PI / 2;
+      edge.scale.set(0.09, 1, 1);
       edge.renderOrder = 16;
     }
     this.group.add(this.fill, ...this.edges);
@@ -806,8 +833,8 @@ export class BossStrikeView {
     this.group.visible = b.alive && b.active && b.attacking;
     if (!this.group.visible) return;
     this.group.position.set(b.attackX, 0, -b.attackD);
-    this.fill.scale.y = b.attackLength;
-    for (const edge of this.edges) edge.scale.y = b.attackLength;
+    this.fill.scale.set(BOSS_STRIKE_HALF * 2, b.attackLength, 1);
+    for (const edge of this.edges) edge.scale.set(0.09, b.attackLength, 1);
     this.fillMat.opacity = 0.16 + b.windup * 0.25;
     this.edgeMat.opacity = 0.55 + b.windup * 0.4;
   }
@@ -1073,6 +1100,7 @@ export class ProjectileView {
   private readonly fill: THREE.Mesh;
   private readonly ring: THREE.Mesh;
   private readonly skull: THREE.Mesh;
+  private readonly radius: number;
 
   constructor(
     scene: THREE.Scene,
@@ -1080,6 +1108,7 @@ export class ProjectileView {
     radius: number,
     barrelGeom?: THREE.BufferGeometry | null,
   ) {
+    this.radius = radius;
     if (barrelGeom) {
       const mesh = new THREE.Mesh(barrelGeom, vertexMat);
       mesh.scale.setScalar(ITEM_SCALE);
@@ -1090,22 +1119,25 @@ export class ProjectileView {
       this.drum.scale.setScalar(1.4 * ITEM_SCALE);
     }
     const mat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
-    this.fill = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), mat);
+    this.fill = new THREE.Mesh(SHARED_DISC_GEO, mat);
     this.fill.rotation.x = -Math.PI / 2;
+    this.fill.scale.setScalar(radius * 0.05);
     this.fill.renderOrder = 15;
     this.ring = new THREE.Mesh(
-      new THREE.RingGeometry(radius - 0.16, radius, 48),
+      SHARED_RING_GEO,
       new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.9, depthWrite: false, depthTest: false }),
     );
     this.ring.renderOrder = 16;
     this.ring.rotation.x = -Math.PI / 2;
+    this.ring.scale.setScalar(radius);
     this.fill.position.set(proj.tx, 0.05, -proj.td);
     this.ring.position.set(proj.tx, 0.06, -proj.td);
     this.skull = new THREE.Mesh(
-      new THREE.PlaneGeometry(radius * 0.8, radius * 0.8),
+      SHARED_PLANE_GEO,
       new THREE.MeshBasicMaterial({ map: skullMark(), transparent: true, opacity: 0.9, depthWrite: false, depthTest: false }),
     );
     this.skull.rotation.x = -Math.PI / 2;
+    this.skull.scale.setScalar(radius * 0.8);
     this.skull.renderOrder = 17;
     this.skull.position.set(proj.tx, 0.07, -proj.td);
     this.group.add(this.drum, this.fill, this.ring, this.skull);
@@ -1120,12 +1152,12 @@ export class ProjectileView {
     const y = 5 + Math.sin(k * Math.PI) * 9 - k * 4.5;
     this.drum.position.set(x, Math.max(0.4, y), -d);
     this.drum.rotation.set(k * 9, 0, k * 6);
-    this.fill.scale.setScalar(Math.max(0.05, k));
+    this.fill.scale.setScalar(this.radius * Math.max(0.05, k));
     const fillMat = this.fill.material as THREE.MeshBasicMaterial;
     fillMat.opacity = 0.25 + k * 0.3;
     const blink = Math.abs(Math.sin(k * k * 28));
     (this.ring.material as THREE.MeshBasicMaterial).opacity = 0.55 + 0.45 * blink;
-    this.ring.scale.setScalar(1 + (1 - blink) * 0.04);
+    this.ring.scale.setScalar(this.radius * (1 + (1 - blink) * 0.04));
     (this.skull.material as THREE.MeshBasicMaterial).opacity = 0.5 + 0.5 * blink;
   }
 
@@ -1148,10 +1180,11 @@ export class StrikeView {
     this.missile = new THREE.Mesh(missileGeometry(), vertexMat);
     this.missile.scale.setScalar(1.6 * ITEM_SCALE);
     this.mark = new THREE.Mesh(
-      new THREE.RingGeometry(1.2, 1.45, 32),
+      SHARED_RING_GEO,
       new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.85, depthWrite: false }),
     );
     this.mark.rotation.x = -Math.PI / 2;
+    this.mark.scale.setScalar(1.45);
     this.group.add(this.missile, this.mark);
     scene.add(this.group);
   }
@@ -1212,9 +1245,10 @@ export class AllyTankView {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    this.halo = new THREE.Mesh(new THREE.RingGeometry(tank.r * 1.05, tank.r * 1.38, 32), this.haloMat);
+    this.halo = new THREE.Mesh(SHARED_RING_GEO, this.haloMat);
     this.halo.rotation.x = -Math.PI / 2;
     this.halo.position.y = 0.06;
+    this.halo.scale.setScalar(tank.r * 1.38);
     this.group.add(this.halo);
 
     this.badge.set(tank.twin ? '友军双管坦' : '友军重坦', {
@@ -1245,7 +1279,7 @@ export class AllyTankView {
     const glow = Math.max(t.captureGlow * 0.52, t.recoil * 0.18);
     this.mat.emissive.setRGB(glow * 0.2, glow * 0.48, glow * 0.72);
     const ringScale = 1 + t.captureGlow * 0.45 + Math.sin(time * 5 + t.id) * 0.04;
-    this.halo.scale.setScalar(ringScale);
+    this.halo.scale.setScalar(t.r * 1.38 * ringScale);
     this.haloMat.opacity = 0.26 + t.captureGlow * 0.34 + Math.sin(time * 4 + t.id) * 0.06;
     this.badgeSprite.position.y = (t.r / 1.5) * 2.55 + Math.sin(time * 3 + t.id) * 0.08;
   }
@@ -1316,13 +1350,14 @@ export class AllyMechView {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    this.halo = new THREE.Mesh(new THREE.RingGeometry(0.92, 1.24, 32), this.haloMat);
+    this.halo = new THREE.Mesh(SHARED_RING_GEO, this.haloMat);
     this.halo.rotation.x = -Math.PI / 2;
     this.halo.position.y = 0.06;
+    this.halo.scale.setScalar(1.24);
     this.group.add(this.halo);
 
     this.dropBeam = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.55, 0.85, 36, 16, 1, true),
+      SHARED_MECH_BEAM_GEO,
       new THREE.MeshBasicMaterial({
         color: 0x38bdf8,
         transparent: true,
@@ -1356,14 +1391,14 @@ export class AllyMechView {
       this.body.position.y = k * k * 28;
       this.dropBeam.visible = true;
       (this.dropBeam.material as THREE.MeshBasicMaterial).opacity = Math.max(0.05, k * 0.45);
-      this.halo.scale.setScalar(1 + k * 0.7);
+      this.halo.scale.setScalar(1.24 * (1 + k * 0.7));
     } else {
       const stride = Math.sin(m.phase) * 0.45;
       this.body.position.y = Math.abs(Math.sin(m.phase)) * 0.09;
       this.legL.rotation.x = stride;
       this.legR.rotation.x = -stride;
       this.dropBeam.visible = false;
-      this.halo.scale.setScalar(1 + Math.sin(time * 5 + m.id) * 0.05);
+      this.halo.scale.setScalar(1.24 * (1 + Math.sin(time * 5 + m.id) * 0.05));
     }
     this.upper.rotation.y = -m.yaw;
     this.armL.position.z = -0.04 + m.recoil * 0.24;
@@ -1417,9 +1452,10 @@ export class AllyHeroView {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    this.halo = new THREE.Mesh(new THREE.RingGeometry(0.45, 0.72, 28), this.haloMat);
+    this.halo = new THREE.Mesh(SHARED_RING_GEO, this.haloMat);
     this.halo.rotation.x = -Math.PI / 2;
     this.halo.position.y = 0.05;
+    this.halo.scale.setScalar(0.72);
     this.group.add(this.halo);
 
     this.badge.set(info.name, {
@@ -1445,7 +1481,7 @@ export class AllyHeroView {
 
     const glow = Math.max(h.skillFlash * 0.55, h.recoil * 0.22);
     this.mat.emissive.copy(this.accent).multiplyScalar(glow);
-    this.halo.scale.setScalar(1 + h.skillFlash * 0.55 + Math.sin(time * 5 + h.id) * 0.06);
+    this.halo.scale.setScalar(0.72 * (1 + h.skillFlash * 0.55 + Math.sin(time * 5 + h.id) * 0.06));
     this.haloMat.opacity = 0.28 + h.skillFlash * 0.4 + Math.sin(time * 4 + h.id) * 0.06;
     this.badgeSprite.position.y = 1.95 + stride + Math.sin(time * 3.5 + h.id) * 0.05;
   }
@@ -1500,9 +1536,10 @@ export class AllyTurretView {
       depthWrite: false,
       side: THREE.DoubleSide,
     });
-    this.halo = new THREE.Mesh(new THREE.RingGeometry(0.62, 0.82, 24), this.haloMat);
+    this.halo = new THREE.Mesh(SHARED_RING_GEO, this.haloMat);
     this.halo.rotation.x = -Math.PI / 2;
     this.halo.position.y = 0.05;
+    this.halo.scale.setScalar(0.82);
     this.group.add(this.halo);
 
     scene.add(this.group);
@@ -1518,7 +1555,7 @@ export class AllyTurretView {
     const ratio = tu.maxLife > 0 ? Math.max(0, Math.min(1, tu.life / tu.maxLife)) : 1;
     const glow = tu.recoil * 0.3;
     this.mat.emissive.setRGB(glow * 0.2, glow * 0.55, glow * 0.85);
-    this.halo.scale.setScalar(0.65 + ratio * 0.45);
+    this.halo.scale.setScalar(0.82 * (0.65 + ratio * 0.45));
     this.haloMat.opacity = ratio < 0.2 ? 0.15 + Math.abs(Math.sin(time * 14)) * 0.45 : 0.26 + Math.sin(time * 4 + tu.id) * 0.06;
   }
 

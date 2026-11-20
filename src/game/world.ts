@@ -493,6 +493,8 @@ export class World {
   private readonly queuePool: QueueEntry[] = [];
   private readonly queueScratch: QueueEntry[] = [];
   private readonly carnageTargets: Zombie[] = [];
+  /** 连锁闪电 / 轨道激光复用的已命中目标集合（热路径零 Set 分配） */
+  private readonly scratchHitIds = new Set<number>();
   private pruneT = 0;
   private readonly zombieSpeed: number;
   private damage: number;
@@ -1131,7 +1133,7 @@ export class World {
       this.deployAllyTurret(24, x, d);
       this.events.push({ type: 'mysteryRoll', x, d, label: '空降双管机枪炮台！', color: 0x38bdf8 });
     } else if (roll < 0.62) {
-      const bonus = Math.max(8, Math.round(sq.count * 0.25));
+      const bonus = Math.max(6, Math.round(sq.count * 0.18));
       sq.count = Math.min(this.countCap, sq.count + bonus);
       this.syncSoldiers();
       this.events.push({ type: 'mysteryRoll', x, d, label: `兵力暴涨 +${bonus}！`, color: 0x22c55e });
@@ -1211,10 +1213,21 @@ export class World {
     }
   }
 
+  /** 查找当前射程内最近的逃逸黄金补给车（友军英雄与炮台集火拦截） */
+  private activeLootTruck(minD: number, maxD: number): Barrel | null {
+    let best: Barrel | null = null;
+    for (let i = 0; i < this.barrels.length; i++) {
+      const br = this.barrels[i];
+      if (br.alive && br.truck && br.d > minD && br.d < maxD && (!best || br.d < best.d)) best = br;
+    }
+    return best;
+  }
+
   private updateAllyHeroes(dt: number) {
     if (this.allyHeroes.length === 0 || this.squad.count <= 0) return;
     const sq = this.squad;
     const frontTank = this.frontBlitzTank();
+    const truck = this.activeLootTruck(sq.d + 0.5, sq.d + 42);
     const count = this.allyHeroes.length;
     for (let i = 0; i < count; i++) {
       const h = this.allyHeroes[i];
@@ -1229,20 +1242,27 @@ export class World {
       h.x += (tx - h.x) * Math.min(1, dt * 10);
       h.d += (td - h.d) * Math.min(1, dt * 12);
 
-      // 自动锁敌（Boss / 敌坦 / 补给车 / 丧尸）
+      // 自动锁敌（逃逸补给车 / Boss / 敌坦 / 丧尸）
       let aimX = h.x;
       let aimD = h.d + 22;
       let hasTarget = false;
       let bestScore = -1;
-      for (let bi = 0; bi < this.bosses.length; bi++) {
-        const b = this.bosses[bi];
-        if (!b.alive || !b.active || b.d <= h.d + 0.5 || b.d > h.d + 46) continue;
-        const sc = 500 + (50 - (b.d - h.d));
-        if (sc > bestScore) {
-          bestScore = sc;
-          aimX = b.x;
-          aimD = b.d;
-          hasTarget = true;
+      if (truck && truck.d > h.d + 0.5 && truck.d < h.d + 40) {
+        aimX = truck.x;
+        aimD = truck.d;
+        hasTarget = true;
+      }
+      if (!hasTarget) {
+        for (let bi = 0; bi < this.bosses.length; bi++) {
+          const b = this.bosses[bi];
+          if (!b.alive || !b.active || b.d <= h.d + 0.5 || b.d > h.d + 46) continue;
+          const sc = 500 + (50 - (b.d - h.d));
+          if (sc > bestScore) {
+            bestScore = sc;
+            aimX = b.x;
+            aimD = b.d;
+            hasTarget = true;
+          }
         }
       }
       if (!hasTarget && frontTank && frontTank.d > h.d + 1 && frontTank.d < h.d + 40) {
@@ -1267,28 +1287,18 @@ export class World {
       const desiredYaw = hasTarget ? Math.max(-0.8, Math.min(0.8, Math.atan2(aimX - h.x, Math.max(2, aimD - h.d)))) : 0;
       h.yaw += (desiredYaw - h.yaw) * Math.min(1, dt * 10);
 
-      // 主武器持续射击
+      // 主武器持续射击（复用子弹对象池）
       if (hasTarget) {
         h.fireTimer -= dt;
         if (h.fireTimer <= 0) {
-          h.fireTimer = h.kind === 'pyro' ? 0.24 : h.kind === 'railgun' ? 0.42 : 0.28;
+          h.fireTimer = h.kind === 'pyro' ? 0.25 : h.kind === 'railgun' ? 0.44 : 0.3;
           h.recoil = 0.85;
           const dx = aimX - h.x;
           const dd = Math.max(2, aimD - h.d);
           const len = Math.hypot(dx, dd);
           const spd = BULLET_SPEED * 1.3;
-          const dmg = (26 + this.squad.tier * 16 + this.squad.count * 0.45) * this.damage;
-          this.bullets.push({
-            x: h.x,
-            d: h.d + 0.45,
-            vx: (dx / len) * spd,
-            vd: (dd / len) * spd,
-            dmg,
-            travel: 0,
-            pierce: h.kind === 'railgun' ? 3 : 1,
-            lastHit: -1,
-            gateHits: 0,
-          });
+          const dmg = (24 + this.squad.tier * 14 + this.squad.count * 0.28) * this.damage;
+          this.spawnBullet(h.x, h.d + 0.45, (dx / len) * spd, (dd / len) * spd, dmg, h.kind === 'railgun' ? 3 : 1, 0);
         }
       }
 
@@ -1298,8 +1308,8 @@ export class World {
         h.skillFlash = 1;
         h.recoil = 1;
         if (h.kind === 'pyro') {
-          h.skillTimer = 2.2;
-          const flameDmg = (135 + this.squad.tier * 70 + this.squad.count * 2.5) * this.damage;
+          h.skillTimer = 2.4;
+          const flameDmg = (120 + this.squad.tier * 60 + this.squad.count * 1.8) * this.damage;
           for (let zi = 0; zi < this.near.length; zi++) {
             const z = this.near[zi];
             if (!z.alive) continue;
@@ -1313,13 +1323,13 @@ export class World {
             if (!b.alive || !b.active) continue;
             const dd = b.d - h.d;
             if (dd > 0 && dd < 21 && Math.abs(b.x - h.x) <= 3.8 + b.r) {
-              this.damageBoss(b, flameDmg * 1.15);
+              this.damageBoss(b, flameDmg * 1.1);
             }
           }
           this.events.push({ type: 'heroSkill', hero: h, kind: 'pyro', x: h.x, d: h.d, tx: h.x, td: h.d + 16 });
         } else if (h.kind === 'railgun') {
-          h.skillTimer = 2.6;
-          const railDmg = (220 + this.squad.tier * 110 + this.squad.count * 4.2) * this.damage;
+          h.skillTimer = 2.8;
+          const railDmg = (195 + this.squad.tier * 95 + this.squad.count * 3.0) * this.damage;
           const beamX = aimX;
           for (let zi = 0; zi < this.near.length; zi++) {
             const z = this.near[zi];
@@ -1329,21 +1339,21 @@ export class World {
           for (let bi = 0; bi < this.bosses.length; bi++) {
             const b = this.bosses[bi];
             if (!b.alive || !b.active || b.d <= h.d) continue;
-            if (Math.abs(b.x - beamX) <= 1.55 + b.r) this.damageBoss(b, railDmg * 1.45);
+            if (Math.abs(b.x - beamX) <= 1.55 + b.r) this.damageBoss(b, railDmg * 1.35);
           }
           for (let k = 0; k < this.barrels.length; k++) {
             const br = this.barrels[k];
             if (!br.alive || (!br.tank && !br.truck) || br.d <= h.d) continue;
             if (Math.abs(br.x - beamX) <= 1.5 + br.r) {
-              br.hp -= railDmg * 1.3;
+              br.hp -= railDmg * 1.25;
               br.bump = 1;
               if (br.hp <= 0) this.breakBarrel(br);
             }
           }
           this.events.push({ type: 'heroSkill', hero: h, kind: 'railgun', x: h.x, d: h.d, tx: beamX, td: Math.max(h.d + 18, aimD) });
         } else {
-          h.skillTimer = 4.8;
-          this.squad.count = Math.min(this.countCap, this.squad.count + 2);
+          h.skillTimer = 5.4;
+          this.squad.count = Math.min(this.countCap, this.squad.count + 1);
           this.syncSoldiers(false);
           this.addShield(2);
           this.events.push({ type: 'heroSkill', hero: h, kind: 'commander', x: h.x, d: h.d, tx: sq.x, td: sq.d });
@@ -1356,12 +1366,15 @@ export class World {
     if (this.allyTurrets.length === 0) return;
     const sq = this.squad;
     const frontTank = this.frontBlitzTank();
+    const truck = this.activeLootTruck(sq.d + 0.5, sq.d + 40);
     let removed = false;
     for (let i = this.allyTurrets.length - 1; i >= 0; i--) {
       const tu = this.allyTurrets[i];
       tu.life -= dt;
       if (tu.life <= 0) {
-        this.allyTurrets.splice(i, 1);
+        const last = this.allyTurrets.length - 1;
+        if (i !== last) this.allyTurrets[i] = this.allyTurrets[last];
+        this.allyTurrets.pop();
         removed = true;
         continue;
       }
@@ -1377,25 +1390,35 @@ export class World {
       let aimX = tu.x;
       let aimD = tu.d + 20;
       let hasTarget = false;
-      let bestDist = Infinity;
-      for (let bi = 0; bi < this.bosses.length; bi++) {
-        const b = this.bosses[bi];
-        if (!b.alive || !b.active) continue;
-        const dd = b.d - tu.d;
-        if (dd > 0.5 && dd < 44 && dd < bestDist) {
-          bestDist = dd;
-          aimX = b.x;
-          aimD = b.d;
-          hasTarget = true;
+      let bestDist2 = Infinity;
+      if (truck && truck.d > tu.d + 0.5 && truck.d < tu.d + 38) {
+        aimX = truck.x;
+        aimD = truck.d;
+        hasTarget = true;
+      }
+      if (!hasTarget) {
+        let bestBossD = Infinity;
+        for (let bi = 0; bi < this.bosses.length; bi++) {
+          const b = this.bosses[bi];
+          if (!b.alive || !b.active) continue;
+          const dd = b.d - tu.d;
+          if (dd > 0.5 && dd < 44 && dd < bestBossD) {
+            bestBossD = dd;
+            aimX = b.x;
+            aimD = b.d;
+            hasTarget = true;
+          }
         }
       }
       if (!hasTarget) {
         for (let zi = 0; zi < this.near.length; zi++) {
           const z = this.near[zi];
           if (!z.alive || z.d <= tu.d + 0.5 || z.d > tu.d + 40) continue;
-          const dist = Math.hypot(z.x - tu.x, z.d - tu.d);
-          if (dist < bestDist) {
-            bestDist = dist;
+          const dx = z.x - tu.x;
+          const dd = z.d - tu.d;
+          const d2 = dx * dx + dd * dd;
+          if (d2 < bestDist2) {
+            bestDist2 = d2;
             aimX = z.x;
             aimD = z.d;
             hasTarget = true;
@@ -1415,26 +1438,17 @@ export class World {
         tu.spin += dt * 22;
         tu.fireTimer -= dt;
         if (tu.fireTimer <= 0) {
-          tu.fireTimer = 0.13;
+          tu.fireTimer = 0.14;
           tu.recoil = 0.9;
           const dx = aimX - tu.x;
           const dd = Math.max(2, aimD - tu.d);
           const len = Math.hypot(dx, dd);
           const spd = BULLET_SPEED * 1.25;
-          const dmg = (20 + this.squad.tier * 13 + this.squad.count * 0.35) * this.damage;
-          for (const barrelOff of [-0.14, 0.14]) {
-            this.bullets.push({
-              x: tu.x + barrelOff,
-              d: tu.d + 0.55,
-              vx: (dx / len) * spd + (this.rng() - 0.5) * 1.2,
-              vd: (dd / len) * spd,
-              dmg,
-              travel: 0,
-              pierce: 1,
-              lastHit: -1,
-              gateHits: 0,
-            });
-          }
+          const dmg = (18 + this.squad.tier * 11 + this.squad.count * 0.22) * this.damage;
+          const vxBase = (dx / len) * spd;
+          const vd = (dd / len) * spd;
+          this.spawnBullet(tu.x - 0.14, tu.d + 0.55, vxBase + (this.rng() - 0.5) * 1.2, vd, dmg, 1, 0);
+          this.spawnBullet(tu.x + 0.14, tu.d + 0.55, vxBase + (this.rng() - 0.5) * 1.2, vd, dmg, 1, 0);
         }
       } else {
         tu.spin += dt * 2.5;
@@ -1580,8 +1594,9 @@ export class World {
   private fireOrbitalLaser(level: number): boolean {
     const beams = level >= 3 ? 2 : 1;
     const radius = level === 1 ? 3.2 : level === 2 ? 4.0 : 4.4;
-    const baseDmg = (260 + this.squad.tier * 140 + this.squad.count * 6) * this.damage * (level === 1 ? 1 : level === 2 ? 1.5 : 1.75);
-    const usedIds = new Set<number>();
+    const baseDmg = (230 + this.squad.tier * 125 + this.squad.count * 4.5) * this.damage * (level === 1 ? 1 : level === 2 ? 1.45 : 1.68);
+    const usedIds = this.scratchHitIds;
+    usedIds.clear();
     let fired = false;
 
     for (let k = 0; k < beams; k++) {
@@ -1606,7 +1621,7 @@ export class World {
       if (!found) {
         for (let i = 0; i < this.barrels.length; i++) {
           const br = this.barrels[i];
-          if (!br.alive || !br.tank || br.d > this.squad.d + 46 || usedIds.has(br.id)) continue;
+          if (!br.alive || (!br.tank && !br.truck) || br.d > this.squad.d + 46 || usedIds.has(br.id)) continue;
           const sc = 5000 + br.hp;
           if (sc > bestScore) {
             bestScore = sc;
@@ -1640,9 +1655,11 @@ export class World {
       for (let i = 0; i < this.near.length; i++) {
         const z = this.near[i];
         if (!z.alive) continue;
-        const dx = z.x - tx;
         const dd = z.d - td;
-        if (dx * dx + dd * dd <= (radius + z.r) * (radius + z.r)) {
+        const lim = radius + z.r;
+        if (Math.abs(dd) > lim) continue;
+        const dx = z.x - tx;
+        if (dx * dx + dd * dd <= lim * lim) {
           this.damageZombie(z, baseDmg);
         }
       }
@@ -1651,13 +1668,14 @@ export class World {
         if (!b.alive || !b.active) continue;
         const dx = b.x - tx;
         const dd = b.d - td;
-        if (dx * dx + dd * dd <= (radius + b.r) * (radius + b.r)) {
-          this.damageBoss(b, baseDmg * 1.45);
+        const lim = radius + b.r;
+        if (dx * dx + dd * dd <= lim * lim) {
+          this.damageBoss(b, baseDmg * 1.38);
         }
       }
       for (let i = 0; i < this.barrels.length; i++) {
         const br = this.barrels[i];
-        if (!br.alive || !br.tank) continue;
+        if (!br.alive || (!br.tank && !br.truck)) continue;
         const dx = br.x - tx;
         const dd = br.d - td;
         if (dx * dx + dd * dd <= rr + br.r * br.r) {
@@ -1674,8 +1692,9 @@ export class World {
     if (this.allyMechs.length === 0 || this.squad.count <= 0) return;
     const sq = this.squad;
     const lvl = Math.max(1, this.perkLevel('mech_drop'));
-    const dmgScale = lvl === 1 ? 1 : lvl === 2 ? 1.35 : 1.65;
-    const missileInterval = lvl >= 3 ? 1.6 : 2.5;
+    const dmgScale = lvl === 1 ? 1 : lvl === 2 ? 1.32 : 1.6;
+    const missileInterval = lvl >= 3 ? 1.75 : 2.6;
+    const truck = this.activeLootTruck(sq.d + 0.5, sq.d + 44);
 
     for (let i = 0; i < this.allyMechs.length; i++) {
       const m = this.allyMechs[i];
@@ -1708,29 +1727,39 @@ export class World {
       m.x += (tx - m.x) * Math.min(1, dt * 7.5);
       m.d += (td - m.d) * Math.min(1, dt * 9);
 
-      // 自动锁敌（优先 Boss / 敌方坦克 / 近处丧尸）
+      // 自动锁敌（优先逃逸补给车 / Boss / 近处丧尸）
       let aimX = m.x;
       let aimD = m.d + 20;
       let targetFound = false;
-      let bestDist = Infinity;
-      for (let bi = 0; bi < this.bosses.length; bi++) {
-        const b = this.bosses[bi];
-        if (!b.alive || !b.active) continue;
-        const dd = b.d - m.d;
-        if (dd > 1 && dd < 46 && dd < bestDist) {
-          bestDist = dd;
-          aimX = b.x;
-          aimD = b.d;
-          targetFound = true;
+      if (truck && truck.d > m.d + 1 && truck.d < m.d + 44) {
+        aimX = truck.x;
+        aimD = truck.d;
+        targetFound = true;
+      }
+      if (!targetFound) {
+        let bestBossD = Infinity;
+        for (let bi = 0; bi < this.bosses.length; bi++) {
+          const b = this.bosses[bi];
+          if (!b.alive || !b.active) continue;
+          const dd = b.d - m.d;
+          if (dd > 1 && dd < 46 && dd < bestBossD) {
+            bestBossD = dd;
+            aimX = b.x;
+            aimD = b.d;
+            targetFound = true;
+          }
         }
       }
       if (!targetFound) {
+        let bestDist2 = Infinity;
         for (let zi = 0; zi < this.near.length; zi++) {
           const z = this.near[zi];
           if (!z.alive || z.d <= m.d + 1.5 || z.d > m.d + 44) continue;
-          const dist = Math.hypot(z.x - m.x, z.d - m.d);
-          if (dist < bestDist) {
-            bestDist = dist;
+          const dx = z.x - m.x;
+          const dd = z.d - m.d;
+          const d2 = dx * dx + dd * dd;
+          if (d2 < bestDist2) {
+            bestDist2 = d2;
             aimX = z.x;
             aimD = z.d;
             targetFound = true;
@@ -1742,10 +1771,10 @@ export class World {
       m.yaw += (desiredYaw - m.yaw) * Math.min(1, dt * 10);
 
       if (!targetFound) continue;
-      // 双臂旋转机炮高速扫射（真实发射穿透高威子弹）
+      // 双臂旋转机炮高速扫射（真实发射穿透高威子弹，复用对象池）
       m.fireTimer -= dt;
       if (m.fireTimer <= 0) {
-        m.fireTimer = 0.14;
+        m.fireTimer = 0.15;
         m.recoil = 1;
         const speed = BULLET_SPEED * 1.2;
         const dx = aimX - m.x;
@@ -1753,27 +1782,17 @@ export class World {
         const len = Math.hypot(dx, dd);
         const vx = (dx / len) * speed + randRange(this.rng, -1.2, 1.2);
         const vd = (dd / len) * speed;
-        const dmg = (14 + this.squad.tier * 7) * this.damage * dmgScale;
-        for (const arm of [-0.36, 0.36]) {
-          const nb = this.bulletPool.pop() ?? ({} as Bullet);
-          nb.x = m.x + arm;
-          nb.d = m.d + 0.5;
-          nb.vx = vx;
-          nb.vd = vd;
-          nb.dmg = dmg;
-          nb.gateHits = 0;
-          nb.travel = 0;
-          nb.pierce = Math.max(1, this.ammo.pierce);
-          nb.lastHit = -1;
-          this.bullets.push(nb);
-        }
+        const dmg = (13 + this.squad.tier * 6.5) * this.damage * dmgScale;
+        const pierce = Math.max(1, this.ammo.pierce);
+        this.spawnBullet(m.x - 0.36, m.d + 0.5, vx, vd, dmg, pierce, 0);
+        this.spawnBullet(m.x + 0.36, m.d + 0.5, vx, vd, dmg, pierce, 0);
       }
 
       // 肩部追踪导弹齐射
       m.missileTimer -= dt;
       if (m.missileTimer <= 0) {
         m.missileTimer = missileInterval;
-        const mdmg = (95 + this.squad.tier * 55) * this.damage * dmgScale;
+        const mdmg = (90 + this.squad.tier * 50) * this.damage * dmgScale;
         this.rockets.push({
           x0: m.x,
           d0: m.d,
@@ -1792,16 +1811,19 @@ export class World {
     for (let i = 0; i < this.near.length; i++) {
       const z = this.near[i];
       if (!z.alive) continue;
-      const dx = z.x - x;
       const dd = z.d - d;
-      if (dx * dx + dd * dd <= (2.8 + z.r) * (2.8 + z.r)) this.damageZombie(z, damage);
+      const lim = 2.8 + z.r;
+      if (Math.abs(dd) > lim) continue;
+      const dx = z.x - x;
+      if (dx * dx + dd * dd <= lim * lim) this.damageZombie(z, damage);
     }
     for (let i = 0; i < this.bosses.length; i++) {
       const b = this.bosses[i];
       if (!b.alive || !b.active) continue;
       const dx = b.x - x;
       const dd = b.d - d;
-      if (dx * dx + dd * dd <= (2.8 + b.r) * (2.8 + b.r)) this.damageBoss(b, damage * 1.3);
+      const lim = 2.8 + b.r;
+      if (dx * dx + dd * dd <= lim * lim) this.damageBoss(b, damage * 1.25);
     }
   }
 
@@ -1812,17 +1834,20 @@ export class World {
     if (this.rng() > chance) return;
     const bounces = lvl === 1 ? 3 : lvl === 2 ? 5 : 7;
     const arcDmg = baseDmg * (lvl === 1 ? 0.85 : lvl === 2 ? 1.25 : 1.55);
-    const hitIds = new Set<number>([skipId]);
-    const pts: { x: number; d: number; y: number }[] = [{ x: sx, d: sd, y: sy }];
+    const hitIds = this.scratchHitIds;
+    hitIds.clear();
+    hitIds.add(skipId);
+    let pts: { x: number; d: number; y: number }[] | null = null;
     let cx = sx;
     let cd = sd;
+    const spatial = this.zSpatial;
+    const bins = spatial.bins;
 
     for (let b = 0; b < bounces; b++) {
+      if (!spatial.queryRange(cd - 6, cd + 6)) break;
       let bestZ: Zombie | null = null;
       let bestD2 = 34; // 约 5.8m 跳跃半径
-      const [b0, b1] = this.zSpatial.range(cd - 6, cd + 6);
-      const bins = this.zSpatial.bins;
-      for (let bi = b0; bi <= b1; bi++) {
+      for (let bi = spatial.r0; bi <= spatial.r1; bi++) {
         const bin = bins[bi];
         for (let k = 0; k < bin.length; k++) {
           const z = bin[k];
@@ -1839,11 +1864,12 @@ export class World {
       if (!bestZ) break;
       hitIds.add(bestZ.id);
       this.damageZombie(bestZ, arcDmg);
+      if (!pts) pts = [{ x: sx, d: sd, y: sy }];
       pts.push({ x: bestZ.x, d: bestZ.d, y: bestZ.kind === 'giant' ? 1.8 : 0.85 });
       cx = bestZ.x;
       cd = bestZ.d;
     }
-    if (pts.length >= 2) {
+    if (pts) {
       this.events.push({ type: 'lightningArc', points: pts });
     }
   }
@@ -1855,17 +1881,20 @@ export class World {
     if (this.rng() > chance) return;
     const radius = lvl === 1 ? 2.1 : lvl === 2 ? 2.7 : 3.2;
     const blastDmg = baseDmg * (lvl === 1 ? 0.9 : lvl === 2 ? 1.25 : 1.55);
-    const [b0, b1] = this.zSpatial.range(d - radius - 1, d + radius + 1);
-    const bins = this.zSpatial.bins;
-    for (let bi = b0; bi <= b1; bi++) {
-      const bin = bins[bi];
-      for (let k = 0; k < bin.length; k++) {
-        const z = bin[k];
-        if (!z.alive || z.id === skipId) continue;
-        const dx = z.x - x;
-        const dd = z.d - d;
-        if (dx * dx + dd * dd <= (radius + z.r) * (radius + z.r)) {
-          this.damageZombie(z, blastDmg);
+    const spatial = this.zSpatial;
+    if (spatial.queryRange(d - radius - 1, d + radius + 1)) {
+      const bins = spatial.bins;
+      for (let bi = spatial.r0; bi <= spatial.r1; bi++) {
+        const bin = bins[bi];
+        for (let k = 0; k < bin.length; k++) {
+          const z = bin[k];
+          if (!z.alive || z.id === skipId) continue;
+          const dx = z.x - x;
+          const dd = z.d - d;
+          const lim = radius + z.r;
+          if (dx * dx + dd * dd <= lim * lim) {
+            this.damageZombie(z, blastDmg);
+          }
         }
       }
     }
@@ -3040,7 +3069,7 @@ export class World {
       const wasNeg = g.value <= 0;
       g.value++;
       changed = true;
-      // 经典广告红转蓝大反转：将负数门打穿 0 翻红为绿时，直接奖励额外爆发加成！
+      // 经典广告红转蓝大反转：将负数门打穿 0 翻红为绿时，直接奖励额外爆发加成、过载充能与战术经验！
       if (wasNeg && g.value >= 1 && !g.flipped && (g.kind === 'add' || g.kind === 'rate')) {
         g.flipped = true;
         const bonus = g.kind === 'add' ? 2 : 6;
@@ -3048,11 +3077,49 @@ export class World {
         flippedBonus = bonus;
       }
     }
-    if (flippedBonus > 0) this.events.push({ type: 'gateFlip', gate: g, bonus: flippedBonus });
-    else if (changed) this.events.push({ type: 'gateUp', gate: g });
+    if (flippedBonus > 0) {
+      if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + 12);
+      this.addXp(16);
+      this.events.push({ type: 'gateFlip', gate: g, bonus: flippedBonus });
+    } else if (changed) {
+      this.events.push({ type: 'gateUp', gate: g });
+    }
   }
 
   // ---------- 射击 ----------
+
+  /** 统一从对象池生成子弹，避免各友军模块在热循环中反复分配新对象 */
+  private spawnBullet(x: number, d: number, vx: number, vd: number, dmg: number, pierce: number, gateHits: number) {
+    const nb = this.bulletPool.pop() ?? ({} as Bullet);
+    nb.x = x;
+    nb.d = d;
+    nb.vx = vx;
+    nb.vd = vd;
+    nb.dmg = dmg;
+    nb.gateHits = gateHits;
+    nb.travel = 0;
+    nb.pierce = pierce;
+    nb.lastHit = -1;
+    this.bullets.push(nb);
+  }
+
+  /** 统一结算超频暴击与急冻易伤倍率（丧尸与 Boss 共用，单一数据源零重复） */
+  private applyHitModifiers(target: { cryo?: number; cryoLvl?: number }, cryoDur: number): { mult: number; isCrit: boolean; isCryo: boolean } {
+    const ocLvl = this.perkLevel('overclock');
+    const odOn = this.overdrive.active > 0;
+    const critChance = odOn ? 1 : ocLvl === 0 ? 0 : ocLvl === 1 ? 0.26 : ocLvl === 2 ? 0.42 : 0.58;
+    const isCrit = critChance > 0 && this.rng() < critChance;
+    const critMult = !isCrit ? 1 : ocLvl >= 3 ? 2.8 : ocLvl === 2 ? 2.5 : 2.2;
+    const cryoLvl = this.perkLevel('cryo_rounds');
+    if (cryoLvl > 0) {
+      if (!target.cryo || target.cryo <= 0 || (target.cryoLvl ?? 0) <= cryoLvl) {
+        target.cryo = Math.max(target.cryo ?? 0, cryoDur);
+        target.cryoLvl = cryoLvl;
+      }
+    }
+    const brittle = target.cryo && target.cryo > 0 ? 1 + (target.cryoLvl === 4 ? 0.65 : target.cryoLvl === 3 ? 0.55 : target.cryoLvl === 2 ? 0.38 : 0.22) : 1;
+    return { mult: critMult * brittle, isCrit, isCryo: cryoLvl > 0 || target.cryoLvl === 4 };
+  }
 
   private collectNear() {
     const lo = this.squad.d + this.back - (this.defense ? 14 : 4);
@@ -3112,17 +3179,7 @@ export class World {
           vd = Math.sqrt(Math.max(1, speed * speed - vx * vx));
         }
       }
-      const nb = this.bulletPool.pop() ?? ({} as Bullet);
-      nb.x = x;
-      nb.d = d;
-      nb.vx = vx;
-      nb.vd = vd;
-      nb.dmg = dmg;
-      nb.gateHits = gateHits;
-      nb.travel = 0;
-      nb.pierce = this.ammo.pierce;
-      nb.lastHit = -1;
-      this.bullets.push(nb);
+      this.spawnBullet(x, d, vx, vd, dmg, this.ammo.pierce, gateHits);
     }
   }
 
@@ -3167,7 +3224,7 @@ export class World {
         if (b.travel > BULLET_RANGE || Math.abs(b.x) > TRACK_HALF + 3) hit = true;
       }
       if (hit) {
-        this.bulletPool.push(b);
+        if (this.bulletPool.length < 1200) this.bulletPool.push(b);
         bullets[i] = bullets[bullets.length - 1];
         bullets.pop();
       }
@@ -3206,19 +3263,21 @@ export class World {
         target = br;
       }
     }
-    // 只看子弹这一步路径附近的几个桶
-    const [b0, b1] = this.zSpatial.range(dmin, dmax);
-    const bins = this.zSpatial.bins;
-    for (let bi = b0; bi <= b1; bi++) {
-      const bin = bins[bi];
-      for (let k = 0; k < bin.length; k++) {
-        const z = bin[k];
-        if (!z.alive || z.id === b.lastHit || z.d + z.r < dmin || z.d - z.r > dmax) continue;
-        const t = segCircle(b.x, b.d, dx, dd, z.x, z.d, z.r);
-        if (t >= 0 && t < bestT) {
-          bestT = t;
-          kind = 3;
-          target = z;
+    // 只看子弹这一步路径附近的几个桶（零分配查询）
+    const spatial = this.zSpatial;
+    if (spatial.queryRange(dmin, dmax)) {
+      const bins = spatial.bins;
+      for (let bi = spatial.r0; bi <= spatial.r1; bi++) {
+        const bin = bins[bi];
+        for (let k = 0; k < bin.length; k++) {
+          const z = bin[k];
+          if (!z.alive || z.id === b.lastHit || z.d + z.r < dmin || z.d - z.r > dmax) continue;
+          const t = segCircle(b.x, b.d, dx, dd, z.x, z.d, z.r);
+          if (t >= 0 && t < bestT) {
+            bestT = t;
+            kind = 3;
+            target = z;
+          }
         }
       }
     }
@@ -3249,23 +3308,11 @@ export class World {
       if (br.hp <= 0) this.breakBarrel(br);
     } else if (kind === 3) {
       const z = target as Zombie;
-      const ocLvl = this.perkLevel('overclock');
-      const odOn = this.overdrive.active > 0;
-      const critChance = odOn ? 1 : ocLvl === 0 ? 0 : ocLvl === 1 ? 0.26 : ocLvl === 2 ? 0.42 : 0.58;
-      const isCrit = critChance > 0 && this.rng() < critChance;
-      const critMult = !isCrit ? 1 : ocLvl >= 3 ? 2.8 : ocLvl === 2 ? 2.5 : 2.2;
-      const cryoLvl = this.perkLevel('cryo_rounds');
-      if (cryoLvl > 0) {
-        if (!z.cryo || z.cryo <= 0 || (z.cryoLvl ?? 0) <= cryoLvl) {
-          z.cryo = Math.max(z.cryo ?? 0, 2.6);
-          z.cryoLvl = cryoLvl;
-        }
-      }
-      const brittle = z.cryo && z.cryo > 0 ? 1 + (z.cryoLvl === 4 ? 0.65 : z.cryoLvl === 3 ? 0.55 : z.cryoLvl === 2 ? 0.38 : 0.22) : 1;
-      const damage = b.dmg * critMult * brittle * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1);
+      const { mult, isCrit, isCryo } = this.applyHitModifiers(z, 2.6);
+      const damage = b.dmg * mult * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1);
       this.damageZombie(z, damage);
       const hitY = z.kind === 'giant' ? 2 : 0.7;
-      this.events.push({ type: 'hit', x: hx, d: hd, y: hitY, target: z.kind === 'giant' ? 'giant' : 'zombie', color: cryoLvl > 0 || z.cryoLvl === 4 ? 0x67e8f9 : color, dmg: damage, id: z.id });
+      this.events.push({ type: 'hit', x: hx, d: hd, y: hitY, target: z.kind === 'giant' ? 'giant' : 'zombie', color: isCryo ? 0x67e8f9 : color, dmg: damage, id: z.id });
       if (isCrit && this.rng() < 0.45) this.events.push({ type: 'critHit', x: hx, d: hd, y: hitY + 0.5, dmg: damage });
       this.splash(hx, hd, b.dmg, z.id);
       this.triggerChainLightning(hx, hd, hitY, damage, z.id);
@@ -3279,22 +3326,10 @@ export class World {
       }
     } else {
       const boss = target as Boss;
-      const ocLvl = this.perkLevel('overclock');
-      const odOn = this.overdrive.active > 0;
-      const critChance = odOn ? 1 : ocLvl === 0 ? 0 : ocLvl === 1 ? 0.26 : ocLvl === 2 ? 0.42 : 0.58;
-      const isCrit = critChance > 0 && this.rng() < critChance;
-      const critMult = !isCrit ? 1 : ocLvl >= 3 ? 2.8 : ocLvl === 2 ? 2.5 : 2.2;
-      const cryoLvl = this.perkLevel('cryo_rounds');
-      if (cryoLvl > 0) {
-        if (!boss.cryo || boss.cryo <= 0 || (boss.cryoLvl ?? 0) <= cryoLvl) {
-          boss.cryo = Math.max(boss.cryo ?? 0, 2.4);
-          boss.cryoLvl = cryoLvl;
-        }
-      }
-      const brittle = boss.cryo && boss.cryo > 0 ? 1 + (boss.cryoLvl === 4 ? 0.65 : boss.cryoLvl === 3 ? 0.55 : boss.cryoLvl === 2 ? 0.38 : 0.22) : 1;
-      const damage = b.dmg * critMult * brittle * (this.opts.armorMult ?? 1);
+      const { mult, isCrit, isCryo } = this.applyHitModifiers(boss, 2.4);
+      const damage = b.dmg * mult * (this.opts.armorMult ?? 1);
       this.damageBoss(boss, damage);
-      this.events.push({ type: 'hit', x: hx, d: hd, y: 2.4, target: 'boss', color: cryoLvl > 0 || boss.cryoLvl === 4 ? 0x67e8f9 : color, dmg: damage, id: boss.id });
+      this.events.push({ type: 'hit', x: hx, d: hd, y: 2.4, target: 'boss', color: isCryo ? 0x67e8f9 : color, dmg: damage, id: boss.id });
       if (isCrit && this.rng() < 0.35) this.events.push({ type: 'critHit', x: hx, d: hd, y: 2.9, dmg: damage });
       this.splash(hx, hd, b.dmg, -1);
       this.triggerChainLightning(hx, hd, 2.2, damage * 0.65, -1);
@@ -3303,26 +3338,28 @@ export class World {
     return true;
   }
 
-  /** 爆裂弹/电磁弹：打中处一圈的丧尸也掉血（复用已构建的纵向空间分桶，避免全表扫描 near） */
+  /** 爆裂弹/电磁弹：打中处一圈的丧尸也掉血（零分配复用已构建的纵向空间分桶） */
   private splash(x: number, d: number, dmg: number, skip: number) {
     const a = this.ammo;
     if (a.splash <= 0) return;
     const isEmp = a.name === '电磁弹';
     const r2 = a.splash * a.splash;
     let hit = false;
-    const [b0, b1] = this.zSpatial.range(d - a.splash - 1.2, d + a.splash + 1.2);
-    const bins = this.zSpatial.bins;
-    for (let bi = b0; bi <= b1; bi++) {
-      const bin = bins[bi];
-      for (let k = 0; k < bin.length; k++) {
-        const z = bin[k];
-        if (!z.alive || z.id === skip) continue;
-        const dx = z.x - x;
-        const dd = z.d - d;
-        if (dx * dx + dd * dd > r2 + z.r * z.r) continue;
-        this.damageZombie(z, dmg * a.splashDmg * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1));
-        if (isEmp && z.alive) z.slow = 1.6;
-        hit = true;
+    const spatial = this.zSpatial;
+    if (spatial.queryRange(d - a.splash - 1.2, d + a.splash + 1.2)) {
+      const bins = spatial.bins;
+      for (let bi = spatial.r0; bi <= spatial.r1; bi++) {
+        const bin = bins[bi];
+        for (let k = 0; k < bin.length; k++) {
+          const z = bin[k];
+          if (!z.alive || z.id === skip) continue;
+          const dx = z.x - x;
+          const dd = z.d - d;
+          if (dx * dx + dd * dd > r2 + z.r * z.r) continue;
+          this.damageZombie(z, dmg * a.splashDmg * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1));
+          if (isEmp && z.alive) z.slow = 1.6;
+          hit = true;
+        }
       }
     }
     const visChance = this.spec.mode === 'blitz' ? 0.72 : 0.4;

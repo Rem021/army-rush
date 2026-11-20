@@ -245,12 +245,15 @@ export class GameRenderer {
   private jetT = -1;
   private jetX = 0;
   private readonly blitzLanes: THREE.Group;
-  private readonly blitzChevrons: THREE.Mesh[] = [];
+  private readonly blitzChevronMesh: THREE.InstancedMesh;
+  private readonly blitzChevronQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, Math.PI / 2));
+  private readonly blitzChevronScale = new THREE.Vector3(1.2, 1.8, 1);
   private shieldFlash = 0;
   private ammoName = '';
   private lastBadgeX = NaN;
   private lastBadgeY = NaN;
   private lastBadgeOpacity = '';
+  private lastBadgePulse = 0;
   private time = 0;
   private width = 1;
   private height = 1;
@@ -267,6 +270,8 @@ export class GameRenderer {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 0.96;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -467,15 +472,22 @@ export class GameRenderer {
     this.blitzLanes = new THREE.Group();
     const laneMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, transparent: true, opacity: 0.26, depthWrite: false });
     const dashGeo = new THREE.PlaneGeometry(0.12, 2.2);
+    const dashQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+    const dashMesh = new THREE.InstancedMesh(dashGeo, laneMat, 40);
+    let di = 0;
     for (const lx of [-1.85, 1.85]) {
       for (let d = -2; d < 64; d += 4.2) {
-        const dash = new THREE.Mesh(dashGeo, laneMat);
-        dash.rotation.x = -Math.PI / 2;
-        dash.position.set(lx, 0.025, -d);
-        this.blitzLanes.add(dash);
+        _mPos.set(lx, 0.025, -d);
+        _mMat.compose(_mPos, dashQuat, _mScale);
+        dashMesh.setMatrixAt(di++, _mMat);
       }
     }
-    // 左路高速 +1 传送带流动箭头（视觉提示左路门高速滑来！）
+    dashMesh.count = di;
+    dashMesh.frustumCulled = false;
+    dashMesh.instanceMatrix.needsUpdate = true;
+    this.blitzLanes.add(dashMesh);
+
+    // 左路高速 +1 传送带流动箭头（单次实例化合批渲染，节省 11 个 Draw Call）
     const chevMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
@@ -485,15 +497,17 @@ export class GameRenderer {
       side: THREE.DoubleSide,
     });
     const chevGeo = new THREE.RingGeometry(0.45, 0.68, 3);
+    this.blitzChevronMesh = new THREE.InstancedMesh(chevGeo, chevMat, 12);
+    this.blitzChevronMesh.frustumCulled = false;
+    this.blitzChevronMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     for (let i = 0; i < 12; i++) {
-      const ch = new THREE.Mesh(chevGeo, chevMat);
-      ch.rotation.x = -Math.PI / 2;
-      ch.rotation.z = Math.PI / 2;
-      ch.scale.set(1.2, 1.8, 1);
-      ch.position.set(-3.6, 0.03, -i * 5.2);
-      this.blitzLanes.add(ch);
-      this.blitzChevrons.push(ch);
+      _mPos.set(-3.6, 0.03, -i * 5.2);
+      _mMat.compose(_mPos, this.blitzChevronQuat, this.blitzChevronScale);
+      this.blitzChevronMesh.setMatrixAt(i, _mMat);
     }
+    this.blitzChevronMesh.count = 12;
+    this.blitzChevronMesh.instanceMatrix.needsUpdate = true;
+    this.blitzLanes.add(this.blitzChevronMesh);
     this.blitzLanes.visible = false;
     this.scene.add(this.blitzLanes);
 
@@ -513,7 +527,9 @@ export class GameRenderer {
     this.applyPixelRatio();
     this.renderer.setSize(w, h, false);
     this.composer?.setSize(w, h);
-    this.bloomPass?.resolution.set(w, h);
+    // Bloom 在半分辨率下计算，视觉柔和一致且 GPU 填充率直降 75%
+    this.bloomPass?.resolution.set(Math.max(1, Math.floor(w * 0.5)), Math.max(1, Math.floor(h * 0.5)));
+    this.renderer.shadowMap.needsUpdate = true;
     this.camera.aspect = w / h;
     this.camera.fov = w / h < 0.8 ? 58 : w / h < 1.2 ? 50 : 44;
     this.camera.updateProjectionMatrix();
@@ -521,7 +537,7 @@ export class GameRenderer {
   }
 
   private applyPixelRatio() {
-    const k = [1, 0.8, 0.62][this.quality];
+    const k = [1, 0.85, 0.65][this.quality];
     const pr = Math.max(0.5, this.basePixelRatio * k);
     this.renderer.setPixelRatio(pr);
     this.composer?.setPixelRatio(pr);
@@ -550,7 +566,8 @@ export class GameRenderer {
     this.applyPixelRatio();
     this.renderer.setSize(this.width, this.height, false);
     this.composer?.setSize(this.width, this.height);
-    this.bloomPass?.resolution.set(this.width, this.height);
+    this.bloomPass?.resolution.set(Math.max(1, Math.floor(this.width * 0.5)), Math.max(1, Math.floor(this.height * 0.5)));
+    this.renderer.shadowMap.needsUpdate = true;
     const shadows = q < 2;
     if (this.sun.castShadow !== shadows) {
       this.sun.castShadow = shadows;
@@ -636,6 +653,7 @@ export class GameRenderer {
   loadLevel(world: World) {
     this.world = world;
     this.clearNormalViews();
+    this.renderer.shadowMap.needsUpdate = true;
     this.lastBadgeOpacity = '';
     this.blitzLanes.visible = world.spec.mode === 'blitz';
     if (world.spec.mode === 'carnage') {
@@ -1408,6 +1426,7 @@ export class GameRenderer {
     }
     const w = this.world;
     if (!w) return;
+    if (dt > 0 || realDt > 0) this.renderer.shadowMap.needsUpdate = true;
     this.time += dt;
     this.syncViews();
     this.syncTier(w.squad.tier);
@@ -1514,12 +1533,16 @@ export class GameRenderer {
     // 广告奇袭专属 + 全模式空投泰坦机甲 / 护盾罩 / 过载光环 / 追踪导弹
     const isBlitz = w.spec.mode === 'blitz';
     if (isBlitz) {
-      // 左路高速 +1 传送带流动箭头
-      const span = 12 * 5.2;
-      for (let i = 0; i < this.blitzChevrons.length; i++) {
-        const ch = this.blitzChevrons[i];
-        const raw = ((i * 5.2 - t * 7.8) % span + span) % span;
-        ch.position.z = -(raw - 2);
+      // 左路高速 +1 传送带流动箭头（实例化单批更新，静止帧跳过矩阵上传）
+      if (dt > 0) {
+        const span = 12 * 5.2;
+        for (let i = 0; i < 12; i++) {
+          const raw = ((i * 5.2 - t * 7.8) % span + span) % span;
+          _mPos.set(-3.6, 0.03, -(raw - 2));
+          _mMat.compose(_mPos, this.blitzChevronQuat, this.blitzChevronScale);
+          this.blitzChevronMesh.setMatrixAt(i, _mMat);
+        }
+        this.blitzChevronMesh.instanceMatrix.needsUpdate = true;
       }
       // 友军收编坦克更新 + 进场履带能量火花
       for (const view of this.allyTanks.values()) {
@@ -1738,10 +1761,12 @@ export class GameRenderer {
       v.update(dt, t);
     }
     for (const v of this.barrels.values()) {
-      v.group.visible = v.barrel.d > sq.d - 15 && v.barrel.d < Math.min(sq.d + VIEW_AHEAD + 30, queueFar);
+      const visible = v.barrel.d > sq.d - 15 && v.barrel.d < Math.min(sq.d + VIEW_AHEAD + 30, queueFar);
+      v.group.visible = visible;
+      if (!visible && !v.isFlying) continue;
       v.update(dt, t, this.squadPos);
       const b = v.barrel;
-      if (!b.alive || !v.group.visible) continue;
+      if (!b.alive || !visible) continue;
       const stage = v.consumeStage();
       if (stage) {
         this.debris.burst(b.x, v.worldTopY * 0.6, -b.d + b.r * 0.5 * ITEM_SCALE, 12 + stage * 5, 6.8, 0.85, (0.19 + stage * 0.03) * ITEM_SCALE, BARREL_STAGE_COLS, 20, 0.6);
@@ -1782,37 +1807,33 @@ export class GameRenderer {
     }
     for (const v of this.bossStrikes.values()) v.update();
 
-    for (const [id, v] of this.projectiles) {
-      let active = false;
-      for (let i = 0; i < w.projectiles.length; i++) {
-        if (w.projectiles[i].id === id) {
-          active = true;
-          break;
+    if (this.projectiles.size > 0) {
+      const seen = this.seenIds;
+      seen.clear();
+      for (let i = 0; i < w.projectiles.length; i++) seen.add(w.projectiles[i].id);
+      for (const [id, v] of this.projectiles) {
+        if (seen.has(id)) v.update();
+        else {
+          v.dispose();
+          this.projectiles.delete(id);
         }
-      }
-      if (active) v.update();
-      else {
-        v.dispose();
-        this.projectiles.delete(id);
       }
     }
-    for (const [id, v] of this.strikes) {
-      let active = false;
-      for (let i = 0; i < w.strikes.length; i++) {
-        if (w.strikes[i].id === id) {
-          active = true;
-          break;
+    if (this.strikes.size > 0) {
+      const seen = this.seenIds;
+      seen.clear();
+      for (let i = 0; i < w.strikes.length; i++) seen.add(w.strikes[i].id);
+      for (const [id, v] of this.strikes) {
+        if (seen.has(id)) {
+          v.update();
+          if (dt > 0 && Math.random() < 0.6 && v.strike.t > 0) {
+            const k = v.strike.t / v.strike.T;
+            this.explosions.spawn(v.strike.x + (1 - k) * 4, 26 * (1 - k) + 1.2, -(v.strike.d - 1.5) + (1 - k) * 6, 0.35, true);
+          }
+        } else {
+          v.dispose();
+          this.strikes.delete(id);
         }
-      }
-      if (active) {
-        v.update();
-        if (Math.random() < 0.6 && v.strike.t > 0) {
-          const k = v.strike.t / v.strike.T;
-          this.explosions.spawn(v.strike.x + (1 - k) * 4, 26 * (1 - k) + 1.2, -(v.strike.d - 1.5) + (1 - k) * 6, 0.35, true);
-        }
-      } else {
-        v.dispose();
-        this.strikes.delete(id);
       }
     }
 
@@ -2023,9 +2044,11 @@ export class GameRenderer {
     const text = formatNumber(sq.count);
     if (this.badge.textContent !== text) {
       this.badge.textContent = text;
-      this.badge.classList.remove('pulse');
-      void this.badge.offsetWidth;
-      this.badge.classList.add('pulse');
+      const now = performance.now();
+      if (!this.reducedMotion && now - this.lastBadgePulse >= 220 && typeof this.badge.animate === 'function') {
+        this.lastBadgePulse = now;
+        this.badge.animate([{ scale: '1' }, { scale: '1.18' }, { scale: '1' }], { duration: 220, easing: 'ease-out' });
+      }
     }
   }
 
@@ -2033,7 +2056,7 @@ export class GameRenderer {
     if (this.contextLost) return;
     const tRender = performance.now();
     if (this.world?.spec.mode === 'carnage') this.referenceCarnage!.render(this.renderer);
-    else if (this.quality < 2 && this.composer) this.composer.render();
+    else if (this.quality === 0 && this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
     this.perf.render = this.perf.render * 0.95 + (performance.now() - tRender) * 0.05;
     this.perf.calls = this.renderer.info.render.calls;

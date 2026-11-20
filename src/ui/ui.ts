@@ -174,7 +174,6 @@ export class UI {
   private readonly hudFillEl: HTMLElement;
   private readonly hudMarksEl: HTMLElement;
   private readonly hudCoinsEl: HTMLElement;
-  private readonly hudCoinsPill: HTMLElement;
   private readonly hudCoinsIcon: HTMLElement;
   private readonly hudGemsEl: HTMLElement;
   private readonly hudGemsPill: HTMLElement;
@@ -289,6 +288,8 @@ export class UI {
   private weaponUpReturn: Animation | null = null;
   private evolveTimer = 0;
   private flying = 0;
+  private readonly pulseAt = { combo: 0, coins: 0, gems: 0 };
+  private readonly flyTargetCache = new Map<string, { x: number; y: number }>();
 
   constructor(
     root: HTMLElement,
@@ -464,7 +465,6 @@ export class UI {
     this.hudFillEl = el(root, '#hud-fill');
     this.hudMarksEl = el(root, '#hud-marks');
     this.hudCoinsEl = el(root, '#hud-coins');
-    this.hudCoinsPill = el(root, '.hud-coins');
     this.hudCoinsIcon = el(root, '.hud-coins .coin-ico');
     this.hudGemsEl = el(root, '#hud-gems');
     this.hudGemsPill = el(root, '#hud-gems-pill');
@@ -651,6 +651,21 @@ export class UI {
         else if (toggle.dataset.toggle === 'sensitivity') h.cycleSensitivity();
       }
     });
+    window.addEventListener('resize', () => this.flyTargetCache.clear(), { passive: true });
+  }
+
+  /** 无强制回流的节流弹跳动效（走 Web Animations API，避免读写 offsetWidth 触发布局抖动） */
+  private pulseEl(node: HTMLElement, key: 'combo' | 'coins' | 'gems', cooldownMs = 220, peak = 1.18) {
+    if (this.root.classList.contains('reduced-motion')) return;
+    const now = performance.now();
+    if (now - this.pulseAt[key] < cooldownMs) return;
+    this.pulseAt[key] = now;
+    if (typeof node.animate === 'function') {
+      node.animate(
+        [{ transform: 'scale(1)' }, { transform: `scale(${peak})` }, { transform: 'scale(1)' }],
+        { duration: 220, easing: 'ease-out' },
+      );
+    }
   }
 
   private disarmReset() {
@@ -862,6 +877,7 @@ export class UI {
 
   show(screen: Screen) {
     this.current = screen;
+    this.flyTargetCache.clear();
     for (const id of ['hud', 'menu', 'result', 'pause'] as const) {
       const visible = id === screen || (id === 'hud' && (screen === 'pause' || screen === 'result'));
       this.screens[id].classList.toggle('visible', visible);
@@ -1265,9 +1281,7 @@ export class UI {
         if (combo >= 5) {
           this.comboPillEl.textContent = `${combo} 连击`;
           this.comboPillEl.classList.toggle('hot', combo >= 25);
-          this.comboPillEl.classList.remove('pop');
-          void this.comboPillEl.offsetWidth;
-          this.comboPillEl.classList.add('pop');
+          this.pulseEl(this.comboPillEl, 'combo', 220, 1.16);
         }
       }
       const feverText = w.fever.active > 0 ? `FEVER · 2×金币 ${w.fever.active.toFixed(1)}s` : '';
@@ -1392,7 +1406,7 @@ export class UI {
         this.blitzShieldEl.hidden = b.shield <= 0;
         if (b.shield > 0) this.blitzShieldEl.textContent = `护盾 ${b.shield}`;
       }
-      const dmgPct = Math.round(b.damageBonus * 100);
+      const dmgPct = Math.round(b.damageBonus);
       if (dmgPct !== this.lastBlitzDmg) {
         this.lastBlitzDmg = dmgPct;
         this.blitzDmgEl.hidden = dmgPct <= 0;
@@ -1448,11 +1462,7 @@ export class UI {
       this.lastGems = w.gems;
       this.hudGemsEl.textContent = String(w.gems);
       this.hudGemsPill.classList.toggle('visible', w.gems > 0);
-      if (gained) {
-        this.hudGemsPill.classList.remove('bump');
-        void this.hudGemsPill.offsetWidth;
-        this.hudGemsPill.classList.add('bump');
-      }
+      if (gained) this.pulseEl(this.hudGemsIcon, 'gems', 240, 1.24);
     }
 
     const shown = Math.floor(w.coins);
@@ -1460,11 +1470,7 @@ export class UI {
       const gained = shown > this.lastCoins && this.lastCoins >= 0;
       this.lastCoins = shown;
       this.hudCoinsEl.textContent = formatNumber(shown);
-      if (gained) {
-        this.hudCoinsPill.classList.remove('bump');
-        void this.hudCoinsPill.offsetWidth;
-        this.hudCoinsPill.classList.add('bump');
-      }
+      if (gained) this.pulseEl(this.hudCoinsIcon, 'coins', 200, 1.22);
     }
 
     this.updateBossBars(w);
@@ -1567,17 +1573,22 @@ export class UI {
     if (this.root.classList.contains('reduced-motion')) return;
     if (this.flying >= 8 && !force) return;
     if (!force && this.current !== 'hud') return;
-    const targetNode =
-      to === '.hud-coins .coin-ico'
-        ? this.hudCoinsIcon
-        : to === '#hud-gems-pill .gem-ico'
-          ? this.hudGemsIcon
-          : to === '#result-balance'
-            ? this.resultBalanceEl
-            : el(this.root, to);
-    const target = targetNode.getBoundingClientRect();
-    const tx = target.left + target.width / 2;
-    const ty = target.top + target.height / 2;
+    let cached = this.flyTargetCache.get(to);
+    if (!cached) {
+      const targetNode =
+        to === '.hud-coins .coin-ico'
+          ? this.hudCoinsIcon
+          : to === '#hud-gems-pill .gem-ico'
+            ? this.hudGemsIcon
+            : to === '#result-balance'
+              ? this.resultBalanceEl
+              : el(this.root, to);
+      const target = targetNode.getBoundingClientRect();
+      cached = { x: target.left + target.width / 2, y: target.top + target.height / 2 };
+      if (target.width > 0 && target.height > 0) this.flyTargetCache.set(to, cached);
+    }
+    const tx = cached.x;
+    const ty = cached.y;
     const c = document.createElement('div');
     c.className = 'fly-coin';
     c.innerHTML = icon;
