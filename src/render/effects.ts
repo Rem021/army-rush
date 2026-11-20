@@ -944,3 +944,176 @@ export class ZombieBars {
     this.prevCount = commitInstances(this.fill, this.n, this.prevCount, undefined, true);
   }
 }
+
+interface BoltItem {
+  line: THREE.Line;
+  glow: THREE.Line;
+  t: number;
+  life: number;
+}
+
+/** 3D 高能链式闪电电弧：带折线抖动 + 发光外晕（配合 UnrealBloom 产生刺眼电光！） */
+export class LightningBolts {
+  private readonly items: BoltItem[] = [];
+  private readonly maxPts = 28;
+
+  constructor(scene: THREE.Scene, cap = 18) {
+    for (let i = 0; i < cap; i++) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.maxPts * 3), 3));
+      const coreMat = new THREE.LineBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      const glowMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      const line = new THREE.Line(geo, coreMat);
+      const glow = new THREE.Line(geo.clone(), glowMat);
+      line.visible = false;
+      glow.visible = false;
+      line.renderOrder = 10;
+      glow.renderOrder = 9;
+      line.frustumCulled = false;
+      glow.frustumCulled = false;
+      scene.add(line, glow);
+      this.items.push({ line, glow, t: 1, life: 1 });
+    }
+  }
+
+  spawn(points: readonly { x: number; d: number; y: number }[]) {
+    if (points.length < 2) return;
+    let item = this.items.find((it) => it.t >= it.life);
+    if (!item) item = this.items[Math.floor(Math.random() * this.items.length)];
+    item.t = 0;
+    item.life = 0.24;
+
+    const corePos = item.line.geometry.attributes.position as THREE.BufferAttribute;
+    const glowPos = item.glow.geometry.attributes.position as THREE.BufferAttribute;
+    let idx = 0;
+    for (let s = 0; s < points.length - 1 && idx < this.maxPts - 1; s++) {
+      const a = points[s];
+      const b = points[s + 1];
+      const segs = Math.min(3, Math.floor((this.maxPts - 1 - idx) / Math.max(1, points.length - 1 - s)));
+      for (let k = 0; k < segs && idx < this.maxPts - 1; k++) {
+        const u = k / segs;
+        const j = k === 0 ? 0 : 0.28;
+        const x = a.x + (b.x - a.x) * u + (Math.random() - 0.5) * j;
+        const y = (a.y + (b.y - a.y) * u) * ITEM_SCALE + (Math.random() - 0.5) * j * 0.6;
+        const z = -(a.d + (b.d - a.d) * u) + (Math.random() - 0.5) * j;
+        corePos.setXYZ(idx, x, y, z);
+        glowPos.setXYZ(idx, x + (Math.random() - 0.5) * 0.14, y + (Math.random() - 0.5) * 0.14, z);
+        idx++;
+      }
+    }
+    const last = points[points.length - 1];
+    corePos.setXYZ(idx, last.x, last.y * ITEM_SCALE, -last.d);
+    glowPos.setXYZ(idx, last.x, last.y * ITEM_SCALE, -last.d);
+    idx++;
+
+    corePos.needsUpdate = true;
+    glowPos.needsUpdate = true;
+    item.line.geometry.setDrawRange(0, idx);
+    item.glow.geometry.setDrawRange(0, idx);
+    item.line.visible = true;
+    item.glow.visible = true;
+  }
+
+  update(dt: number) {
+    for (let i = 0; i < this.items.length; i++) {
+      const it = this.items[i];
+      if (it.t >= it.life) continue;
+      it.t += dt;
+      const k = Math.min(1, it.t / it.life);
+      const op = 1 - k * k;
+      (it.line.material as THREE.LineBasicMaterial).opacity = op;
+      (it.glow.material as THREE.LineBasicMaterial).opacity = op * 0.72;
+      if (k >= 1) {
+        it.line.visible = false;
+        it.glow.visible = false;
+      }
+    }
+  }
+
+  clear() {
+    for (const it of this.items) {
+      it.t = it.life;
+      it.line.visible = false;
+      it.glow.visible = false;
+    }
+  }
+}
+
+interface BeamItem {
+  group: THREE.Group;
+  core: THREE.Mesh;
+  sheath: THREE.Mesh;
+  disc: THREE.Mesh;
+  t: number;
+  life: number;
+  radius: number;
+}
+
+/** 轨道离子激光炮光束：从高空天基卫星贯通战场的超亮双层离子光柱 + 地面灼烧圆环 */
+export class OrbitalBeams {
+  private readonly items: BeamItem[] = [];
+
+  constructor(private readonly scene: THREE.Scene) {}
+
+  spawn(x: number, z: number, radius: number, color = 0x38bdf8) {
+    let item = this.items.find((b) => b.t >= b.life);
+    if (!item) {
+      const group = new THREE.Group();
+      const coreGeo = new THREE.CylinderGeometry(0.28, 0.34, 48, 16, 1, true);
+      coreGeo.translate(0, 24, 0);
+      const core = new THREE.Mesh(
+        coreGeo,
+        new THREE.MeshBasicMaterial({ color: 0xf0f9ff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+      );
+      const sheathGeo = new THREE.CylinderGeometry(0.85, 1.05, 48, 20, 1, true);
+      sheathGeo.translate(0, 24, 0);
+      const sheath = new THREE.Mesh(
+        sheathGeo,
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+      );
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(1, 32),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+      );
+      disc.rotation.x = -Math.PI / 2;
+      disc.position.y = 0.08;
+      group.add(sheath, core, disc);
+      group.renderOrder = 12;
+      this.scene.add(group);
+      item = { group, core, sheath, disc, t: 0, life: 0.72, radius };
+      this.items.push(item);
+    }
+    item.t = 0;
+    item.life = 0.72;
+    item.radius = radius;
+    item.group.position.set(x, 0, z);
+    item.group.visible = true;
+    (item.sheath.material as THREE.MeshBasicMaterial).color.set(color);
+    (item.disc.material as THREE.MeshBasicMaterial).color.set(color);
+  }
+
+  update(dt: number) {
+    for (let i = 0; i < this.items.length; i++) {
+      const b = this.items[i];
+      if (b.t >= b.life) continue;
+      b.t += dt;
+      const k = Math.min(1, b.t / b.life);
+      const pop = k < 0.14 ? k / 0.14 : 1 - (k - 0.14) / 0.86;
+      const w = Math.max(0.05, pop) * (0.65 + b.radius * 0.22);
+      b.core.scale.set(w * 0.75, 1, w * 0.75);
+      b.sheath.scale.set(w * 1.35, 1, w * 1.35);
+      b.disc.scale.setScalar(b.radius * (0.45 + 0.65 * Math.sqrt(k)));
+      (b.core.material as THREE.MeshBasicMaterial).opacity = Math.min(1, pop * 1.5);
+      (b.sheath.material as THREE.MeshBasicMaterial).opacity = pop * 0.6;
+      (b.disc.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.75;
+      if (k >= 1) b.group.visible = false;
+    }
+  }
+
+  clear() {
+    for (const b of this.items) {
+      b.t = b.life;
+      b.group.visible = false;
+    }
+  }
+}

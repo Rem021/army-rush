@@ -14,15 +14,24 @@ import {
 import { blitzStageUnlocked, clearedStages, modeUnlocked, progressLevel } from '../game/access';
 export { blitzStageUnlocked, clearedStages, modeUnlocked, progressLevel } from '../game/access';
 import { isBossLevel, recommendUpgrade, upgradeGain } from '../game/economy';
+import { PERK_MAP, type PerkDef, type PerkId, type PerkRarity } from '../game/perks';
 import { TACTICS, type TacticId } from '../game/tactics';
 import type { Boss, World } from '../game/world';
 import { formatNumber } from '../render/label';
 import type { SaveData } from '../save';
-import { EMBLEM, ICON, MODE_STYLE, RANK_SHIELD, SVG_DEFS } from './icons';
+import { EMBLEM, ICON, MODE_STYLE, PERK_ICON, RANK_SHIELD, SVG_DEFS } from './icons';
+
+const RARITY_LABEL: Record<PerkRarity, string> = {
+  rare: '精良',
+  epic: '史诗',
+  legendary: '传说',
+};
 
 export interface UIHandlers {
   start(): void;
   nova(): void;
+  overdrive(): void;
+  choosePerk(id: PerkId): void;
   revokeAdmin(): void;
   upgrade(id: UpgradeId): void;
   skin(id: string): void;
@@ -185,6 +194,18 @@ export class UI {
   private readonly blitzShieldEl: HTMLElement;
   private readonly blitzDmgEl: HTMLElement;
   private readonly blitzStagesEl: HTMLElement;
+  private readonly xpStripEl: HTMLElement;
+  private readonly xpLevelEl: HTMLElement;
+  private readonly xpFillEl: HTMLElement;
+  private readonly comboPillEl: HTMLElement;
+  private readonly perkStripEl: HTMLElement;
+  private readonly btnOverdrive: HTMLButtonElement;
+  private readonly odTitleEl: HTMLElement;
+  private readonly odPctEl: HTMLElement;
+  private readonly odFillEl: HTMLElement;
+  private readonly draftEl: HTMLElement;
+  private readonly draftSubEl: HTMLElement;
+  private readonly draftCardsEl: HTMLElement;
   private readonly carnageHudEl: HTMLElement;
   private readonly carnageComboEl: HTMLElement;
   private readonly carnageCountEl: HTMLElement;
@@ -221,6 +242,15 @@ export class UI {
   private lastBlitzMulti = -1;
   private lastBlitzShield = -1;
   private lastBlitzDmg = -1;
+  private lastXpPct = -1;
+  private lastXpLevel = -1;
+  private lastCombo = -1;
+  private lastPerkKey = '';
+  private lastOdCharge = -1;
+  private lastOdActive = false;
+  private lastOdReady = false;
+  private lastOdDisabled = true;
+  private lastOdTitle = '';
   private lastCarnageCombo = -1;
   private lastCarnageKills = -1;
   private lastCarnageSquad = -1;
@@ -273,6 +303,12 @@ export class UI {
             <div class="pill hud-gems" id="hud-gems-pill"><span class="gem-ico">${ICON.gem}</span><span id="hud-gems">0</span></div>
           </div>
         </div>
+        <div id="xp-strip" class="xp-strip">
+          <span class="xp-lv" id="xp-lv">LV.0</span>
+          <div class="xp-track"><i id="xp-fill"></i></div>
+          <span class="combo-pill" id="combo-pill" hidden>0 连击</span>
+        </div>
+        <div id="perk-strip" class="perk-strip" hidden></div>
         <div id="blitz-hud" class="blitz-hud" hidden>
           <span class="blitz-chip tank" id="blitz-tanks">坦克 0/3</span>
           <span class="blitz-chip drone" id="blitz-drones" hidden>无人机 ×0</span>
@@ -285,6 +321,11 @@ export class UI {
           <div class="chip" id="hud-rate">${ICON.bolt}<span>射速 100%</span></div>
           <div class="chip ammo" id="hud-ammo">${ICON.ammo}<span></span></div>
         </div>
+        <button id="btn-overdrive" class="od-btn" type="button" disabled>
+          <span class="od-top"><span class="od-icon">${ICON.bolt}</span><span id="od-title">战术过载</span><b id="od-pct">0%</b></span>
+          <span class="od-sub">射速+75% · 全弹暴击 · SPACE</span>
+          <span class="od-bar"><i id="od-fill"></i></span>
+        </button>
         <div id="carnage-hud" hidden>
           <div class="carnage-score"><small>RAMPAGE / 火力狂潮</small><b id="carnage-combo">0 连击</b><span id="carnage-count">击杀 0</span><span id="carnage-shells">火箭弹 120</span></div>
           <button id="btn-nova" disabled><span id="nova-title">超载蓄能</span><b id="nova-charge">0%</b><i id="nova-fill"></i><small>清屏 + 6 秒双倍弹幕 · E</small></button>
@@ -339,6 +380,17 @@ export class UI {
           <div class="ev-name"></div>
           <div class="ev-desc"></div>
           <div class="ev-tap">点击继续</div>
+        </div>
+      </div>
+
+      <div class="draft-modal" id="draft" role="dialog" aria-modal="true" aria-labelledby="draft-title">
+        <div class="draft-shell">
+          <div class="draft-head">
+            <span class="draft-kicker">TACTICAL EVOLUTION PROTOCOL</span>
+            <h2 id="draft-title">战术进化 · 三选一</h2>
+            <p id="draft-sub">选择 1 项战地协议注入军团（点击卡片或按键盘 1 / 2 / 3）</p>
+          </div>
+          <div class="draft-cards" id="draft-cards"></div>
         </div>
       </div>
 
@@ -420,6 +472,18 @@ export class UI {
     this.blitzShieldEl = el(root, '#blitz-shield');
     this.blitzDmgEl = el(root, '#blitz-dmg');
     this.blitzStagesEl = el(root, '#blitz-stages');
+    this.xpStripEl = el(root, '#xp-strip');
+    this.xpLevelEl = el(root, '#xp-lv');
+    this.xpFillEl = el(root, '#xp-fill');
+    this.comboPillEl = el(root, '#combo-pill');
+    this.perkStripEl = el(root, '#perk-strip');
+    this.btnOverdrive = el<HTMLButtonElement>(root, '#btn-overdrive');
+    this.odTitleEl = el(root, '#od-title');
+    this.odPctEl = el(root, '#od-pct');
+    this.odFillEl = el(root, '#od-fill');
+    this.draftEl = el(root, '#draft');
+    this.draftSubEl = el(root, '#draft-sub');
+    this.draftCardsEl = el(root, '#draft-cards');
     this.carnageHudEl = el(root, '#carnage-hud');
     this.carnageComboEl = el(root, '#carnage-combo');
     this.carnageCountEl = el(root, '#carnage-count');
@@ -447,11 +511,16 @@ export class UI {
     on('#btn-quit', () => h.retreat());
     on('#btn-start', () => h.start());
     on('#btn-nova', () => h.nova());
+    on('#btn-overdrive', () => h.overdrive());
     on('#btn-settings', () => this.openSheet('settings'));
     on('#mode-card', () => this.openSheet('modes'));
     on('#sheet-close', () => this.closeSheet());
     on('#btn-home', () => h.home());
     on('#evolve', () => this.closeEvolve());
+    this.draftCardsEl.addEventListener('click', (ev) => {
+      const card = (ev.target as HTMLElement).closest<HTMLElement>('[data-perk]');
+      if (card?.dataset.perk) h.choosePerk(card.dataset.perk as PerkId);
+    });
     btnNext.addEventListener('click', () => {
       if (btnNext.dataset.mode === 'retry') h.retry();
       else h.next();
@@ -726,6 +795,43 @@ export class UI {
     this.evolveEl.classList.remove('show');
   }
 
+  get draftOpen(): boolean {
+    return this.draftEl.classList.contains('show');
+  }
+
+  showDraft(choices: readonly PerkDef[], level: number, owned: Partial<Record<PerkId, number>>) {
+    this.draftSubEl.textContent = `LV.${level} 战地进化就绪 · 点击卡片或按键盘 1 / 2 / 3 立即部署`;
+    this.draftCardsEl.innerHTML = choices
+      .map((p, idx) => {
+        const cur = owned[p.id] ?? 0;
+        const next = Math.min(p.maxLevel, cur + 1);
+        const lvBadge = cur === 0 ? 'NEW · LV.1' : `LV.${cur} → LV.${next}`;
+        const desc = p.levels[next - 1] ?? p.levels[0];
+        const color = hex(p.color);
+        const icon = PERK_ICON[p.icon] ?? ICON.bolt;
+        return `<button type="button" class="draft-card rarity-${p.rarity}" data-perk="${p.id}" style="--pc:${color}">
+          <span class="dc-key">${idx + 1}</span>
+          <div class="dc-top">
+            <span class="dc-rarity">${RARITY_LABEL[p.rarity]}</span>
+            <span class="dc-lv ${cur > 0 ? 'up' : ''}">${lvBadge}</span>
+          </div>
+          <div class="dc-ico">${icon}</div>
+          <div class="dc-name">${p.name}</div>
+          <div class="dc-tag">${p.tag}</div>
+          <div class="dc-desc">${desc}</div>
+          <div class="dc-cta">部署此协议</div>
+        </button>`;
+      })
+      .join('');
+    this.draftEl.classList.remove('show');
+    void this.draftEl.offsetWidth;
+    this.draftEl.classList.add('show');
+  }
+
+  hideDraft() {
+    this.draftEl.classList.remove('show');
+  }
+
   get screen(): Screen | null {
     return this.current;
   }
@@ -748,6 +854,7 @@ export class UI {
       this.clearResultTimers();
       this.screens.result.querySelectorAll('.confetti').forEach((c) => c.remove());
     }
+    if (screen === 'menu' || screen === 'result' || screen === 'pause') this.hideDraft();
     if (screen === 'hud' || screen === 'pause') this.closeEvolve();
     if (screen !== 'menu' && screen !== 'result') this.closeSheet();
     else if (screen === 'menu') {
@@ -1033,6 +1140,19 @@ export class UI {
     const isBlitz = mode === 'blitz';
     this.carnageHudEl.hidden = !isCarnage;
     this.blitzHudEl.hidden = !isBlitz;
+    this.xpStripEl.hidden = isCarnage;
+    this.perkStripEl.hidden = true;
+    this.perkStripEl.innerHTML = '';
+    this.btnOverdrive.hidden = isCarnage;
+    this.btnOverdrive.disabled = true;
+    this.btnOverdrive.classList.remove('ready', 'active');
+    this.odTitleEl.textContent = '战术过载';
+    this.odPctEl.textContent = '0%';
+    this.odFillEl.style.width = '0%';
+    this.xpLevelEl.textContent = 'LV.0';
+    this.xpFillEl.style.width = '0%';
+    this.comboPillEl.hidden = true;
+    this.hideDraft();
     this.root.classList.toggle('carnage-mode', isCarnage);
     this.root.classList.toggle('blitz-mode', isBlitz);
     this.hudMarksEl.innerHTML = marks.map((f) => `<i class="hud-mark" style="left:${(f * 100).toFixed(1)}%">${ICON.skull}</i>`).join('');
@@ -1053,6 +1173,15 @@ export class UI {
     this.lastBlitzMulti = -1;
     this.lastBlitzShield = -1;
     this.lastBlitzDmg = -1;
+    this.lastXpPct = -1;
+    this.lastXpLevel = -1;
+    this.lastCombo = -1;
+    this.lastPerkKey = '';
+    this.lastOdCharge = -1;
+    this.lastOdActive = false;
+    this.lastOdReady = false;
+    this.lastOdDisabled = true;
+    this.lastOdTitle = '';
     this.blitzDronesEl.hidden = true;
     this.blitzMultiEl.hidden = true;
     this.blitzShieldEl.hidden = true;
@@ -1094,6 +1223,76 @@ export class UI {
   }
 
   updateHud(w: World, best: number) {
+    if (w.spec.mode !== 'carnage') {
+      const rl = w.roguelike;
+      const od = w.overdrive;
+      if (rl.level !== this.lastXpLevel) {
+        this.lastXpLevel = rl.level;
+        this.xpLevelEl.textContent = `LV.${rl.level}`;
+      }
+      const xpPct = rl.nextXp > 0 ? Math.min(100, Math.round((rl.xp / rl.nextXp) * 100)) : 100;
+      if (xpPct !== this.lastXpPct) {
+        this.lastXpPct = xpPct;
+        this.xpFillEl.style.width = `${xpPct}%`;
+      }
+      const combo = od.combo;
+      if (combo !== this.lastCombo) {
+        this.lastCombo = combo;
+        this.comboPillEl.hidden = combo < 5;
+        if (combo >= 5) {
+          this.comboPillEl.textContent = `${combo} 连击`;
+          this.comboPillEl.classList.toggle('hot', combo >= 25);
+          this.comboPillEl.classList.remove('pop');
+          void this.comboPillEl.offsetWidth;
+          this.comboPillEl.classList.add('pop');
+        }
+      }
+      let perkKey = '';
+      for (let i = 0; i < rl.order.length; i++) {
+        const id = rl.order[i];
+        perkKey += `${id}:${rl.perks[id] ?? 0},`;
+      }
+      if (perkKey !== this.lastPerkKey) {
+        this.lastPerkKey = perkKey;
+        this.perkStripEl.hidden = rl.order.length === 0;
+        if (rl.order.length > 0) {
+          this.perkStripEl.innerHTML = rl.order
+            .map((id) => {
+              const p = PERK_MAP[id];
+              const lv = rl.perks[id] ?? 1;
+              return `<span class="perk-badge rarity-${p.rarity}" style="--pc:${hex(p.color)}" title="${p.name} Lv.${lv}">${PERK_ICON[p.icon] ?? ICON.bolt}<b>${p.name.slice(0, 2)}</b><i>${lv}</i></span>`;
+            })
+            .join('');
+        }
+      }
+      const odActive = od.active > 0;
+      const odReady = !odActive && od.charge >= 100;
+      const odDisabled = !odReady || (w.state !== 'run' && w.state !== 'boss');
+      const odPct = odActive ? Math.ceil((od.active / Math.max(0.1, od.duration)) * 100) : Math.floor(od.charge);
+      if (odDisabled !== this.lastOdDisabled) {
+        this.lastOdDisabled = odDisabled;
+        this.btnOverdrive.disabled = odDisabled;
+      }
+      if (odReady !== this.lastOdReady) {
+        this.lastOdReady = odReady;
+        this.btnOverdrive.classList.toggle('ready', odReady);
+      }
+      if (odActive !== this.lastOdActive) {
+        this.lastOdActive = odActive;
+        this.btnOverdrive.classList.toggle('active', odActive);
+      }
+      const odTitle = odActive ? `过载 ${od.active.toFixed(1)}s` : odReady ? '释放过载！' : '战术过载';
+      if (odTitle !== this.lastOdTitle) {
+        this.lastOdTitle = odTitle;
+        this.odTitleEl.textContent = odTitle;
+      }
+      if (odPct !== this.lastOdCharge) {
+        this.lastOdCharge = odPct;
+        this.odPctEl.textContent = odActive ? 'MAX' : `${odPct}%`;
+        this.odFillEl.style.width = `${Math.max(0, Math.min(100, odPct))}%`;
+      }
+    }
+
     if (w.spec.mode === 'carnage') {
       const c = w.carnage;
       if (c.combo !== this.lastCarnageCombo) {

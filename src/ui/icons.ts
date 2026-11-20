@@ -89,6 +89,36 @@ export const EMBLEM = svg(
   '0 0 64 64',
 );
 
+export const PERK_ICON: Record<string, string> = {
+  lightning: svg(
+    `<path d="M13.5 2L4.5 13h6.2L9.2 22l10.3-11.8h-6.1z" fill="currentColor" stroke="#fff" stroke-width="1" stroke-linejoin="round"/>`,
+  ),
+  cryo: svg(
+    `<path d="M12 2.5v19M3.8 7.2l16.4 9.6M20.2 7.2L3.8 16.8M9.5 4.5L12 7l2.5-2.5M9.5 19.5L12 17l2.5 2.5M5.2 10.5L8 10l-.8-2.8M18.8 13.5L16 14l.8 2.8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>`,
+  ),
+  mech: svg(
+    `<rect x="6.5" y="4.5" width="11" height="8" rx="2" fill="currentColor"/><rect x="9" y="7" width="6" height="2.4" rx="1" fill="#0b1322"/><path d="M4 7.5h2.5v5H4zM17.5 7.5H20v5h-2.5zM8 12.5h3v8H8zM13 12.5h3v8h-3z" fill="currentColor" opacity=".9"/>`,
+  ),
+  orbital: svg(
+    `<circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2"/><path d="M10 2.5h4v13h-4z" fill="currentColor"/><circle cx="12" cy="17.5" r="3.2" fill="#fff"/>`,
+  ),
+  fan: svg(
+    `<path d="M12 20L4.5 6.5M12 20L9 4.5M12 20l3-15.5M12 20l7.5-13.5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="4.5" cy="6.5" r="1.6" fill="#fff"/><circle cx="9" cy="4.5" r="1.6" fill="#fff"/><circle cx="15" cy="4.5" r="1.6" fill="#fff"/><circle cx="19.5" cy="6.5" r="1.6" fill="#fff"/>`,
+  ),
+  shield: svg(
+    `<path d="M12 2.5l8 3v6.2c0 5-3.4 8.7-8 10.2-4.6-1.5-8-5.2-8-10.2V5.5z" fill="currentColor" opacity=".88" stroke="#fff" stroke-width="1.2"/><path d="M12 6.5l4.2 1.7v3.6c0 2.8-1.8 5-4.2 6z" fill="#fff" opacity=".45"/>`,
+  ),
+  overclock: svg(
+    `<circle cx="12" cy="13" r="7.5" fill="none" stroke="currentColor" stroke-width="2.2"/><path d="M12 13l4-4M9 3h6M12 3v2.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/><circle cx="12" cy="13" r="2" fill="currentColor"/>`,
+  ),
+  cluster: svg(
+    `<path d="M12 2.5l2.2 5.2 5.6-.8-3.6 4.4 3.2 4.8-5.5-1.4L12 20.5l-1.9-5.8-5.5 1.4 3.2-4.8-3.6-4.4 5.6.8z" fill="currentColor" stroke="#fff" stroke-width="1" stroke-linejoin="round"/>`,
+  ),
+  nanite: svg(
+    `<path d="M12 3l7 4v10l-7 4-7-4V7z" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 8v8M8 12h8" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/>`,
+  ),
+};
+
 export const MODE_STYLE: Record<string, { icon: string; bg: string }> = {
   blitz: { icon: ICON.tank, bg: 'linear-gradient(150deg,#ffbd45,#e85826 55%,#7c2ae8)' },
   carnage: { icon: ICON.bolt, bg: 'linear-gradient(145deg,#ffce55,#f05b3b 48%,#a329ef)' },

@@ -59,6 +59,7 @@ import {
 } from './level';
 import { CombatStats, type LossCause } from './feedback';
 import { GEMS, bossBounty, bossGems, killCoins } from './economy';
+import { PERK_MAP, pickBestPerk, rollPerkChoices, xpForNextDraft, type PerkDef, type PerkId } from './perks';
 import { mulberry32, randRange, type Rng } from './rng';
 
 /** 每秒最多生成的子弹数，超出时把伤害合并到少量子弹上 */
@@ -168,6 +169,9 @@ export interface Zombie {
   weight: number;
   /** 电磁弹减速计时（秒） */
   slow?: number;
+  /** 极寒冻弹冰冻脆化计时（秒）与等级 */
+  cryo?: number;
+  cryoLvl?: number;
 }
 
 export interface Boss {
@@ -207,6 +211,9 @@ export interface Boss {
   enraged: boolean;
   /** 投弹屠夫切近战是否已弹提示 */
   meleeWarned?: boolean;
+  /** 冰冻脆化计时 */
+  cryo?: number;
+  cryoLvl?: number;
 }
 
 export interface Projectile {
@@ -273,8 +280,31 @@ export type GameEvent =
   | { type: 'allyTankFire'; tank: AllyTank; shell: AllyShell }
   | { type: 'allyShellHit'; x: number; d: number; r: number; tier: 1 | 2 | 3 | 4 }
   | { type: 'airstrikeLaunch'; x: number; d: number }
+  | { type: 'draftOffer'; choices: PerkDef[]; level: number }
+  | { type: 'perkChosen'; perk: PerkDef; level: number }
+  | { type: 'lightningArc'; points: { x: number; d: number; y: number }[] }
+  | { type: 'orbitalLaser'; x: number; d: number; r: number; level: number }
+  | { type: 'mechDrop'; mech: AllyMech }
+  | { type: 'mechLand'; mech: AllyMech }
+  | { type: 'critHit'; x: number; d: number; y: number; dmg: number }
+  | { type: 'overdriveStart'; duration: number }
   | { type: 'won' }
   | { type: 'lost' };
+
+/** 空降入队护航的蓝金重装泰坦机甲 */
+export interface AllyMech {
+  id: number;
+  slot: number;
+  x: number;
+  d: number;
+  /** 0 -> 1 空降着陆进度，>=1 表示已着陆投入战斗 */
+  dropT: number;
+  yaw: number;
+  fireTimer: number;
+  missileTimer: number;
+  recoil: number;
+  phase: number;
+}
 
 /** 被玩家击毁收编后开上前线与小队并肩作战的友军重装坦克 */
 export interface AllyTank {
@@ -332,6 +362,8 @@ export interface WorldOptions {
   seed?: number;
   /** 无尽模式：继续生成内容的生成器 */
   endless?: { gen: Gen; until: number };
+  /** 是否启用局内肉鸽三选一进化（默认除 carnage 外全模式开启） */
+  roguelike?: boolean;
 }
 
 export type WorldState = 'run' | 'boss' | 'won' | 'lost';
@@ -424,6 +456,30 @@ export class World {
   };
   readonly allyTanks: AllyTank[] = [];
   readonly allyShells: AllyShell[] = [];
+  readonly allyMechs: AllyMech[] = [];
+  /** 局内通用能量护盾（Blitz 护盾补给 + 肉鸽「宙斯护盾矩阵」统一共用） */
+  shield = 0;
+  readonly roguelike = {
+    enabled: true,
+    level: 0,
+    xp: 0,
+    nextXp: xpForNextDraft(0),
+    perks: {} as Partial<Record<PerkId, number>>,
+    order: [] as PerkId[],
+    draftChoices: null as PerkDef[] | null,
+    totalDrafts: 0,
+  };
+  readonly overdrive = {
+    combo: 0,
+    bestCombo: 0,
+    comboTimer: 0,
+    charge: 0,
+    active: 0,
+    duration: 6.5,
+  };
+  private orbitalTimer = 2.4;
+  private shieldRegenTimer = 5;
+  private naniteKills = 0;
   readonly blitz = {
     stage: 1 as 1 | 2,
     drones: 0,
@@ -447,6 +503,7 @@ export class World {
     this.spec = spec;
     this.opts = opts;
     this.rng = mulberry32(opts.seed ?? spec.level * 31 + 7);
+    this.roguelike.enabled = opts.roguelike ?? spec.mode !== 'carnage';
     // 防线里丧尸跑得快得多，直接冲到脸上；广告奇袭三路节奏偏稳，方便左右拉扯
     this.zombieSpeed = spec.mode === 'carnage' ? 0.72 : spec.mode === 'blitz' ? 1.15 : spec.defense ? DEFENSE_ZOMBIE_SPEED : 1;
     this.damage = opts.damageMult;
@@ -751,8 +808,20 @@ export class World {
     return this.spec.mode === 'carnage' ? 240 : this.spec.mode === 'blitz' ? MAX_BLITZ_COUNT : this.defense ? MAX_DEFENSE_COUNT : MAX_COUNT;
   }
 
+  perkLevel(id: PerkId): number {
+    return this.roguelike.perks[id] ?? 0;
+  }
+
+  private get totalStreams(): number {
+    const base = this.spec.mode === 'blitz' ? this.blitz.multishot : 1;
+    return Math.min(5, base + this.perkLevel('fan_volley'));
+  }
+
   get fireRate(): number {
-    return this.weapon.rate * this.opts.rateMult * this.squad.rate * (this.spec.mode === 'carnage' && this.time < this.carnage.burstUntil ? 2 : 1);
+    const oc = this.perkLevel('overclock');
+    const ocMult = oc === 0 ? 1 : oc === 1 ? 1.24 : oc === 2 ? 1.44 : 1.68;
+    const odMult = this.overdrive.active > 0 ? 1.45 : 1;
+    return this.weapon.rate * this.opts.rateMult * this.squad.rate * ocMult * odMult * (this.spec.mode === 'carnage' && this.time < this.carnage.burstUntil ? 2 : 1);
   }
 
   setTarget(x: number) {
@@ -761,7 +830,100 @@ export class World {
 
   /** 当前每秒总伤害，UI 和平衡脚本用 */
   dps(): number {
-    return this.squad.count * this.fireRate * this.weapon.damage * this.damage * (this.spec.mode === 'blitz' ? this.blitz.multishot : 1);
+    const odDmg = this.overdrive.active > 0 ? 1.4 : 1;
+    return this.squad.count * this.fireRate * this.weapon.damage * this.damage * odDmg * this.totalStreams;
+  }
+
+  /** 触发局内肉鸽三选一结果 */
+  choosePerk(id: PerkId): boolean {
+    const choices = this.roguelike.draftChoices;
+    if (!choices || !choices.some((c) => c.id === id)) return false;
+    const def = PERK_MAP[id];
+    const nextLvl = Math.min(def.maxLevel, (this.roguelike.perks[id] ?? 0) + 1);
+    this.roguelike.perks[id] = nextLvl;
+    if (!this.roguelike.order.includes(id)) this.roguelike.order.push(id);
+    this.roguelike.draftChoices = null;
+    this.roguelike.totalDrafts++;
+
+    if (id === 'mech_drop') {
+      this.spawnAllyMech();
+    } else if (id === 'aegis_matrix') {
+      const bonus = nextLvl === 1 ? 14 : nextLvl === 2 ? 20 : 28;
+      this.addShield(bonus);
+    } else if (id === 'orbital_laser') {
+      this.orbitalTimer = 0.25;
+    }
+
+    this.events.push({ type: 'perkChosen', perk: def, level: nextLvl });
+    this.events.push({ type: 'banner', text: `战术进化 · 【${def.name} Lv.${nextLvl}】已激活！`, tone: 'info' });
+    return true;
+  }
+
+  /** 自动挑选最强肉鸽进化卡（用于 autoplay 演示与自动化测试） */
+  autoPickPerk(): PerkDef | null {
+    const choices = this.roguelike.draftChoices;
+    if (!choices || choices.length === 0) return null;
+    const best = pickBestPerk(choices, this.roguelike.perks);
+    if (!best) return null;
+    this.choosePerk(best.id);
+    return best;
+  }
+
+  /** 启动战术过载（连击蓄能满 100 后可由玩家主动释放） */
+  activateOverdrive(): boolean {
+    if (this.state !== 'run' && this.state !== 'boss') return false;
+    if (this.spec.mode === 'carnage') return false;
+    if (this.overdrive.charge < 100 || this.overdrive.active > 0) return false;
+    this.overdrive.charge = 0;
+    this.overdrive.active = this.overdrive.duration;
+    this.events.push({ type: 'overdriveStart', duration: this.overdrive.duration });
+    this.events.push({ type: 'banner', text: '战术过载启动！全军火力 ×1.4 · 射速 ×1.45！', tone: 'info' });
+    return true;
+  }
+
+  private addShield(amount: number) {
+    this.shield = Math.min(45, this.shield + amount);
+    this.blitz.shield = this.shield;
+  }
+
+  private addXp(amount: number) {
+    if (!this.roguelike.enabled || amount <= 0) return;
+    if (this.state !== 'run' && this.state !== 'boss') return;
+    this.roguelike.xp += amount;
+    if (!this.roguelike.draftChoices && this.roguelike.xp >= this.roguelike.nextXp) {
+      const choices = rollPerkChoices(this.roguelike.perks, this.rng, 3);
+      if (choices.length > 0) {
+        this.roguelike.xp -= this.roguelike.nextXp;
+        this.roguelike.level++;
+        this.roguelike.nextXp = xpForNextDraft(this.roguelike.level);
+        this.roguelike.draftChoices = choices;
+        this.events.push({ type: 'draftOffer', choices, level: this.roguelike.level });
+      }
+    }
+  }
+
+  private spawnAllyMech() {
+    const sq = this.squad;
+    const slot = this.allyMechs.length;
+    const side = slot % 2 === 0 ? -1 : 1;
+    const row = Math.floor(slot / 2);
+    const x = Math.max(-TRACK_HALF + 1.1, Math.min(TRACK_HALF - 1.1, sq.x + side * (Math.max(1.5, this.halfWidth + 0.85) + row * 0.45)));
+    const d = sq.d + 1.1 + row * 1.9;
+    const mech: AllyMech = {
+      id: this.nextId++,
+      slot,
+      x,
+      d,
+      dropT: 0,
+      yaw: 0,
+      fireTimer: 0.25,
+      missileTimer: 1.4,
+      recoil: 0,
+      phase: slot * 1.7,
+    };
+    this.allyMechs.push(mech);
+    this.version++;
+    this.events.push({ type: 'mechDrop', mech });
   }
 
   update(dt: number) {
@@ -808,13 +970,15 @@ export class World {
     const limLo = this.lo + this.halfWidth;
     const limHi = this.hi - this.halfWidth;
     const tx = limLo <= limHi ? Math.max(limLo, Math.min(limHi, sq.targetX)) : (this.lo + this.hi) / 2;
-    sq.x += (tx - sq.x) * Math.min(1, SQUAD_STEER * (this.opts.steerMult ?? 1) * dt);
+    sq.x += (tx - sq.x) * Math.min(1, SQUAD_STEER * (this.opts.steerMult ?? 1) * (this.overdrive.active > 0 ? 1.15 : 1) * dt);
 
     this.layout(dt);
     this.passGates(prevD);
     this.collectNear();
     this.fire(dt);
     this.updateBullets(dt);
+    this.updateRoguelikeSystems(dt);
+    this.updateAllyMechs(dt);
     this.updateZombies(dt);
     this.collideBarrels();
     this.updateHazards(dt);
@@ -835,6 +999,346 @@ export class World {
         this.win();
       }
     }
+  }
+
+  /** 局内肉鸽主动周期系统：轨道离子炮、护盾再生、连击过载衰减与追踪导弹更新 */
+  private updateRoguelikeSystems(dt: number) {
+    if (this.overdrive.active > 0) {
+      this.overdrive.active = Math.max(0, this.overdrive.active - dt);
+    }
+    if (this.overdrive.comboTimer > 0) {
+      this.overdrive.comboTimer = Math.max(0, this.overdrive.comboTimer - dt);
+      if (this.overdrive.comboTimer <= 0) this.overdrive.combo = 0;
+    }
+
+    // 宙斯护盾矩阵：周期再生能量护盾
+    const aegisLvl = this.perkLevel('aegis_matrix');
+    if (aegisLvl > 0 && this.squad.count > 0) {
+      this.shieldRegenTimer -= dt;
+      if (this.shieldRegenTimer <= 0) {
+        this.shieldRegenTimer = aegisLvl === 1 ? 6.0 : aegisLvl === 2 ? 5.0 : 4.0;
+        const regen = aegisLvl === 1 ? 2 : aegisLvl === 2 ? 3 : 4;
+        this.addShield(regen);
+      }
+    }
+
+    // 轨道离子炮：周期锁定最高血量目标降下天基激光
+    const orbLvl = this.perkLevel('orbital_laser');
+    if (orbLvl > 0 && this.squad.count > 0) {
+      this.orbitalTimer -= dt;
+      if (this.orbitalTimer <= 0) {
+        const fired = this.fireOrbitalLaser(orbLvl);
+        this.orbitalTimer = fired ? (orbLvl === 1 ? 5.4 : orbLvl === 2 ? 3.9 : 2.7) : 0.6;
+      }
+    }
+
+    // 非 Blitz / Carnage 模式下若泰坦机甲发射了追踪导弹，同样推进并结算导弹
+    if (this.spec.mode !== 'blitz' && this.spec.mode !== 'carnage' && this.rockets.length > 0) {
+      for (let i = this.rockets.length - 1; i >= 0; i--) {
+        const r = this.rockets[i];
+        r.t += dt;
+        if (r.t >= r.T) {
+          this.mechMissileBlast(r.x, r.d, r.damage);
+          this.rockets[i] = this.rockets[this.rockets.length - 1];
+          this.rockets.pop();
+        }
+      }
+    }
+  }
+
+  private fireOrbitalLaser(level: number): boolean {
+    const beams = level >= 3 ? 2 : 1;
+    const radius = level === 1 ? 3.2 : level === 2 ? 4.0 : 4.4;
+    const baseDmg = (260 + this.squad.tier * 140 + this.squad.count * 6) * this.damage * (level === 1 ? 1 : level === 2 ? 1.5 : 1.75);
+    const usedIds = new Set<number>();
+    let fired = false;
+
+    for (let k = 0; k < beams; k++) {
+      let tx = 0;
+      let td = 0;
+      let found = false;
+      let bestScore = -1;
+      let chosenId = -1;
+
+      for (let i = 0; i < this.bosses.length; i++) {
+        const b = this.bosses[i];
+        if (!b.alive || !b.active || usedIds.has(b.id)) continue;
+        const sc = 10000 + b.hp;
+        if (sc > bestScore) {
+          bestScore = sc;
+          tx = b.x;
+          td = b.d;
+          chosenId = b.id;
+          found = true;
+        }
+      }
+      if (!found) {
+        for (let i = 0; i < this.barrels.length; i++) {
+          const br = this.barrels[i];
+          if (!br.alive || !br.tank || br.d > this.squad.d + 46 || usedIds.has(br.id)) continue;
+          const sc = 5000 + br.hp;
+          if (sc > bestScore) {
+            bestScore = sc;
+            tx = br.x;
+            td = br.d;
+            chosenId = br.id;
+            found = true;
+          }
+        }
+      }
+      if (!found) {
+        for (let i = 0; i < this.near.length; i++) {
+          const z = this.near[i];
+          if (!z.alive || z.d < this.squad.d + 3 || z.d > this.squad.d + 46 || usedIds.has(z.id)) continue;
+          const sc = z.hp + (z.kind === 'giant' ? 800 : z.kind === 'brute' ? 120 : 10) + Math.max(0, 35 - (z.d - this.squad.d));
+          if (sc > bestScore) {
+            bestScore = sc;
+            tx = z.x;
+            td = z.d;
+            chosenId = z.id;
+            found = true;
+          }
+        }
+      }
+      if (!found) break;
+      usedIds.add(chosenId);
+      fired = true;
+
+      this.events.push({ type: 'orbitalLaser', x: tx, d: td, r: radius, level });
+      const rr = radius * radius;
+      for (let i = 0; i < this.near.length; i++) {
+        const z = this.near[i];
+        if (!z.alive) continue;
+        const dx = z.x - tx;
+        const dd = z.d - td;
+        if (dx * dx + dd * dd <= (radius + z.r) * (radius + z.r)) {
+          this.damageZombie(z, baseDmg);
+        }
+      }
+      for (let i = 0; i < this.bosses.length; i++) {
+        const b = this.bosses[i];
+        if (!b.alive || !b.active) continue;
+        const dx = b.x - tx;
+        const dd = b.d - td;
+        if (dx * dx + dd * dd <= (radius + b.r) * (radius + b.r)) {
+          this.damageBoss(b, baseDmg * 1.45);
+        }
+      }
+      for (let i = 0; i < this.barrels.length; i++) {
+        const br = this.barrels[i];
+        if (!br.alive || !br.tank) continue;
+        const dx = br.x - tx;
+        const dd = br.d - td;
+        if (dx * dx + dd * dd <= rr + br.r * br.r) {
+          br.hp -= baseDmg * 1.2;
+          br.bump = 1;
+          if (br.hp <= 0) this.breakBarrel(br);
+        }
+      }
+    }
+    return fired;
+  }
+
+  private updateAllyMechs(dt: number) {
+    if (this.allyMechs.length === 0 || this.squad.count <= 0) return;
+    const sq = this.squad;
+    const lvl = Math.max(1, this.perkLevel('mech_drop'));
+    const dmgScale = lvl === 1 ? 1 : lvl === 2 ? 1.35 : 1.65;
+    const missileInterval = lvl >= 3 ? 1.6 : 2.5;
+
+    for (let i = 0; i < this.allyMechs.length; i++) {
+      const m = this.allyMechs[i];
+      m.phase += dt * 7.5;
+      m.recoil = Math.max(0, m.recoil - dt * 6);
+      const side = m.slot % 2 === 0 ? -1 : 1;
+      const row = Math.floor(m.slot / 2);
+      const tx = Math.max(-TRACK_HALF + 1.0, Math.min(TRACK_HALF - 1.0, sq.x + side * (Math.max(1.45, this.halfWidth + 0.8) + row * 0.45)));
+      const td = sq.d + 1.05 + row * 1.8;
+
+      if (m.dropT < 1) {
+        m.dropT = Math.min(1, m.dropT + dt * 2.2);
+        m.x += (tx - m.x) * Math.min(1, dt * 8);
+        m.d += (td - m.d) * Math.min(1, dt * 8);
+        if (m.dropT >= 1) {
+          // 落地重装震荡波，震碎周围丧尸
+          this.events.push({ type: 'mechLand', mech: m });
+          const slamDmg = (180 + this.squad.tier * 80) * this.damage;
+          for (let zi = 0; zi < this.near.length; zi++) {
+            const z = this.near[zi];
+            if (!z.alive) continue;
+            const dx = z.x - m.x;
+            const dd = z.d - m.d;
+            if (dx * dx + dd * dd < 25) this.damageZombie(z, slamDmg);
+          }
+        }
+        continue;
+      }
+
+      m.x += (tx - m.x) * Math.min(1, dt * 7.5);
+      m.d += (td - m.d) * Math.min(1, dt * 9);
+
+      // 自动锁敌（优先 Boss / 敌方坦克 / 近处丧尸）
+      let aimX = m.x;
+      let aimD = m.d + 20;
+      let targetFound = false;
+      let bestDist = Infinity;
+      for (let bi = 0; bi < this.bosses.length; bi++) {
+        const b = this.bosses[bi];
+        if (!b.alive || !b.active) continue;
+        const dd = b.d - m.d;
+        if (dd > 1 && dd < 46 && dd < bestDist) {
+          bestDist = dd;
+          aimX = b.x;
+          aimD = b.d;
+          targetFound = true;
+        }
+      }
+      if (!targetFound) {
+        for (let zi = 0; zi < this.near.length; zi++) {
+          const z = this.near[zi];
+          if (!z.alive || z.d <= m.d + 1.5 || z.d > m.d + 44) continue;
+          const dist = Math.hypot(z.x - m.x, z.d - m.d);
+          if (dist < bestDist) {
+            bestDist = dist;
+            aimX = z.x;
+            aimD = z.d;
+            targetFound = true;
+          }
+        }
+      }
+
+      const desiredYaw = targetFound ? Math.max(-0.85, Math.min(0.85, Math.atan2(aimX - m.x, Math.max(2, aimD - m.d)))) : 0;
+      m.yaw += (desiredYaw - m.yaw) * Math.min(1, dt * 10);
+
+      if (!targetFound) continue;
+      // 双臂旋转机炮高速扫射（真实发射穿透高威子弹）
+      m.fireTimer -= dt;
+      if (m.fireTimer <= 0) {
+        m.fireTimer = 0.14;
+        m.recoil = 1;
+        const speed = BULLET_SPEED * 1.2;
+        const dx = aimX - m.x;
+        const dd = Math.max(2, aimD - m.d);
+        const len = Math.hypot(dx, dd);
+        const vx = (dx / len) * speed + randRange(this.rng, -1.2, 1.2);
+        const vd = (dd / len) * speed;
+        const dmg = (14 + this.squad.tier * 7) * this.damage * dmgScale;
+        for (const arm of [-0.36, 0.36]) {
+          const nb = this.bulletPool.pop() ?? ({} as Bullet);
+          nb.x = m.x + arm;
+          nb.d = m.d + 0.5;
+          nb.vx = vx;
+          nb.vd = vd;
+          nb.dmg = dmg;
+          nb.gateHits = 0;
+          nb.travel = 0;
+          nb.pierce = Math.max(1, this.ammo.pierce);
+          nb.lastHit = -1;
+          this.bullets.push(nb);
+        }
+      }
+
+      // 肩部追踪导弹齐射
+      m.missileTimer -= dt;
+      if (m.missileTimer <= 0) {
+        m.missileTimer = missileInterval;
+        const mdmg = (95 + this.squad.tier * 55) * this.damage * dmgScale;
+        this.rockets.push({
+          x0: m.x,
+          d0: m.d,
+          x: aimX,
+          d: aimD,
+          t: 0,
+          T: 0.42,
+          damage: mdmg,
+        });
+      }
+    }
+  }
+
+  private mechMissileBlast(x: number, d: number, damage: number) {
+    this.events.push({ type: 'carnageBlast', x, d, r: 2.8, nova: false });
+    for (let i = 0; i < this.near.length; i++) {
+      const z = this.near[i];
+      if (!z.alive) continue;
+      const dx = z.x - x;
+      const dd = z.d - d;
+      if (dx * dx + dd * dd <= (2.8 + z.r) * (2.8 + z.r)) this.damageZombie(z, damage);
+    }
+    for (let i = 0; i < this.bosses.length; i++) {
+      const b = this.bosses[i];
+      if (!b.alive || !b.active) continue;
+      const dx = b.x - x;
+      const dd = b.d - d;
+      if (dx * dx + dd * dd <= (2.8 + b.r) * (2.8 + b.r)) this.damageBoss(b, damage * 1.3);
+    }
+  }
+
+  private triggerChainLightning(sx: number, sd: number, sy: number, baseDmg: number, skipId: number) {
+    const lvl = this.perkLevel('chain_lightning');
+    if (lvl <= 0) return;
+    const chance = lvl === 1 ? 0.38 : lvl === 2 ? 0.58 : 0.78;
+    if (this.rng() > chance) return;
+    const bounces = lvl === 1 ? 3 : lvl === 2 ? 5 : 7;
+    const arcDmg = baseDmg * (lvl === 1 ? 0.85 : lvl === 2 ? 1.25 : 1.55);
+    const hitIds = new Set<number>([skipId]);
+    const pts: { x: number; d: number; y: number }[] = [{ x: sx, d: sd, y: sy }];
+    let cx = sx;
+    let cd = sd;
+
+    for (let b = 0; b < bounces; b++) {
+      let bestZ: Zombie | null = null;
+      let bestD2 = 34; // 约 5.8m 跳跃半径
+      const [b0, b1] = this.zSpatial.range(cd - 6, cd + 6);
+      const bins = this.zSpatial.bins;
+      for (let bi = b0; bi <= b1; bi++) {
+        const bin = bins[bi];
+        for (let k = 0; k < bin.length; k++) {
+          const z = bin[k];
+          if (!z.alive || hitIds.has(z.id)) continue;
+          const dx = z.x - cx;
+          const dd = z.d - cd;
+          const d2 = dx * dx + dd * dd;
+          if (d2 < bestD2) {
+            bestD2 = d2;
+            bestZ = z;
+          }
+        }
+      }
+      if (!bestZ) break;
+      hitIds.add(bestZ.id);
+      this.damageZombie(bestZ, arcDmg);
+      pts.push({ x: bestZ.x, d: bestZ.d, y: bestZ.kind === 'giant' ? 1.8 : 0.85 });
+      cx = bestZ.x;
+      cd = bestZ.d;
+    }
+    if (pts.length >= 2) {
+      this.events.push({ type: 'lightningArc', points: pts });
+    }
+  }
+
+  private triggerClusterBlast(x: number, d: number, baseDmg: number, skipId: number) {
+    const lvl = this.perkLevel('cluster_shells');
+    if (lvl <= 0) return;
+    const chance = lvl === 1 ? 0.3 : lvl === 2 ? 0.48 : 0.68;
+    if (this.rng() > chance) return;
+    const radius = lvl === 1 ? 2.1 : lvl === 2 ? 2.7 : 3.2;
+    const blastDmg = baseDmg * (lvl === 1 ? 0.9 : lvl === 2 ? 1.25 : 1.55);
+    const [b0, b1] = this.zSpatial.range(d - radius - 1, d + radius + 1);
+    const bins = this.zSpatial.bins;
+    for (let bi = b0; bi <= b1; bi++) {
+      const bin = bins[bi];
+      for (let k = 0; k < bin.length; k++) {
+        const z = bin[k];
+        if (!z.alive || z.id === skipId) continue;
+        const dx = z.x - x;
+        const dd = z.d - d;
+        if (dx * dx + dd * dd <= (radius + z.r) * (radius + z.r)) {
+          this.damageZombie(z, blastDmg);
+        }
+      }
+    }
+    this.events.push({ type: 'splash', x, d, r: radius });
   }
 
   // ---------- 广告奇袭三路模式 ----------
@@ -1778,13 +2282,15 @@ export class World {
   private killSoldier(index: number, cause: LossCause) {
     const s = this.soldiers[index];
     if (!s) return;
-    if (this.spec.mode === 'blitz' && this.blitz.shield > 0) {
-      this.blitz.shield--;
+    if (this.shield > 0) {
+      this.shield--;
+      this.blitz.shield = this.shield;
       const bx = this.squad.x + s.ox;
       const bd = this.squad.d + s.oz;
-      this.events.push({ type: 'shieldBlock', x: bx, d: bd, remaining: this.blitz.shield });
-      // 真实护盾反震冲击波：震伤并击退贴脸尸潮
-      const repulseDmg = (42 + this.squad.tier * 24) * this.damage;
+      this.events.push({ type: 'shieldBlock', x: bx, d: bd, remaining: this.shield });
+      // 真实护盾反震冲击波：震伤并击退贴脸尸潮（宙斯护盾矩阵 Lv.2+ 伤害翻倍）
+      const aegisMult = this.perkLevel('aegis_matrix') >= 2 ? 2.0 : 1.0;
+      const repulseDmg = (42 + this.squad.tier * 24) * this.damage * aegisMult;
       for (let i = 0; i < this.near.length; i++) {
         const z = this.near[i];
         if (!z.alive) continue;
@@ -2007,9 +2513,10 @@ export class World {
     if (sq.count <= 0 || this.soldiers.length === 0) return;
     const w = this.weapon;
     const emitters = Math.min(sq.count, EMIT_CAP);
-    const streams = this.spec.mode === 'blitz' ? this.blitz.multishot : 1;
+    const streams = this.totalStreams;
+    const odDmg = this.overdrive.active > 0 ? 1.4 : 1;
     let shotsPerSec = emitters * this.fireRate * streams;
-    let dmg = w.damage * this.damage * (sq.count / emitters);
+    let dmg = w.damage * this.damage * odDmg * (sq.count / emitters);
     if (shotsPerSec > MAX_SHOTS_PER_SEC) {
       dmg *= shotsPerSec / MAX_SHOTS_PER_SEC;
       shotsPerSec = MAX_SHOTS_PER_SEC;
@@ -2185,10 +2692,25 @@ export class World {
       if (br.hp <= 0) this.breakBarrel(br);
     } else if (kind === 3) {
       const z = target as Zombie;
-      const damage = b.dmg * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1);
+      const ocLvl = this.perkLevel('overclock');
+      const odOn = this.overdrive.active > 0;
+      const critChance = odOn ? 1 : ocLvl === 0 ? 0 : ocLvl === 1 ? 0.26 : ocLvl === 2 ? 0.42 : 0.58;
+      const isCrit = critChance > 0 && this.rng() < critChance;
+      const critMult = !isCrit ? 1 : ocLvl >= 3 ? 2.8 : ocLvl === 2 ? 2.5 : 2.2;
+      const cryoLvl = this.perkLevel('cryo_rounds');
+      if (cryoLvl > 0) {
+        z.cryo = 2.6;
+        z.cryoLvl = cryoLvl;
+      }
+      const brittle = z.cryo && z.cryo > 0 ? 1 + (z.cryoLvl === 3 ? 0.55 : z.cryoLvl === 2 ? 0.38 : 0.22) : 1;
+      const damage = b.dmg * critMult * brittle * (z.kind === 'giant' ? this.opts.armorMult ?? 1 : 1);
       this.damageZombie(z, damage);
-      this.events.push({ type: 'hit', x: hx, d: hd, y: z.kind === 'giant' ? 2 : 0.7, target: z.kind === 'giant' ? 'giant' : 'zombie', color, dmg: damage, id: z.id });
+      const hitY = z.kind === 'giant' ? 2 : 0.7;
+      this.events.push({ type: 'hit', x: hx, d: hd, y: hitY, target: z.kind === 'giant' ? 'giant' : 'zombie', color: cryoLvl > 0 ? 0x67e8f9 : color, dmg: damage, id: z.id });
+      if (isCrit && this.rng() < 0.45) this.events.push({ type: 'critHit', x: hx, d: hd, y: hitY + 0.5, dmg: damage });
       this.splash(hx, hd, b.dmg, z.id);
+      this.triggerChainLightning(hx, hd, hitY, damage, z.id);
+      this.triggerClusterBlast(hx, hd, damage, z.id);
       // 穿甲：打穿这只接着飞，伤害打七折
       if (b.pierce > 0 && z.kind !== 'giant') {
         b.pierce--;
@@ -2198,10 +2720,24 @@ export class World {
       }
     } else {
       const boss = target as Boss;
-      const damage = b.dmg * (this.opts.armorMult ?? 1);
+      const ocLvl = this.perkLevel('overclock');
+      const odOn = this.overdrive.active > 0;
+      const critChance = odOn ? 1 : ocLvl === 0 ? 0 : ocLvl === 1 ? 0.26 : ocLvl === 2 ? 0.42 : 0.58;
+      const isCrit = critChance > 0 && this.rng() < critChance;
+      const critMult = !isCrit ? 1 : ocLvl >= 3 ? 2.8 : ocLvl === 2 ? 2.5 : 2.2;
+      const cryoLvl = this.perkLevel('cryo_rounds');
+      if (cryoLvl > 0) {
+        boss.cryo = 2.4;
+        boss.cryoLvl = cryoLvl;
+      }
+      const brittle = boss.cryo && boss.cryo > 0 ? 1 + (boss.cryoLvl === 3 ? 0.55 : boss.cryoLvl === 2 ? 0.38 : 0.22) : 1;
+      const damage = b.dmg * critMult * brittle * (this.opts.armorMult ?? 1);
       this.damageBoss(boss, damage);
-      this.events.push({ type: 'hit', x: hx, d: hd, y: 2.4, target: 'boss', color, dmg: damage, id: boss.id });
+      this.events.push({ type: 'hit', x: hx, d: hd, y: 2.4, target: 'boss', color: cryoLvl > 0 ? 0x67e8f9 : color, dmg: damage, id: boss.id });
+      if (isCrit && this.rng() < 0.35) this.events.push({ type: 'critHit', x: hx, d: hd, y: 2.9, dmg: damage });
       this.splash(hx, hd, b.dmg, -1);
+      this.triggerChainLightning(hx, hd, 2.2, damage * 0.65, -1);
+      this.triggerClusterBlast(hx, hd, damage * 0.65, -1);
     }
     return true;
   }
@@ -2244,6 +2780,8 @@ export class World {
     if (br.tank) {
       this.blitz.tanksDestroyed++;
       this.addGems(1, br.x, br.d);
+      this.addXp(45);
+      if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + 15);
       this.captureTank(br);
       this.events.push({ type: 'banner', text: `已收编【${br.tank.name}】！开上前线协同开火，右路奖励全线释放！`, tone: 'info' });
     }
@@ -2289,7 +2827,7 @@ export class World {
       this.blitz.damageBonus += reward.amount;
       this.blitz.buffsCollected++;
     } else if (reward.kind === 'shield') {
-      this.blitz.shield = Math.min(30, this.blitz.shield + reward.amount);
+      this.addShield(reward.amount);
       this.blitz.buffsCollected++;
     } else if (reward.kind === 'boom') {
       this.blitzBombExplode(x, d, reward.radius);
@@ -2351,10 +2889,36 @@ export class World {
         this.carnage.lastKill = this.time;
         this.carnage.bestCombo = Math.max(this.carnage.bestCombo, this.carnage.combo);
         if (!this.novaActive) this.carnage.charge = Math.min(100, this.carnage.charge + 0.85);
-      } else if (this.spec.mode === 'blitz') {
-        this.blitz.combo = this.time - this.blitz.lastKill < 2.5 ? this.blitz.combo + 1 : 1;
-        this.blitz.lastKill = this.time;
-        this.blitz.bestCombo = Math.max(this.blitz.bestCombo, this.blitz.combo);
+      } else {
+        if (this.spec.mode === 'blitz') {
+          this.blitz.combo = this.time - this.blitz.lastKill < 2.5 ? this.blitz.combo + 1 : 1;
+          this.blitz.lastKill = this.time;
+          this.blitz.bestCombo = Math.max(this.blitz.bestCombo, this.blitz.combo);
+        }
+        // 全模式连击与过载充能
+        this.overdrive.combo++;
+        this.overdrive.comboTimer = 3.2;
+        if (this.overdrive.combo > this.overdrive.bestCombo) this.overdrive.bestCombo = this.overdrive.combo;
+        const chargeGain = z.kind === 'giant' ? 14 : z.kind === 'brute' ? 5 : z.kind === 'exploder' ? 3 : 1.6;
+        if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + chargeGain);
+        // 局内肉鸽经验值
+        const xpGain = z.kind === 'giant' ? 35 : z.kind === 'brute' ? 14 : z.kind === 'exploder' ? 6 : 4;
+        this.addXp(xpGain);
+        // 纳米收割协议：累计击杀自动增兵+补盾
+        const leechLvl = this.perkLevel('nanite_leech');
+        if (leechLvl > 0 && this.squad.count > 0) {
+          this.naniteKills++;
+          const need = leechLvl === 1 ? 16 : leechLvl === 2 ? 11 : 7;
+          if (this.naniteKills >= need) {
+            this.naniteKills = 0;
+            const addSoldiers = leechLvl >= 3 ? 2 : 1;
+            const addSh = leechLvl >= 2 ? 2 : 1;
+            this.squad.count = Math.min(this.countCap, this.squad.count + addSoldiers);
+            this.syncSoldiers(false);
+            this.addShield(addSh);
+            this.events.push({ type: 'reward', reward: { kind: 'soldiers', amount: addSoldiers }, x: z.x, d: z.d, upgraded: true });
+          }
+        }
       }
       this.coins += coins;
       if (this.rng() < GEMS.drop[z.kind]) this.addGems(1, z.x, z.d);
@@ -2415,9 +2979,10 @@ export class World {
         const dx = sx + s.ox - x;
         const dd = sd + s.oz - d;
         if (dx * dx + dd * dd < rr) {
-          if (this.spec.mode === 'blitz' && this.blitz.shield > 0) {
-            this.blitz.shield--;
-            this.events.push({ type: 'shieldBlock', x: sx + s.ox, d: sd + s.oz, remaining: this.blitz.shield });
+          if (this.shield > 0) {
+            this.shield--;
+            this.blitz.shield = this.shield;
+            this.events.push({ type: 'shieldBlock', x: sx + s.ox, d: sd + s.oz, remaining: this.shield });
             continue;
           }
           this.events.push({ type: 'soldierDie', x: sx + s.ox, d: sd + s.oz });
@@ -2457,6 +3022,11 @@ export class World {
       if (z.slow && z.slow > 0) {
         z.slow = Math.max(0, z.slow - dt);
         slowMult = 0.56;
+      }
+      if (z.cryo && z.cryo > 0) {
+        z.cryo = Math.max(0, z.cryo - dt);
+        const cMult = z.cryoLvl === 3 ? 0.38 : z.cryoLvl === 2 ? 0.5 : 0.64;
+        if (cMult < slowMult) slowMult = cMult;
       }
       z.phase += dt * slowMult * (z.kind === 'runner' ? 16 : z.kind === 'giant' ? 6 : 11);
 
@@ -2598,6 +3168,8 @@ export class World {
       const bounty = this.spec.mode === 'carnage' ? 0 : bossBounty(this.spec.level, b.final, b.pair) * (this.opts.coinMult ?? 1);
       this.coins += bounty;
       this.addGems(bossGems(b.final, this.rng()), b.x, b.d);
+      this.addXp(90);
+      if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + 25);
       this.events.push({ type: 'bossDie', boss: b, bounty });
       // 防线中途 Boss 只补少量援军（狂潮模式为独立兵备，不发主线防线援军奖励）。
       if (this.defense && this.spec.mode !== 'carnage' && !b.final) {
@@ -2646,7 +3218,12 @@ export class World {
         if (b.kind === 'thrower' && b.fightTime < THROWER_MELEE_TIME) b.timer *= 0.7;
         this.events.push({ type: 'bossEnrage', boss: b });
       }
-      const rage = b.enraged ? 1.3 : 1;
+      let cryoSlow = 1;
+      if (b.cryo && b.cryo > 0) {
+        b.cryo = Math.max(0, b.cryo - dt);
+        cryoSlow = b.cryoLvl === 3 ? 0.72 : b.cryoLvl === 2 ? 0.8 : 0.88;
+      }
+      const rage = (b.enraged ? 1.3 : 1) * cryoSlow;
       // 横向跟着队伍，双 Boss 时各守一边；防线还在隔离墙那一段时守在自己的道上
       const inLane = this.defense && b.d > DEFENSE_WALL_D + b.r;
       const lim = this.spec.mode === 'blitz' ? 1.45 : inLane ? 0.8 : double && !this.defense ? 0.9 : 4.5;

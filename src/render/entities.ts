@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { AMMO, BOSSES, BOSS_STRIKE_HALF, THROWER_MELEE_TIME, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
-import type { AllyTank, Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
+import type { AllyMech, AllyTank, Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
 import { bossMotion, bossPose } from './bossMotion';
 import { commitInstances, disposeObject } from './dispose';
 import { HpBar, Label, formatNumber, labelPlane, labelSprite } from './label';
@@ -18,6 +18,9 @@ import {
   damageCoreGeometry,
   droneGeometry,
   drumMesh,
+  mechArmGeometry,
+  mechLegGeometry,
+  mechTorsoGeometry,
   missileGeometry,
   multishotGeometry,
   rateBoltGeometry,
@@ -38,7 +41,7 @@ export const GATE_COLORS = {
   rate: 0x14c8e0,
 };
 
-const vertexMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+const vertexMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.46, metalness: 0.34 });
 vertexMat.userData.shared = true;
 const _white = new THREE.Color(0xffffff);
 const _wallMat = new THREE.Matrix4();
@@ -60,15 +63,15 @@ export const stripeTexture = (() => {
   c.width = c.height = 64;
   const ctx = c.getContext('2d')!;
   ctx.fillStyle = '#ffffff';
-  ctx.globalAlpha = 0.75;
+  ctx.globalAlpha = 0.72;
   ctx.fillRect(0, 0, 64, 64);
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#ffffff';
   for (let i = -64; i < 128; i += 22) {
     ctx.beginPath();
     ctx.moveTo(i, 0);
-    ctx.lineTo(i + 9, 0);
-    ctx.lineTo(i + 9 + 64, 64);
+    ctx.lineTo(i + 8, 0);
+    ctx.lineTo(i + 8 + 64, 64);
     ctx.lineTo(i + 64, 64);
     ctx.closePath();
     ctx.fill();
@@ -91,7 +94,8 @@ export class GateView {
   readonly group = new THREE.Group();
   private readonly panelMat: THREE.MeshBasicMaterial;
   private readonly floorMat: THREE.MeshBasicMaterial;
-  private readonly postMat: THREE.MeshLambertMaterial;
+  private readonly postMat: THREE.MeshStandardMaterial;
+  private readonly trimMat: THREE.MeshBasicMaterial;
   private readonly label = new Label(256, 160);
   private readonly labelMesh: THREE.Mesh;
   private readonly inner = new THREE.Group();
@@ -111,9 +115,10 @@ export class GateView {
     const w = gate.x1 - gate.x0;
     this.group.position.set((gate.x0 + gate.x1) / 2, 0, -gate.d);
     this.group.add(this.inner);
-    this.panelMat = new THREE.MeshBasicMaterial({ map: stripeTexture, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide });
-    this.floorMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.32, depthWrite: false });
-    this.postMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    this.panelMat = new THREE.MeshBasicMaterial({ map: stripeTexture, transparent: true, opacity: 0.48, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
+    this.floorMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.34, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
+    this.postMat = new THREE.MeshStandardMaterial({ color: 0x253041, roughness: 0.36, metalness: 0.72 });
+    this.trimMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
 
     const panel = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.3 * ITEM_SCALE, 1.75 * ITEM_SCALE), this.panelMat);
     panel.position.y = 0.97 * ITEM_SCALE;
@@ -121,16 +126,18 @@ export class GateView {
     const floor = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.1, 2.2 * ITEM_SCALE), this.floorMat);
     floor.rotation.x = -Math.PI / 2;
     floor.position.set(0, 0.03, 0.9 * ITEM_SCALE);
-    const topBar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.3 * ITEM_SCALE, 0.16 * ITEM_SCALE, 0.16 * ITEM_SCALE), this.postMat);
-    topBar.position.y = 1.86 * ITEM_SCALE;
-    this.inner.add(panel, floor, topBar);
-    const postR = 0.17 * ITEM_SCALE;
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.25 * ITEM_SCALE, 0.22 * ITEM_SCALE, 0.24 * ITEM_SCALE), this.postMat);
+    topBar.position.y = 1.9 * ITEM_SCALE;
+    const topGlow = new THREE.Mesh(new THREE.BoxGeometry(w - 0.36 * ITEM_SCALE, 0.08 * ITEM_SCALE, 0.28 * ITEM_SCALE), this.trimMat);
+    topGlow.position.y = 1.9 * ITEM_SCALE;
+    this.inner.add(panel, floor, topBar, topGlow);
+    const postR = 0.18 * ITEM_SCALE;
     for (const side of [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(postR, postR, 2.0 * ITEM_SCALE, 10), this.postMat);
-      post.position.set(side * (w / 2 - postR), 1.0 * ITEM_SCALE, 0);
+      const post = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.6, 2.05 * ITEM_SCALE, postR * 1.6), this.postMat);
+      post.position.set(side * (w / 2 - postR), 1.02 * ITEM_SCALE, 0);
       post.castShadow = true;
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21 * ITEM_SCALE, 10, 8), this.postMat);
-      cap.position.set(side * (w / 2 - postR), 2.02 * ITEM_SCALE, 0);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.85, 0.16 * ITEM_SCALE, postR * 1.85), this.trimMat);
+      cap.position.set(side * (w / 2 - postR), 2.08 * ITEM_SCALE, 0);
       this.inner.add(post, cap);
     }
     this.labelMesh = labelPlane(this.label, Math.min(3.3 * ITEM_SCALE, w - 0.4), 2.06 * ITEM_SCALE);
@@ -156,7 +163,7 @@ export class GateView {
       this.base.set(color);
       this.panelMat.color.set(color);
       this.floorMat.color.set(color);
-      this.postMat.color.set(color).multiplyScalar(1.1);
+      this.trimMat.color.set(color).lerp(_white, 0.25);
     }
     const stroke = 'rgba(20,30,40,0.85)';
     if (g.kind === 'mul') this.label.set(`×${g.value}`, { fill: '#ffffff', stroke, size: 100 });
@@ -249,7 +256,7 @@ export class BarrelView {
   private flyT = -1;
   private readonly flyFrom = new THREE.Vector3();
   /** 每个桶自己一份材质，被打时单独闪白 */
-  private readonly mat: THREE.MeshLambertMaterial;
+  private readonly mat: THREE.MeshStandardMaterial;
   /** 掉血到 75% / 50% / 25% 时各崩一次，渲染器据此放碎块 */
   private stage = 0;
   private stageHit = false;
@@ -1021,7 +1028,7 @@ export class AllyTankView {
   private readonly hull: THREE.Mesh;
   private readonly turret: THREE.Mesh;
   private readonly turretY: number;
-  private readonly mat: THREE.MeshLambertMaterial;
+  private readonly mat: THREE.MeshStandardMaterial;
   private readonly halo: THREE.Mesh;
   private readonly haloMat: THREE.MeshBasicMaterial;
   private readonly badge = new Label(256, 72);
@@ -1092,6 +1099,131 @@ export class AllyTankView {
     this.halo.scale.setScalar(ringScale);
     this.haloMat.opacity = 0.42 + t.captureGlow * 0.48 + Math.sin(time * 4 + t.id) * 0.08;
     this.badgeSprite.position.y = (t.r / 1.5) * 2.55 + Math.sin(time * 3 + t.id) * 0.08;
+  }
+
+  dispose() {
+    this.badge.dispose();
+    this.group.removeFromParent();
+    disposeObject(this.group);
+  }
+}
+
+/** 空投泰坦机甲 3D 实体：双足重装机甲 + 双臂多管旋转机炮 + 轨道降落光柱 + 底部反应堆光环 */
+export class AllyMechView {
+  readonly group = new THREE.Group();
+  private readonly body = new THREE.Group();
+  private readonly upper = new THREE.Group();
+  private readonly legL: THREE.Mesh;
+  private readonly legR: THREE.Mesh;
+  private readonly armL: THREE.Mesh;
+  private readonly armR: THREE.Mesh;
+  private readonly mat: THREE.MeshStandardMaterial;
+  private readonly halo: THREE.Mesh;
+  private readonly haloMat: THREE.MeshBasicMaterial;
+  private readonly dropBeam: THREE.Mesh;
+  private readonly badge = new Label(256, 72);
+  private readonly badgeSprite: THREE.Sprite;
+
+  constructor(
+    scene: THREE.Scene,
+    readonly mech: AllyMech,
+  ) {
+    this.group.position.set(mech.x, 0, -mech.d);
+    this.group.scale.setScalar(ITEM_SCALE * 1.18);
+    this.mat = vertexMat.clone();
+    this.mat.roughness = 0.32;
+    this.mat.metalness = 0.62;
+    this.mat.userData.shared = false;
+
+    const legGeo = mechLegGeometry();
+    this.legL = new THREE.Mesh(legGeo, this.mat);
+    this.legL.position.set(-0.34, 1.15, 0);
+    this.legL.castShadow = true;
+    this.legR = new THREE.Mesh(legGeo, this.mat);
+    this.legR.position.set(0.34, 1.15, 0);
+    this.legR.castShadow = true;
+
+    const torso = new THREE.Mesh(mechTorsoGeometry(), this.mat);
+    torso.castShadow = true;
+    this.upper.add(torso);
+
+    const armGeo = mechArmGeometry();
+    this.armL = new THREE.Mesh(armGeo, this.mat);
+    this.armL.position.set(-0.82, 1.88, -0.04);
+    this.armL.castShadow = true;
+    this.armR = new THREE.Mesh(armGeo, this.mat);
+    this.armR.position.set(0.82, 1.88, -0.04);
+    this.armR.castShadow = true;
+    this.upper.add(this.armL, this.armR);
+
+    this.body.add(this.legL, this.legR, this.upper);
+    this.group.add(this.body);
+
+    this.haloMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+    this.halo = new THREE.Mesh(new THREE.RingGeometry(0.92, 1.24, 32), this.haloMat);
+    this.halo.rotation.x = -Math.PI / 2;
+    this.halo.position.y = 0.06;
+    this.group.add(this.halo);
+
+    this.dropBeam = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.55, 0.85, 36, 16, 1, true),
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.65,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      }),
+    );
+    this.dropBeam.position.y = 18;
+    this.group.add(this.dropBeam);
+
+    this.badge.set('泰坦机甲', {
+      fill: '#ffffff',
+      stroke: '#1e1b4b',
+      pill: '#f59e0b',
+      size: 38,
+    });
+    this.badgeSprite = labelSprite(this.badge, 1.85, 0.54, false);
+    this.badgeSprite.position.set(0, 3.35, 0);
+    this.group.add(this.badgeSprite);
+
+    scene.add(this.group);
+  }
+
+  update(time: number) {
+    const m = this.mech;
+    this.group.position.set(m.x, 0, -m.d);
+    if (m.dropT < 1) {
+      const k = 1 - m.dropT;
+      this.body.position.y = k * k * 28;
+      this.dropBeam.visible = true;
+      (this.dropBeam.material as THREE.MeshBasicMaterial).opacity = Math.max(0.05, k * 0.8);
+      this.halo.scale.setScalar(1 + k * 0.7);
+    } else {
+      const stride = Math.sin(m.phase) * 0.45;
+      this.body.position.y = Math.abs(Math.sin(m.phase)) * 0.09;
+      this.legL.rotation.x = stride;
+      this.legR.rotation.x = -stride;
+      this.dropBeam.visible = false;
+      this.halo.scale.setScalar(1 + Math.sin(time * 5 + m.id) * 0.05);
+    }
+    this.upper.rotation.y = -m.yaw;
+    this.armL.position.z = -0.04 + m.recoil * 0.24;
+    this.armR.position.z = -0.04 + m.recoil * 0.24;
+    const glow = m.recoil * 0.35 + (m.dropT < 1 ? 0.5 : 0);
+    this.mat.emissive.setRGB(glow * 0.2, glow * 0.65, glow * 0.95);
+    this.badgeSprite.position.y = 3.35 + this.body.position.y + Math.sin(time * 3 + m.id) * 0.06;
   }
 
   dispose() {

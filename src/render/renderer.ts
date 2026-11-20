@@ -1,4 +1,9 @@
 import * as THREE from 'three';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import { AMMO, BOSSES, DEFENSE_VIEW_D, MAX_SOLDIERS_SIM, THROW_RADIUS, TRACK_HALF, WEAPONS, ZOMBIES, type SkinDef, type ZombieKind } from '../game/config';
 import type { GameEvent, World, Zombie } from '../game/world';
 import type { Models } from './assets';
@@ -6,8 +11,8 @@ import { ReferenceCarnageView } from './carnage';
 import { ModelBossView, bakeSoldierBody, bossModel, buildSoldier, buildZombies, gunStatic, propGeometry, type SoldierKit } from './characters';
 import { Crowd, type AgentPose } from './crowd';
 import { commitInstances } from './dispose';
-import { BlobShadows, BulletMesh, Explosions, Flashes, FloatTexts, Particles, Pillar, Rings, Splats, Streaks, ZombieBars } from './effects';
-import { AllyTankView, BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, gateColor, stripeTexture } from './entities';
+import { BlobShadows, BulletMesh, Explosions, Flashes, FloatTexts, LightningBolts, OrbitalBeams, Particles, Pillar, Rings, Splats, Streaks, ZombieBars } from './effects';
+import { AllyMechView, AllyTankView, BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, gateColor, stripeTexture } from './entities';
 import { Environment } from './environment';
 import { HpBar, formatNumber } from './label';
 import { setGunProvider, soldierBody, soldierLeg } from './models';
@@ -217,6 +222,12 @@ export class GameRenderer {
   private readonly squadPos = new THREE.Vector3();
   private readonly badge: HTMLDivElement;
   private readonly allyTanks = new Map<number, AllyTankView>();
+  private readonly allyMechs = new Map<number, AllyMechView>();
+  private readonly lightning: LightningBolts;
+  private readonly orbitalBeams: OrbitalBeams;
+  private readonly composer: EffectComposer | null = null;
+  private readonly bloomPass: UnrealBloomPass | null = null;
+  private readonly envRT: THREE.WebGLRenderTarget | null = null;
   private readonly blitzDrones: THREE.Mesh[] = [];
   private readonly shieldAura: THREE.Mesh;
   private readonly shieldMat: THREE.MeshBasicMaterial;
@@ -254,8 +265,29 @@ export class GameRenderer {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.renderer.toneMapping = THREE.NoToneMapping;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.06;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    // 次世代 PBR 环境反射（IBL）与电影级辉光后处理管线（低配自动回退直出）
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this.envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+      this.scene.environment = this.envRT.texture;
+      this.scene.environmentIntensity = 0.65;
+      pmrem.dispose();
+
+      const composer = new EffectComposer(this.renderer);
+      composer.addPass(new RenderPass(this.scene, this.camera));
+      const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.34, 0.42, 0.86);
+      composer.addPass(bloom);
+      composer.addPass(new OutputPass());
+      this.composer = composer;
+      this.bloomPass = bloom;
+    } catch {
+      this.composer = null;
+      this.bloomPass = null;
+    }
 
     canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
@@ -320,9 +352,11 @@ export class GameRenderer {
       new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
       1000,
     );
-    this.debris = new Particles(this.scene, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial(), 1100);
+    this.debris = new Particles(this.scene, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.65, metalness: 0.25 }), 1100);
     this.rings = new Rings(this.scene);
     this.pillar = new Pillar(this.scene);
+    this.lightning = new LightningBolts(this.scene);
+    this.orbitalBeams = new OrbitalBeams(this.scene);
     this.streaks = new Streaks(this.scene);
     this.flashes = new Flashes(this.scene);
     this.impacts = new Flashes(this.scene, 48);
@@ -341,7 +375,7 @@ export class GameRenderer {
 
     // 广告奇袭专属 3D 表现：护航无人机、3D 能量护盾罩、火力光环、追踪导弹、友军重炮弹、空袭战机与左路极速传送带箭头
     const droneGeo = droneGeometry(0.95 * ITEM_SCALE);
-    const droneMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+    const droneMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.36, metalness: 0.58 });
     for (let i = 0; i < 6; i++) {
       const mesh = new THREE.Mesh(droneGeo, droneMat);
       mesh.castShadow = true;
@@ -413,7 +447,7 @@ export class GameRenderer {
     this.allyShellMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     this.scene.add(this.allyShellMesh);
 
-    this.airstrikeJet = new THREE.Mesh(jetGeometry(), new THREE.MeshLambertMaterial({ vertexColors: true }));
+    this.airstrikeJet = new THREE.Mesh(jetGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.65 }));
     this.airstrikeJet.scale.setScalar(ITEM_SCALE);
     this.airstrikeJet.castShadow = true;
     this.airstrikeJet.visible = false;
@@ -468,6 +502,8 @@ export class GameRenderer {
     this.basePixelRatio = Math.max(0.5, Math.min(window.devicePixelRatio || 1, this.mobile ? 2 : 1.5, budget));
     this.applyPixelRatio();
     this.renderer.setSize(w, h, false);
+    this.composer?.setSize(w, h);
+    this.bloomPass?.resolution.set(w, h);
     this.camera.aspect = w / h;
     this.camera.fov = w / h < 0.8 ? 58 : w / h < 1.2 ? 50 : 44;
     this.camera.updateProjectionMatrix();
@@ -476,7 +512,9 @@ export class GameRenderer {
 
   private applyPixelRatio() {
     const k = [1, 0.8, 0.62][this.quality];
-    this.renderer.setPixelRatio(Math.max(0.5, this.basePixelRatio * k));
+    const pr = Math.max(0.5, this.basePixelRatio * k);
+    this.renderer.setPixelRatio(pr);
+    this.composer?.setPixelRatio(pr);
   }
 
   /** 每帧报一次真实帧间隔（秒）：持续掉帧就降一档，稳住了再慢慢升回来 */
@@ -501,6 +539,8 @@ export class GameRenderer {
     this.quality = q;
     this.applyPixelRatio();
     this.renderer.setSize(this.width, this.height, false);
+    this.composer?.setSize(this.width, this.height);
+    this.bloomPass?.resolution.set(this.width, this.height);
     const shadows = q < 2;
     if (this.sun.castShadow !== shadows) {
       this.sun.castShadow = shadows;
@@ -561,9 +601,13 @@ export class GameRenderer {
     this.gatePopAt.clear();
     this.splats.clear();
     this.explosions.clear();
+    this.lightning.clear();
+    this.orbitalBeams.clear();
     this.texts.clear();
     for (const v of this.allyTanks.values()) v.dispose();
     this.allyTanks.clear();
+    for (const v of this.allyMechs.values()) v.dispose();
+    this.allyMechs.clear();
     for (let i = 0; i < this.blitzDrones.length; i++) this.blitzDrones[i].visible = false;
     this.shieldAura.visible = false;
     this.shieldDome.visible = false;
@@ -681,6 +725,16 @@ export class GameRenderer {
       }
     }
     for (const [id, v] of this.allyTanks) if (!seen.has(id)) (v.dispose(), this.allyTanks.delete(id));
+
+    seen.clear();
+    for (let i = 0; i < w.allyMechs.length; i++) {
+      const m = w.allyMechs[i];
+      seen.add(m.id);
+      if (!this.allyMechs.has(m.id)) {
+        this.allyMechs.set(m.id, new AllyMechView(this.scene, m));
+      }
+    }
+    for (const [id, v] of this.allyMechs) if (!seen.has(id)) (v.dispose(), this.allyMechs.delete(id));
   }
 
   private makeBossView(b: World['bosses'][number], dropIn: boolean): BossView | ModelBossView {
@@ -1121,6 +1175,66 @@ export class GameRenderer {
           this.sparks.burst(e.x, 0.5, -e.d, 4, 4, 0.3, 0.1, TRAP_COLS, 10, 0.5);
           break;
         }
+        case 'lightningArc': {
+          this.lightning.spawn(e.points);
+          const last = e.points[e.points.length - 1];
+          this.sparks.burst(last.x, last.y * ITEM_SCALE, -last.d, 6, 5.5, 0.25, 0.085, SHIELD_COLS, 4, 0.5);
+          break;
+        }
+        case 'orbitalLaser': {
+          const color = e.level >= 3 ? 0xa855f7 : 0x38bdf8;
+          this.orbitalBeams.spawn(e.x, -e.d, e.r, color);
+          this.rings.spawn(e.x, -e.d, e.r * 2.5, color, 0.65);
+          this.explosions.spawn(e.x, 1.0, -e.d, e.r * 0.85, false);
+          _triCols[0] = color;
+          _triCols[1] = 0xe0f2fe;
+          _triCols[2] = 0xffffff;
+          this.sparks.burst(e.x, 1.4, -e.d, 26, 11, 0.65, 0.14, _triCols, 6, 0.65);
+          this.shake(0.32);
+          break;
+        }
+        case 'mechDrop': {
+          const m = e.mech;
+          this.pillar.spawn(m.x, -m.d, 2.2 * ITEM_SCALE, 0x38bdf8);
+          this.texts.spawn('泰坦机甲空投！', m.x, 3.0, -m.d, 'big gold', 1.4, 1.8);
+          break;
+        }
+        case 'mechLand': {
+          const m = e.mech;
+          this.rings.spawn(m.x, -m.d, 7.5, 0x38bdf8, 0.58);
+          this.rings.spawn(m.x, -m.d, 4.8, 0xfacc15, 0.42);
+          this.debris.burst(m.x, 0.4, -m.d, 22, 8.5, 0.85, 0.18, STONE_COLS, 20, 0.65);
+          this.sparks.burst(m.x, 0.9, -m.d, 28, 9.5, 0.6, 0.14, SHIELD_COLS, 6, 0.55);
+          this.shake(0.42);
+          break;
+        }
+        case 'critHit': {
+          this.texts.spawn(`暴击 -${formatNumber(e.dmg)}`, e.x + (Math.random() - 0.5) * 0.8, e.y * ITEM_SCALE + 0.5, -e.d, 'crit', 0.65, 1.45);
+          this.sparks.burst(e.x, e.y * ITEM_SCALE, -e.d, 5, 6.2, 0.24, 0.09, WEAPON_UP_COLS, 6, 0.5);
+          break;
+        }
+        case 'overdriveStart': {
+          const pw = Math.max(1.8, w.halfWidth + 0.8);
+          this.pillar.spawn(sq.x, -sq.d, pw, 0xfacc15);
+          this.rings.spawn(sq.x, -sq.d, pw * 3.8, 0xfacc15, 0.72);
+          this.rings.spawn(sq.x, -sq.d, pw * 2.4, 0x38bdf8, 0.55);
+          this.sparks.burst(sq.x, 1.2, -sq.d, 48, 12, 0.85, 0.16, BOSS_SPARK_COLS, 5, 0.7);
+          this.texts.spawn('战术过载！', sq.x, 3.1, -sq.d, 'big gold', 1.4, 1.8);
+          this.shake(0.38);
+          break;
+        }
+        case 'perkChosen': {
+          const rarityColor = e.perk.rarity === 'legendary' ? 0xf59e0b : e.perk.rarity === 'epic' ? 0xa855f7 : 0x38bdf8;
+          const pw = Math.max(1.6, w.halfWidth + 0.6);
+          this.pillar.spawn(sq.x, -sq.d, pw, rarityColor);
+          this.rings.spawn(sq.x, -sq.d, pw * 3.2, rarityColor, 0.6);
+          _pairCols[0] = rarityColor;
+          _pairCols[1] = 0xffffff;
+          this.sparks.burst(sq.x, 1.2, -sq.d, 34, 9.5, 0.75, 0.14, _pairCols, 5, 0.65);
+          this.texts.spawn(`${e.perk.name} Lv.${e.level}`, sq.x, 2.9, -sq.d, 'big gold', 1.35, 1.75);
+          this.shake(0.2);
+          break;
+        }
         case 'won': {
           this.sparks.burst(sq.x, 2, -sq.d, 60, 10, 1.4, 0.18, WIN_COLS, 10, 0.8);
           break;
@@ -1230,7 +1344,13 @@ export class GameRenderer {
       _pose.flash = flash;
       _pose.tilt = -z.flash * (anim ? 0.34 : 0.42);
       _pose.stride = z.active ? 1 : 0.15;
-      _pose.tint = fillZombieTint(z.look, anim);
+      const tint = fillZombieTint(z.look, anim);
+      if (z.cryo && z.cryo > 0) {
+        tint[0] = tint[0] * 0.55;
+        tint[1] = tint[1] * 1.05;
+        tint[2] = Math.min(1.8, tint[2] * 1.55);
+      }
+      _pose.tint = tint;
       _pose.clip = close ? 'attack' : z.active ? 'run' : 'idle';
       _pose.cycle = close ? t * 1.3 + z.id * 0.17 : z.phase / (Math.PI * 2);
       herd.push(_pose);
@@ -1249,7 +1369,7 @@ export class GameRenderer {
     this.blobs.end();
 
     this.bullets.update(w.bullets);
-    // 广告奇袭：友军坦克编队、重炮弹道、护航无人机、3D 护盾罩、火力光环、追踪导弹、空袭战机与左路高速箭头
+    // 广告奇袭专属 + 全模式空投泰坦机甲 / 护盾罩 / 过载光环 / 追踪导弹
     const isBlitz = w.spec.mode === 'blitz';
     if (isBlitz) {
       // 左路高速 +1 传送带流动箭头
@@ -1265,6 +1385,15 @@ export class GameRenderer {
         if (dt > 0 && view.tank.phase === 'joining' && Math.random() < 0.7) {
           this.sparks.spawn(view.tank.x + (Math.random() - 0.5) * 1.1 * ITEM_SCALE, 0.22, -view.tank.d - 0.8 * ITEM_SCALE, 0, 1.4, -2, 0.28, 0.1 * ITEM_SCALE, 0x38bdf8, 8);
         }
+      }
+    }
+    // 全模式空投泰坦机甲更新 + 双臂机炮枪口火光
+    for (const view of this.allyMechs.values()) {
+      view.update(t);
+      const m = view.mech;
+      if (dt > 0 && m.dropT >= 1 && m.recoil > 0.7) {
+        this.flashes.spawn(m.x - 0.45 * ITEM_SCALE, 1.65 * ITEM_SCALE, -(m.d + 0.9 * ITEM_SCALE), 1.0 * ITEM_SCALE);
+        this.flashes.spawn(m.x + 0.45 * ITEM_SCALE, 1.65 * ITEM_SCALE, -(m.d + 0.9 * ITEM_SCALE), 1.0 * ITEM_SCALE);
       }
     }
     // 友军重炮弹飞行与炽烈拖尾
@@ -1329,7 +1458,7 @@ export class GameRenderer {
       }
     }
     this.shieldFlash = Math.max(0, this.shieldFlash - dt * 4);
-    if (isBlitz && w.blitz.shield > 0 && sq.count > 0) {
+    if (w.shield > 0 && sq.count > 0) {
       this.shieldAura.visible = true;
       this.shieldDome.visible = true;
       const r = Math.max(0.95, w.halfWidth + 0.35);
@@ -1344,19 +1473,20 @@ export class GameRenderer {
       this.shieldAura.visible = false;
       this.shieldDome.visible = false;
     }
-    // 火力倍增 / 多重弹道炽烈光环
-    if (isBlitz && (w.blitz.damageBonus > 0 || w.blitz.multishot > 1) && sq.count > 0) {
+    // 战术过载黄金光环 / 火力倍增 / 多重弹道炽烈光环
+    const odActive = w.overdrive.active > 0;
+    if ((odActive || (isBlitz && (w.blitz.damageBonus > 0 || w.blitz.multishot > 1)) || w.perkLevel('fan_volley') > 0) && sq.count > 0) {
       this.powerAura.visible = true;
-      const pr = Math.max(0.85, w.halfWidth + 0.18);
+      const pr = Math.max(0.85, w.halfWidth + (odActive ? 0.34 : 0.18));
       this.powerAura.position.set(sq.x, 0.05, -sq.d);
-      this.powerAura.scale.setScalar(pr * (1 + Math.sin(t * 6.5) * 0.04));
-      this.powerAuraMat.color.setHex(w.blitz.damageBonus > 0 ? 0xf97316 : 0xa855f7);
-      this.powerAuraMat.opacity = 0.26 + Math.sin(t * 6.5) * 0.08;
+      this.powerAura.scale.setScalar(pr * (1 + Math.sin(t * (odActive ? 11 : 6.5)) * (odActive ? 0.07 : 0.04)));
+      this.powerAuraMat.color.setHex(odActive ? 0xfacc15 : isBlitz && w.blitz.damageBonus > 0 ? 0xf97316 : 0xa855f7);
+      this.powerAuraMat.opacity = (odActive ? 0.52 : 0.26) + Math.sin(t * (odActive ? 11 : 6.5)) * 0.1;
     } else {
       this.powerAura.visible = false;
     }
     let mi = 0;
-    if (isBlitz && w.rockets.length > 0) {
+    if (w.rockets.length > 0) {
       for (let i = 0; i < w.rockets.length && mi < 48; i++) {
         const r = w.rockets[i];
         const k = Math.min(1, r.t / r.T);
@@ -1373,17 +1503,21 @@ export class GameRenderer {
     }
     this.prevBlitzMissiles = commitInstances(this.blitzMissiles, mi, this.prevBlitzMissiles);
     const trail =
-      sq.tier >= 5
-        ? sq.tier === 6
-          ? 0xd59bff
-          : 0xffe27a
-        : w.ammo.name === '电磁弹'
+      odActive
+        ? 0xfacc15
+        : w.perkLevel('cryo_rounds') > 0
           ? 0x67e8f9
-          : w.ammo.name === '爆裂弹'
-            ? 0xff7b24
-            : isBlitz && w.blitz.multishot > 1
-              ? 0xe879f9
-              : 0;
+          : sq.tier >= 5
+            ? sq.tier === 6
+              ? 0xd59bff
+              : 0xffe27a
+            : w.ammo.name === '电磁弹'
+              ? 0x67e8f9
+              : w.ammo.name === '爆裂弹'
+                ? 0xff7b24
+                : (isBlitz && w.blitz.multishot > 1) || w.perkLevel('fan_volley') > 0
+                  ? 0xe879f9
+                  : 0;
     if (trail && w.bullets.length && dt > 0) {
       for (let i = 0; i < 6; i++) {
         const b = w.bullets[Math.floor(Math.random() * w.bullets.length)];
@@ -1528,6 +1662,8 @@ export class GameRenderer {
     this.impacts.update(dt, this.camera);
     this.splats.update(dt);
     this.explosions.update(dt);
+    this.lightning.update(dt);
+    this.orbitalBeams.update(dt);
 
     const camDamp = dt <= 0 ? 0 : 1 - Math.exp(-6.5 * dt);
     this.placeCamera(w, camDamp, realDt);
@@ -1733,6 +1869,7 @@ export class GameRenderer {
     if (this.contextLost) return;
     const tRender = performance.now();
     if (this.world?.spec.mode === 'carnage') this.referenceCarnage!.render(this.renderer);
+    else if (this.quality < 2 && this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
     this.perf.render = this.perf.render * 0.95 + (performance.now() - tRender) * 0.05;
     this.perf.calls = this.renderer.info.render.calls;

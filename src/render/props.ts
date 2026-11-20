@@ -121,7 +121,7 @@ export interface BossRig {
   legR: THREE.Object3D;
   armL: THREE.Object3D;
   armR: THREE.Object3D;
-  materials: THREE.MeshLambertMaterial[];
+  materials: THREE.MeshStandardMaterial[];
   hpAnchor: THREE.Object3D;
   /** 投弹屠夫手里的油桶 */
   drum?: THREE.Object3D;
@@ -135,8 +135,8 @@ export function buildBossRig(kind: BossKind): BossRig {
   return buildBrute();
 }
 
-function lambert(color: number) {
-  return new THREE.MeshLambertMaterial({ color });
+function lambert(color: number, roughness = 0.62, metalness = 0.15) {
+  return new THREE.MeshStandardMaterial({ color, roughness, metalness });
 }
 
 function mesh(g: THREE.BufferGeometry, m: THREE.Material, cast = true) {
@@ -759,4 +759,60 @@ export function jetGeometry(): Part {
 
 function forWing(x: number): Part {
   return paint(at(new THREE.BoxGeometry(0.1, 0.85, 0.75), x, 0.42, 1.15, 0, 0, x < 0 ? 0.22 : -0.22), 0x1e293b);
+}
+
+/** 空投泰坦机甲躯干（装甲核心 + 发光青色战术目镜 + 双肩追踪导弹巢 + 背部推进器，面朝 -z） */
+export function mechTorsoGeometry(): Part {
+  const parts: Part[] = [
+    // 重型骨盆与装甲胸甲
+    paint(at(new THREE.BoxGeometry(0.76, 0.34, 0.62), 0, 1.15, 0), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(1.18, 0.92, 0.88), 0, 1.78, -0.04), 0x1d4ed8),
+    // 倾斜前胸反应装甲 + 金色指挥徽标
+    paint(at(new THREE.BoxGeometry(0.92, 0.54, 0.24), 0, 1.82, -0.5, 0.22), 0x0f172a),
+    paint(at(new THREE.OctahedronGeometry(0.18, 0), 0, 1.84, -0.62, 0, Math.PI / 4, 0, 1.1, 1.1, 0.4), 0xfacc15),
+    // 头部驾驶舱 + 高亮战术目镜
+    paint(at(new THREE.BoxGeometry(0.56, 0.38, 0.56), 0, 2.38, -0.06), 0x334155),
+    paint(at(new THREE.BoxGeometry(0.46, 0.14, 0.12), 0, 2.4, -0.34), 0x67e8f9),
+    // 顶部雷达天线
+    paint(at(new THREE.CylinderGeometry(0.025, 0.035, 0.6, 6), 0.24, 2.78, 0.05), 0x94a3b8),
+    // 背部双喷气推进背包
+    paint(at(new THREE.BoxGeometry(0.84, 0.72, 0.42), 0, 1.85, 0.56), 0x1e293b),
+    paint(at(new THREE.CylinderGeometry(0.14, 0.18, 0.28, 8), -0.24, 1.42, 0.62), 0x38bdf8),
+    paint(at(new THREE.CylinderGeometry(0.14, 0.18, 0.28, 8), 0.24, 1.42, 0.62), 0x38bdf8),
+  ];
+  // 双肩重型装甲护肩 + 6 联追踪导弹发射巢
+  for (const s of [-1, 1]) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.42, 0.46, 0.72), s * 0.76, 2.08, -0.02, 0, 0, -s * 0.18), 0x2563eb));
+    parts.push(paint(at(new THREE.BoxGeometry(0.36, 0.32, 0.54), s * 0.72, 2.42, 0.06), 0x334155));
+    for (const mx of [-0.09, 0.09]) {
+      for (const my of [-0.07, 0.07]) {
+        parts.push(paint(at(new THREE.CylinderGeometry(0.045, 0.045, 0.16, 6), s * 0.72 + mx, 2.42 + my, -0.22, Math.PI / 2), 0xf97316));
+      }
+    }
+  }
+  return merged(parts);
+}
+
+/** 泰坦机甲单腿（反关节重装机械腿，枢轴在 y=0 髋部，向下延伸约 1.15m） */
+export function mechLegGeometry(): Part {
+  return merged([
+    paint(at(new THREE.BoxGeometry(0.3, 0.56, 0.34), 0, -0.28, -0.04, 0.14), 0x334155),
+    paint(at(new THREE.CylinderGeometry(0.16, 0.16, 0.36, 8), 0, -0.56, -0.08, 0, 0, Math.PI / 2), 0xfacc15),
+    paint(at(new THREE.BoxGeometry(0.28, 0.54, 0.32), 0, -0.84, 0.04, -0.1), 0x1d4ed8),
+    paint(at(new THREE.BoxGeometry(0.44, 0.18, 0.68), 0, -1.08, -0.06), 0x0f172a),
+  ]);
+}
+
+/** 泰坦机甲机械臂旋转多管机炮（枢轴在肩关节，炮口朝 -z） */
+export function mechArmGeometry(): Part {
+  const parts: Part[] = [
+    paint(at(new THREE.BoxGeometry(0.26, 0.42, 0.3), 0, -0.18, 0), 0x334155),
+    paint(at(new THREE.BoxGeometry(0.3, 0.3, 0.74), 0, -0.44, -0.34), 0x1e293b),
+    paint(at(new THREE.CylinderGeometry(0.13, 0.13, 0.16, 10), 0, -0.44, -0.76, Math.PI / 2), 0xfacc15),
+  ];
+  for (let i = 0; i < 4; i++) {
+    const a = (i / 4) * Math.PI * 2 + 0.4;
+    parts.push(paint(at(new THREE.CylinderGeometry(0.036, 0.036, 0.95, 6), Math.cos(a) * 0.07, -0.44 + Math.sin(a) * 0.07, -1.18, Math.PI / 2), 0x94a3b8));
+  }
+  return merged(parts);
 }

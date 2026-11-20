@@ -17,6 +17,7 @@ import {
 } from './game/config';
 import { generateCampaign, generateDefense, generateEndlessStart } from './game/level';
 import { LOSS_INFO } from './game/feedback';
+import type { PerkId } from './game/perks';
 import { applyTactic, type TacticId } from './game/tactics';
 import { isBossLevel, settleRun } from './game/economy';
 import { formatNumber } from './render/label';
@@ -107,7 +108,7 @@ const sfx = new Sfx();
 sfx.enabled = save.sound;
 let bot = new Bot(mulberry32(12345), 0.1);
 
-type Phase = 'menu' | 'play' | 'paused' | 'result';
+type Phase = 'menu' | 'play' | 'paused' | 'draft' | 'result';
 let phase: Phase = 'menu';
 let practice: { mode: 'defense' | 'campaign'; level: number } | null = null;
 let resumeAt = 0;
@@ -160,6 +161,29 @@ const handlers: UIHandlers = {
       sfx.weaponUp(6);
       haptic([30, 35, 70]);
     }
+  },
+  overdrive() {
+    if (phase !== 'play' || performance.now() < resumeAt) return;
+    if (world.activateOverdrive()) {
+      sfx.unlock();
+      const events = world.drainEvents();
+      route(events);
+      sfx.handle(events, world.squad.tier, false);
+      haptic([25, 30, 60]);
+      ui.updateHud(world, save.endlessBest);
+    }
+  },
+  choosePerk(id: PerkId) {
+    if (phase !== 'draft') return;
+    if (!world.choosePerk(id)) return;
+    sfx.unlock();
+    const events = world.drainEvents();
+    route(events);
+    sfx.handle(events, world.squad.tier, false);
+    haptic([20, 25, 45]);
+    ui.hideDraft();
+    phase = 'play';
+    ui.updateHud(world, save.endlessBest);
   },
   revokeAdmin() {
     save.carnageAdmin = false;
@@ -744,7 +768,7 @@ function controlSpanPx(): { left: number; width: number } {
 }
 
 app.addEventListener('pointerdown', (e) => {
-  if ((e.target as HTMLElement).closest('button, .modal, .sheet-wrap')) return;
+  if ((e.target as HTMLElement).closest('button, .modal, .sheet-wrap, .draft-modal')) return;
   sfx.unlock();
   if (phase !== 'play' || input.active || !e.isPrimary || e.button !== 0) return;
   app.setPointerCapture(e.pointerId);
@@ -792,6 +816,17 @@ const isRightKey = (key: string) => key === 'ArrowRight' || key === 'd' || key =
 
 window.addEventListener('keydown', (e) => {
   if ((e.target as HTMLElement)?.matches('input, select, textarea')) return;
+  if (phase === 'draft') {
+    if (e.key === '1' || e.key === '2' || e.key === '3') {
+      const idx = Number(e.key) - 1;
+      const choice = world.roguelike.draftChoices?.[idx];
+      if (choice) {
+        e.preventDefault();
+        handlers.choosePerk(choice.id);
+      }
+    }
+    return;
+  }
   if (e.key === 'Escape') {
     if (ui.evolveOpen) {
       ui.closeEvolve();
@@ -809,6 +844,7 @@ window.addEventListener('keydown', (e) => {
   if (['ArrowLeft', 'ArrowRight', ' '].includes(e.key) && phase === 'play') e.preventDefault();
   if (phase !== 'play' && phase !== 'paused' && phase !== 'menu') return;
   if (e.key === 'e' || e.key === 'E') handlers.nova();
+  if (e.key === ' ' && phase === 'play') handlers.overdrive();
   if (isLeftKey(e.key)) {
     leftKeys.add(e.key.toLowerCase());
     input.left = true;
@@ -941,6 +977,9 @@ function frame(now: number) {
         if (world.spec.mode === 'carnage' && world.carnage.charge >= 100) {
           world.releaseNova();
         }
+        if (world.spec.mode !== 'carnage' && world.overdrive.charge >= 100 && world.overdrive.active <= 0) {
+          world.activateOverdrive();
+        }
       } else if (input.left || input.right) {
         const [lo, hi] = steerLimits();
         input.target = Math.max(lo, Math.min(hi, input.target + ((input.right ? 1 : 0) - (input.left ? 1 : 0)) * 11 * dt));
@@ -954,11 +993,24 @@ function frame(now: number) {
       route(events);
       sfx.handle(events, world.squad.tier, (world.state === 'run' || world.state === 'boss') && world.squad.count > 0);
       hapticsFor(events);
+      if (world.roguelike.draftChoices && (world.state === 'run' || world.state === 'boss')) {
+        if (debug.autoplay) {
+          world.autoPickPerk();
+          const pickEv = world.drainEvents();
+          route(pickEv);
+          sfx.handle(pickEv, world.squad.tier, false);
+        } else {
+          cancelInput();
+          phase = 'draft';
+          ui.showDraft(world.roguelike.draftChoices, world.roguelike.level, world.roguelike.perks);
+          break;
+        }
+      }
     }
     peak = Math.max(peak, world.squad.count);
     ui.updateHud(world, save.endlessBest);
     const wait = world.state === 'won' ? 1.8 : 1.1;
-    if ((world.state === 'won' || world.state === 'lost') && world.endTime > wait && !resultShown) finish();
+    if (phase === 'play' && (world.state === 'won' || world.state === 'lost') && world.endTime > wait && !resultShown) finish();
   } else if (phase === 'result') {
     world.update(gdt);
     route(world.drainEvents());
@@ -966,7 +1018,7 @@ function frame(now: number) {
 
   perf.sim = perf.sim * 0.95 + (performance.now() - ts) * 0.05;
   const tr = performance.now();
-  const freeze = phase === 'paused' || resuming;
+  const freeze = phase === 'paused' || phase === 'draft' || resuming;
   renderer.update(freeze ? 0 : phase === 'menu' ? dt : gdt, freeze ? 0 : dt);
   perf.frame = perf.frame * 0.95 + (performance.now() - tr) * 0.05;
   renderer.render();
@@ -995,5 +1047,7 @@ Object.assign(window, {
     save,
     start: startGame,
     next: () => handlers.next(),
+    overdrive: () => handlers.overdrive(),
+    choosePerk: (id: PerkId) => handlers.choosePerk(id),
   },
 });

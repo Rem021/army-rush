@@ -354,6 +354,63 @@ export class Sfx {
             this.tone('triangle', 1320, 1760, 0.11, 0.07, 0.03);
           }
           break;
+        case 'lightningArc':
+          // 高压电弧劈啪声：高频尖啸 + 短促白噪电击
+          if (this.ready('lightningArc', 0.065)) {
+            this.hiss(0.085, 0.18, 'highpass', 3200, 1100);
+            this.tone('sawtooth', 1680 + Math.random() * 420, 290, 0.08, 0.065);
+            this.tone('square', 920, 210, 0.06, 0.04, 0.02);
+          }
+          break;
+        case 'orbitalLaser':
+          // 天基离子炮降临：超高频聚能扫频 + 低沉震地轰鸣
+          if (this.ready('orbitalLaser', 0.2)) {
+            this.tone('sine', 2100, 180, 0.42, 0.16);
+            this.tone('sawtooth', 420, 62, 0.52, 0.12, 0.04);
+            this.hiss(0.55, 0.34, 'bandpass', 2400, 260, 0.03);
+            this.tone('sine', 95, 28, 0.5, 0.36, 0.05);
+          }
+          break;
+        case 'mechDrop':
+          // 泰坦机甲轨道空投呼啸
+          if (this.ready('mechDrop', 0.15)) {
+            this.hiss(0.45, 0.22, 'bandpass', 2200, 400);
+            this.tone('sine', 780, 140, 0.42, 0.14);
+          }
+          break;
+        case 'mechLand':
+          // 泰坦机甲重锤落地：低频冲击波 + 金属机械锁定音
+          if (this.ready('mechLand', 0.15)) {
+            this.boom(2.0);
+            this.tone('triangle', 320, 640, 0.1, 0.12, 0.12);
+            this.tone('triangle', 480, 960, 0.14, 0.12, 0.19);
+          }
+          break;
+        case 'overdriveStart':
+          // 战术过载爆发：能量上扬和弦 + 重低音冲击
+          if (this.ready('overdriveStart', 0.3)) {
+            this.hiss(0.42, 0.28, 'bandpass', 500, 3200);
+            this.tone('sine', 120, 44, 0.35, 0.32);
+            this.tone('triangle', 523, 784, 0.14, 0.14, 0.04);
+            this.tone('triangle', 659, 1047, 0.18, 0.15, 0.1);
+            this.tone('triangle', 1047, 1568, 0.28, 0.16, 0.16);
+          }
+          break;
+        case 'draftOffer':
+          // 三选一战术进化弹卡提示音
+          if (this.ready('draftOffer', 0.25)) {
+            this.tone('triangle', 587, 880, 0.12, 0.14);
+            this.tone('triangle', 880, 1175, 0.18, 0.14, 0.08);
+          }
+          break;
+        case 'perkChosen':
+          // 选中进化卡确认和弦
+          if (this.ready('perkChosen', 0.15)) {
+            this.tone('triangle', 659, 988, 0.12, 0.15);
+            this.tone('triangle', 988, 1319, 0.18, 0.16, 0.07);
+            this.tone('sine', 1319, 1760, 0.22, 0.12, 0.14);
+          }
+          break;
         case 'reward':
           // 换枪的声音由 weaponUp 统一放；无人机/多弹道/弹药进化给高亮科技和弦
           if (e.reward.kind === 'drone' || e.reward.kind === 'multishot' || e.reward.kind === 'ammo') {

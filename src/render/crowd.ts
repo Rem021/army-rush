@@ -35,11 +35,11 @@ export class Crowd {
   readonly capacity: number;
   private n = 0;
   private prevCount = 0;
-  private readonly material: THREE.MeshLambertMaterial;
+  private readonly material: THREE.MeshStandardMaterial;
 
   constructor(scene: THREE.Scene, capacity: number, body: THREE.BufferGeometry, legs: THREE.BufferGeometry) {
     this.capacity = capacity;
-    this.material = new THREE.MeshLambertMaterial({ vertexColors: true });
+    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.56, metalness: 0.18 });
     this.body = new THREE.InstancedMesh(body, this.material, capacity);
     this.legs = new THREE.InstancedMesh(legs, this.material, capacity * 2);
     for (const mesh of [this.body, this.legs]) {
