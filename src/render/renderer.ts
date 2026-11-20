@@ -469,7 +469,7 @@ export class GameRenderer {
     this.applyPixelRatio();
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
-    this.camera.fov = w / h < 0.8 ? 68 : w / h < 1.2 ? 60 : 53;
+    this.camera.fov = w / h < 0.8 ? 58 : w / h < 1.2 ? 50 : 44;
     this.camera.updateProjectionMatrix();
     this.referenceCarnage?.resize(w, h);
   }
@@ -1629,30 +1629,30 @@ export class GameRenderer {
     const pos = _camPos.set(0, 0, 0);
     const look = _camLook.set(0, 0, 0);
     if (w.defense) {
-      const pitch = THREE.MathUtils.degToRad(wide ? 25 : 28.5);
-      const rear = Math.min(8.5, Math.max(2.6, -w.back + 1.2));
-      const aNear = pitch + Math.atan((wide ? 0.56 : 0.5) * t);
-      const halfSpan = wide ? 9.2 : 6.85;
+      const pitch = THREE.MathUtils.degToRad(wide ? 23.5 : 26.5);
+      const rear = Math.min(7.5, Math.max(2.0, -w.back + 0.9));
+      const aNear = pitch + Math.atan((wide ? 0.62 : 0.54) * t);
+      const halfSpan = wide ? 7.0 : 6.1;
       const minDist = halfSpan / hTan;
-      const h = Math.max(minDist * Math.sin(pitch), (rear + 12) * Math.tan(pitch) * 0.74);
-      const cz = Math.max(-3.5 + minDist * Math.cos(pitch), rear + h / Math.tan(aNear));
+      const h = Math.max(minDist * Math.sin(pitch), (rear + 10.5) * Math.tan(pitch) * 0.7);
+      const cz = Math.max(-2.2 + minDist * Math.cos(pitch), rear + h / Math.tan(aNear));
       pos.set(sq.x * 0.08, h, cz);
-      look.set(sq.x * 0.05, 0.42, cz - h / Math.tan(pitch));
+      look.set(sq.x * 0.05, 0.36, cz - h / Math.tan(pitch));
     } else {
       const bossFight = w.bosses.some((b) => b.active);
       this.bossBlend += ((bossFight ? 1 : 0) - this.bossBlend) * Math.min(1, k * 0.6);
       const crowd = Math.min(1, Math.sqrt(w.soldiers.length) / 18);
       const double = w.bosses.length > 1 ? 1 : 0;
-      const pitch = THREE.MathUtils.degToRad(wide ? 24.5 : 27.5);
-      const halfSpan = wide ? 8.2 : 6.25;
+      const pitch = THREE.MathUtils.degToRad(wide ? 23 : 26);
+      const halfSpan = wide ? 6.8 : 5.8;
       const minDist = halfSpan / hTan;
-      const rearGrow = Math.max(0, -w.back - 0.8) * 0.78;
-      const height = Math.max(minDist * Math.sin(pitch), wide ? 5.6 : 6.8) + crowd * 1.4 + this.bossBlend * (1.8 + double * 1.0);
-      const back = Math.max(minDist * Math.cos(pitch), wide ? 7.6 : 9.6) + rearGrow + crowd * 1.7 + this.bossBlend * (2.2 + double * 1.1);
-      const ahead = (wide ? 12.5 : 14.5) + this.bossBlend * 5.5;
+      const rearGrow = Math.max(0, -w.back - 0.8) * 0.72;
+      const height = Math.max(minDist * Math.sin(pitch), wide ? 4.6 : 5.8) + crowd * 1.2 + this.bossBlend * (1.5 + double * 0.9);
+      const back = Math.max(minDist * Math.cos(pitch), wide ? 6.2 : 8.2) + rearGrow + crowd * 1.5 + this.bossBlend * (1.9 + double * 1.0);
+      const ahead = (wide ? 11.5 : 13.5) + this.bossBlend * 5.0;
       const fx = sq.x * (0.18 - this.bossBlend * 0.08);
       pos.set(fx, height, -sq.d + back);
-      look.set(fx * 0.65, 0.55 + this.bossBlend * 0.35, -sq.d - ahead);
+      look.set(fx * 0.65, 0.45 + this.bossBlend * 0.3, -sq.d - ahead);
     }
     this.menuBlend += ((this.menu ? 1 : 0) - this.menuBlend) * Math.min(1, k * 0.45);
     const m = this.menuBlend * this.menuBlend * (3 - 2 * this.menuBlend);
