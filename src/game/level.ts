@@ -192,17 +192,17 @@ export interface LevelSpec {
  */
 export const TUNING = {
   /** 一波尸潮人数占估算人数的比例（人多时按 0.6 次方放缓） */
-  hordeFrac: (L: number) => Math.min(1.35, 0.72 + 0.05 * L),
+  hordeFrac: (L: number) => Math.min(1.55, 0.84 + 0.06 * L),
   /** 普通丧尸要挨几发 */
-  zombieHits: (L: number) => Math.min(7.5, 2.8 + 0.32 * L),
+  zombieHits: (L: number) => Math.min(10.5, 3.3 + 0.44 * L),
   /** 估算每波会冲到脸上的比例 */
-  leak: (L: number) => Math.min(0.32, 0.1 + 0.018 * L),
+  leak: (L: number) => Math.min(0.34, 0.11 + 0.019 * L),
   /** 桶血量 = 估算秒伤 × 这个秒数 */
-  crateSeconds: (L: number) => Math.min(3.4, 1.1 + 0.16 * L),
+  crateSeconds: (L: number) => Math.min(4.2, 1.35 + 0.2 * L),
   /** 巨尸血量 = 估算秒伤 × 这个秒数 */
-  giantSeconds: (L: number) => Math.min(6, 2.2 + 0.3 * L),
+  giantSeconds: (L: number) => Math.min(7.5, 2.7 + 0.36 * L),
   /** Boss 总血量 = 估算秒伤 × 这个秒数 */
-  bossSeconds: (L: number) => L === 1 ? 8.5 : Math.min(22, 10 + 0.9 * L),
+  bossSeconds: (L: number) => (L === 1 ? 10.5 : Math.min(28, 12.5 + 1.15 * L)),
   addGate: (L: number) => 1 + Math.floor(L / 5),
   badGate: (L: number) => 5 + Math.floor(L * 1.5),
   /** 到 Boss 时的基准兵力（按正常升级的玩家校准） */
@@ -438,22 +438,22 @@ export const DEFENSE_TUNING = {
   spacing: 8.5,
   /** 打到最后时的基准兵力，用来算“预期火力” */
   baseline: (L: number) => 44 + 11 * (L - 1),
-  /** 持续尸潮要吃掉参考火力的几成（每秒刷出的总血量 / 参考火力）；封顶 0.72，留出打障碍和 Boss 的余量 */
-  pressure: (L: number, p: number) => Math.min(0.72, (0.25 + 0.35 * p) * (1 + 0.055 * (L - 1))),
+  /** 持续尸潮要吃掉参考火力的几成（每秒刷出的总血量 / 参考火力）；封顶 0.78，留出打障碍和 Boss 的余量 */
+  pressure: (L: number, p: number) => Math.min(0.78, (0.3 + 0.38 * p) * (1 + 0.06 * (L - 1))),
   /** 每秒刷几只 */
-  streamRate: (L: number, p: number) => Math.min(6, 2.35 + 2.1 * p + 0.1 * L),
+  streamRate: (L: number, p: number) => Math.min(6.5, 2.65 + 2.25 * p + 0.12 * L),
   /** 普通丧尸至少要挨几发手枪（照顾刚开局的小部队） */
-  minHits: (L: number) => 2 + 0.3 * Math.min(L, 30),
+  minHits: (L: number) => 2.4 + 0.36 * Math.min(L, 30),
   /** 大障碍要全力打几秒 */
-  blockerSeconds: (L: number) => Math.min(16, 8 + 0.7 * L),
-  waveEvery: (L: number) => Math.max(10, 15 - 0.4 * L),
+  blockerSeconds: (L: number) => Math.min(18, 9 + 0.8 * L),
+  waveEvery: (L: number) => Math.max(9.5, 14.5 - 0.4 * L),
   /** 一大波的总血量 = 这么多秒的持续尸潮（人数多，单只血量相应摊薄） */
-  waveSeconds: (L: number, p: number) => 4.5 + 4 * p + 0.15 * L,
-  waveSize: (L: number, p: number) => Math.min(100, Math.round(10 + 3 * L + 26 * p)),
-  bossSeconds: (L: number) => Math.min(24, 12 + L) * Math.pow(0.85, Math.max(0, L - 7)),
+  waveSeconds: (L: number, p: number) => 5.0 + 4.4 * p + 0.18 * L,
+  waveSize: (L: number, p: number) => Math.min(100, Math.round(12 + 3.2 * L + 28 * p)),
+  bossSeconds: (L: number) => Math.min(26, 13.5 + 1.1 * L) * Math.pow(0.85, Math.max(0, L - 7)),
   /** 中途一批批来的 Boss：几只、每只要全力打几秒 */
   midBosses: (L: number) => (L === 1 ? 1 : L <= 4 ? 2 : 3),
-  midSeconds: (L: number) => Math.min(18, 9 + 0.6 * L),
+  midSeconds: (L: number) => Math.min(20, 10.5 + 0.7 * L),
   /** 关底的预期火力（每秒伤害）；第 5 关起多涨一截，后面的关要靠永久升级 */
   /** 局外升级有进化、金币倍数；低人数上限下每关参考火力先涨 20%，中段再加一点。 */
   expectedEnd: (L: number) => {
@@ -463,8 +463,8 @@ export const DEFENSE_TUNING = {
     const late = 1 + 0.25 * (1 - Math.exp(-Math.max(0, L - 16) / 8));
     return 12500 * DEFENSE_TUNING.scale * early * middle * late * (1 + 0.03 * Math.min(L - 1, 8)) * sawtooth(L) * pacing(L);
   },
-  /** 整体难度系数；缩小门和障碍的增兵后，按成长模拟重新校准 */
-  scale: 0.064,
+  /** 整体难度系数；匹配新增肉鸽/英雄/炮台/FEVER 战力后上调压迫感 */
+  scale: 0.073,
   /**
    * 第 seg 个大障碍的血量：第一个很好打（开局一个人几秒打掉），之后一个比一个高一大截——
    * 前面每个约是上一个的 3.7 倍，往后慢慢降到约 2.5 倍。门道打得越深越难，后面的障碍要硬拆就得放着尸潮不管
@@ -474,11 +474,11 @@ export const DEFENSE_TUNING = {
     for (let i = 0; i < seg; i++) hp *= DEFENSE_TUNING.blockerGrowth + 1.2 * Math.exp(-i / 3);
     return hp;
   },
-  blockerGrowth: 2.5,
-  blockerScale: 0.7,
+  blockerGrowth: 2.55,
+  blockerScale: 0.84,
   /** 开局几秒内不刷尸潮，让一个人先把第一个障碍打掉 */
-  streamDelay: 2.5,
-  giantSeconds: (L: number) => Math.min(6, 2.5 + 0.3 * L),
+  streamDelay: 2.3,
+  giantSeconds: (L: number) => Math.min(7.2, 3.0 + 0.35 * L),
 };
 
 /**
@@ -486,10 +486,10 @@ export const DEFENSE_TUNING = {
  * 前中段玩家升级来得快（价格低、进化集中），难度跟上去；后段本来就难，往回收一点。
  */
 function pacing(L: number): number {
-  if (L === 1) return 0.30;
-  // 第 2、3 关平滑过渡：刚过第 1 关时升级还较少，逐步拉起压迫感
-  if (L === 2) return 0.64;
-  if (L === 3) return 0.85;
+  if (L === 1) return 0.36;
+  // 第 2、3 关平滑过渡：逐步拉起压迫感
+  if (L === 2) return 0.72;
+  if (L === 3) return 0.92;
   return 0.62 + 0.7 * (1 - Math.exp(-(L - 1) / 3)) - 0.36 * Math.max(0, Math.min(1, (L - 10) / 7));
 }
 

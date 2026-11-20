@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { generateBlitz, blitzOptions } from '../src/game/blitz';
+import { Bot } from '../src/game/bot';
+import { UPGRADES, upgradeEffects } from '../src/game/config';
 import { generateDefense } from '../src/game/level';
 import { PERKS, PERK_MAP, pickBestPerk, rollPerkChoices, xpForNextDraft, type PerkId } from '../src/game/perks';
 import { mulberry32 } from '../src/game/rng';
@@ -26,26 +28,32 @@ describe('roguelike perk pool & drafting', () => {
     expect(rollPerkChoices(allMaxed, rng, 3)).toHaveLength(0);
   });
 
-  it('xp curve increases monotonically and pickBestPerk prioritizes core perks', () => {
-    expect(xpForNextDraft(0)).toBeGreaterThan(0);
-    expect(xpForNextDraft(1)).toBeGreaterThan(xpForNextDraft(0));
-    expect(xpForNextDraft(2)).toBeGreaterThan(xpForNextDraft(1));
+  it('xp curve scales steeply and meta upgrades steepen costs', () => {
+    expect(xpForNextDraft(0)).toBeGreaterThanOrEqual(100);
+    expect(xpForNextDraft(1)).toBeGreaterThan(xpForNextDraft(0) * 3);
+    expect(xpForNextDraft(2)).toBeGreaterThan(xpForNextDraft(0) * 10);
+    expect(xpForNextDraft(3)).toBeGreaterThan(xpForNextDraft(0) * 20);
+
+    for (const u of UPGRADES) {
+      if (u.currency === 'coins') {
+        expect(u.cost(5)).toBeGreaterThan(u.cost(0) * 5);
+      }
+    }
 
     const best = pickBestPerk([PERK_MAP.nanite_leech, PERK_MAP.mech_drop, PERK_MAP.cryo_rounds], {});
     expect(best?.id).toBe('mech_drop');
   });
 });
 
-import { upgradeEffects } from '../src/game/config';
-
 const baseOpts = () => upgradeEffects({ soldiers: 0, damage: 0, rate: 0, income: 0, agility: 0 });
 
 describe('roguelike in-run combat systems', () => {
-  it('earns XP from kills, triggers draftOffer, and applies chosen perk', () => {
+  it('earns XP from kills, triggers draftOffer, applies chosen perk, and enforces draftCooldown', () => {
     const w = new World(generateBlitz(1), blitzOptions(1));
-    w.setTarget(0); // aim middle lane zombies
+    const bot = new Bot(mulberry32(7));
     let sawOffer = false;
     for (let i = 0; i < 600 && !sawOffer; i++) {
+      w.setTarget(bot.target(w));
       w.update(1 / 30);
       const evs = w.drainEvents();
       if (evs.some((e) => e.type === 'draftOffer')) sawOffer = true;
@@ -58,8 +66,14 @@ describe('roguelike in-run combat systems', () => {
     expect(w.choosePerk(pick.id)).toBe(true);
     expect(w.roguelike.draftChoices).toBeNull();
     expect(w.perkLevel(pick.id)).toBe(1);
+    expect(w.roguelike.draftCooldown).toBeGreaterThanOrEqual(12);
     const chosenEvs = w.drainEvents();
     expect(chosenEvs.some((e) => e.type === 'perkChosen' && e.perk.id === pick.id)).toBe(true);
+
+    // Even if XP overflows immediately, draftCooldown prevents back-to-back level-up spam
+    w.roguelike.xp = w.roguelike.nextXp * 3;
+    w.update(1 / 30);
+    expect(w.roguelike.draftChoices).toBeNull();
   });
 
   it('drops an articulated Titan Mech that lands and engages enemies', () => {

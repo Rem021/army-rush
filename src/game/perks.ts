@@ -217,9 +217,9 @@ function pickWeighted(list: PerkDef[], levels: Partial<Record<PerkId, number>>, 
   return list[list.length - 1];
 }
 
-/** 升到下一级所需的局内经验值（首级快节奏，10~15 秒即可首次进化） */
+/** 升到下一级所需的局内经验值（难度逐级加重，每局 2~4 次关键进化，避免频繁打断战斗） */
 export function xpForNextDraft(level: number): number {
-  return Math.round(62 + level * 46 + level * level * 12);
+  return Math.round(105 + level * 185 + level * level * 115 + level * level * level * 32);
 }
 
 /** AI / 自动托管选卡优先级 */

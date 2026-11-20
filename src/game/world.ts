@@ -524,7 +524,7 @@ export class World {
   /** 连击狂热 FEVER 时刻：高连击自动触发，射速 +25%、金币 2× */
   readonly fever = {
     active: 0,
-    duration: 6.0,
+    duration: 5.0,
     nextCombo: 30,
     triggers: 0,
   };
@@ -539,6 +539,7 @@ export class World {
     order: [] as PerkId[],
     draftChoices: null as PerkDef[] | null,
     totalDrafts: 0,
+    draftCooldown: 0,
   };
   readonly overdrive = {
     combo: 0,
@@ -575,8 +576,8 @@ export class World {
     this.opts = opts;
     this.rng = mulberry32(opts.seed ?? spec.level * 31 + 7);
     this.roguelike.enabled = opts.roguelike ?? spec.mode !== 'carnage';
-    // 防线里丧尸跑得快得多，直接冲到脸上；广告奇袭三路节奏偏稳，方便左右拉扯
-    this.zombieSpeed = spec.mode === 'carnage' ? 0.72 : spec.mode === 'blitz' ? 1.15 : spec.defense ? DEFENSE_ZOMBIE_SPEED : 1;
+    // 防线里丧尸跑得快得多，直接冲到脸上；广告奇袭三路节奏提速以增加走位压迫感
+    this.zombieSpeed = spec.mode === 'carnage' ? 0.72 : spec.mode === 'blitz' ? 1.26 : spec.defense ? DEFENSE_ZOMBIE_SPEED : 1;
     this.damage = opts.damageMult;
     this.ammo =
       spec.mode === 'carnage'
@@ -929,6 +930,7 @@ export class World {
     if (!this.roguelike.order.includes(id)) this.roguelike.order.push(id);
     this.roguelike.draftChoices = null;
     this.roguelike.totalDrafts++;
+    this.roguelike.draftCooldown = 13;
 
     if (id === 'mech_drop') {
       this.spawnAllyMech();
@@ -974,16 +976,23 @@ export class World {
   private addXp(amount: number) {
     if (!this.roguelike.enabled || amount <= 0) return;
     if (this.state !== 'run' && this.state !== 'boss') return;
-    this.roguelike.xp += amount;
-    if (!this.roguelike.draftChoices && this.roguelike.xp >= this.roguelike.nextXp) {
-      const choices = rollPerkChoices(this.roguelike.perks, this.rng, 3);
-      if (choices.length > 0) {
-        this.roguelike.xp -= this.roguelike.nextXp;
-        this.roguelike.level++;
-        this.roguelike.nextXp = xpForNextDraft(this.roguelike.level);
-        this.roguelike.draftChoices = choices;
-        this.events.push({ type: 'draftOffer', choices, level: this.roguelike.level });
-      }
+    const modeScale = this.spec.mode === 'blitz' ? 0.55 : this.spec.defense ? 0.8 : 1;
+    this.roguelike.xp += amount * modeScale;
+    this.tryOfferDraft();
+  }
+
+  private tryOfferDraft() {
+    if (!this.roguelike.enabled) return;
+    if (this.state !== 'run' && this.state !== 'boss') return;
+    if (this.roguelike.draftChoices || this.roguelike.draftCooldown > 0) return;
+    if (this.roguelike.xp < this.roguelike.nextXp) return;
+    const choices = rollPerkChoices(this.roguelike.perks, this.rng, 3);
+    if (choices.length > 0) {
+      this.roguelike.xp -= this.roguelike.nextXp;
+      this.roguelike.level++;
+      this.roguelike.nextXp = xpForNextDraft(this.roguelike.level);
+      this.roguelike.draftChoices = choices;
+      this.events.push({ type: 'draftOffer', choices, level: this.roguelike.level });
     }
   }
 
@@ -1515,6 +1524,10 @@ export class World {
 
   /** 局内肉鸽主动周期系统：轨道离子炮、护盾再生、连击过载/FEVER衰减与追踪导弹更新 */
   private updateRoguelikeSystems(dt: number) {
+    if (this.roguelike.draftCooldown > 0) {
+      this.roguelike.draftCooldown = Math.max(0, this.roguelike.draftCooldown - dt);
+      if (this.roguelike.draftCooldown <= 0) this.tryOfferDraft();
+    }
     if (this.overdrive.active > 0) {
       this.overdrive.active = Math.max(0, this.overdrive.active - dt);
     }
@@ -1891,7 +1904,7 @@ export class World {
       }
       if (sp.wave) {
         const n = Math.min(sp.wave, Math.max(0, zombieCap - alive));
-        const baseHp = s2 ? 7.5 + p * 52 : 6.5 + p * 32;
+        const baseHp = s2 ? 10.5 + p * 74 : 8.8 + p * 46;
         const cols = 6;
         for (let i = 0; i < n; i++) {
           const row = Math.floor(i / cols);
@@ -1931,7 +1944,7 @@ export class World {
     if (this.time > 0.8 && (this.time < def.duration || bossAlive || tanksRemain) && alive < zombieCap) {
       const rate = (s2 ? 6.2 + p * 7.4 : 4.8 + p * 5.8) * (this.time > def.duration ? 0.55 : 1);
       this.streamAcc += rate * dt;
-      const baseHp = (s2 ? 7.5 + p * 48 : 6.5 + p * 28) * (bossAlive ? 0.72 : 1);
+      const baseHp = (s2 ? 10 + p * 68 : 8.5 + p * 40) * (bossAlive ? 0.78 : 1);
       while (this.streamAcc >= 1 && alive < zombieCap) {
         this.streamAcc -= 1;
         const kind = this.blitzEnemyKind(p);
@@ -3328,8 +3341,8 @@ export class World {
     if (br.tank) {
       this.blitz.tanksDestroyed++;
       this.addGems(1, br.x, br.d);
-      this.addXp(45);
-      if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + 15);
+      this.addXp(30);
+      if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + 12);
       this.captureTank(br);
       this.events.push({ type: 'banner', text: `已收编【${br.tank.name}】！开上前线协同开火，右路奖励全线释放！`, tone: 'info' });
     }
@@ -3337,7 +3350,7 @@ export class World {
       const truckCoins = Math.round(br.truck.coins * (this.opts.coinMult ?? 1) * (this.fever.active > 0 ? 2 : 1));
       this.coins += truckCoins;
       this.addGems(1, br.x, br.d);
-      this.addXp(40);
+      this.addXp(24);
       this.events.push({ type: 'truckBreak', x: br.x, d: br.d, coins: truckCoins });
       this.events.push({ type: 'banner', text: `黄金武装补给车拦截成功！+${truckCoins} 金币 · +1 钻石！`, tone: 'info' });
     }
@@ -3467,18 +3480,18 @@ export class World {
         this.overdrive.combo++;
         this.overdrive.comboTimer = 3.2;
         if (this.overdrive.combo > this.overdrive.bestCombo) this.overdrive.bestCombo = this.overdrive.combo;
-        // 经典广告连击狂热 FEVER 时刻：30 连击自动引爆 6 秒射速 +25% · 金币 2×
+        // 经典广告连击狂热 FEVER 时刻：30 连击自动引爆 5 秒射速 +25% · 金币 2×
         if (this.overdrive.combo >= this.fever.nextCombo && this.fever.active <= 0) {
           this.fever.active = this.fever.duration;
-          this.fever.nextCombo = this.overdrive.combo + 35;
+          this.fever.nextCombo = this.overdrive.combo + 55;
           this.fever.triggers++;
           this.events.push({ type: 'feverStart', duration: this.fever.duration, combo: this.overdrive.combo });
           this.events.push({ type: 'banner', text: `🔥 ${this.overdrive.combo} 连击 · FEVER 狂热时刻！射速 +25% · 2× 金币！`, tone: 'info' });
         }
-        const chargeGain = z.kind === 'giant' ? 14 : z.kind === 'brute' ? 5 : z.kind === 'exploder' ? 3 : 1.6;
+        const chargeGain = z.kind === 'giant' ? 10 : z.kind === 'brute' ? 3.5 : z.kind === 'exploder' ? 2.0 : 1.0;
         if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + chargeGain);
         // 局内肉鸽经验值
-        const xpGain = z.kind === 'giant' ? 35 : z.kind === 'brute' ? 14 : z.kind === 'exploder' ? 6 : 4;
+        const xpGain = z.kind === 'giant' ? 22 : z.kind === 'brute' ? 9 : z.kind === 'exploder' ? 4 : 2.4;
         this.addXp(xpGain);
         // 纳米收割协议：累计击杀自动增兵+补盾
         const leechLvl = this.perkLevel('nanite_leech');
@@ -3744,8 +3757,8 @@ export class World {
       const bounty = this.spec.mode === 'carnage' ? 0 : bossBounty(this.spec.level, b.final, b.pair) * (this.opts.coinMult ?? 1);
       this.coins += bounty;
       this.addGems(bossGems(b.final, this.rng()), b.x, b.d);
-      this.addXp(90);
-      if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + 25);
+      this.addXp(55);
+      if (this.overdrive.active <= 0) this.overdrive.charge = Math.min(100, this.overdrive.charge + 18);
       this.events.push({ type: 'bossDie', boss: b, bounty });
       // 防线中途 Boss 只补少量援军（狂潮模式为独立兵备，不发主线防线援军奖励）。
       if (this.defense && this.spec.mode !== 'carnage' && !b.final) {

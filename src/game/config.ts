@@ -277,8 +277,8 @@ export const UPGRADES: UpgradeDef[] = [
     currency: 'gems',
     value: (l) => `${startSoldiers(l)} 人`,
     max: 25,
-    // 兵力最直接，只能用钻石买（只有最终 Boss 稳定给），越往后越贵
-    cost: (l) => 3 + l + Math.floor((l * l) / 5),
+    // 兵力最直接，只能用钻石买（只有最终 Boss 稳定给），越往后梯度越陡
+    cost: (l) => 3 + l * 2 + Math.floor((l * l) / 2),
     evolutions: GATE_EVOLVE.map((at, i) => ({ at, name: `数字门 +${(i + 1) * 10}%` })),
   },
   {
@@ -287,7 +287,7 @@ export const UPGRADES: UpgradeDef[] = [
     currency: 'coins',
     value: (l) => `+${l * 12}%`,
     max: 40,
-    cost: (l) => Math.round(50 * Math.pow(1.26, l)),
+    cost: (l) => Math.round(70 * Math.pow(1.42, l)),
     evolutions: WEAPON_EVOLVE.map((at, i) => ({ at, name: WEAPONS[i + 1].name })),
   },
   {
@@ -296,7 +296,7 @@ export const UPGRADES: UpgradeDef[] = [
     currency: 'coins',
     value: (l) => `+${l * 8}%`,
     max: 25,
-    cost: (l) => Math.round(60 * Math.pow(1.28, l)),
+    cost: (l) => Math.round(80 * Math.pow(1.44, l)),
     evolutions: AMMO_EVOLVE.map((at, i) => ({ at, name: AMMO[i + 1].name })),
   },
   {
@@ -304,9 +304,9 @@ export const UPGRADES: UpgradeDef[] = [
     name: '金币',
     currency: 'coins',
     value: (l) => `×${(1 + l * 0.08).toFixed(2)}`,
-    // 金币倍数会滚雪球：封顶约 ×2，价格涨得比战斗升级陡
+    // 金币倍数会滚雪球：封顶约 ×2，价格涨得比战斗升级更陡
     max: 12,
-    cost: (l) => Math.round(90 * Math.pow(1.42, l)),
+    cost: (l) => Math.round(130 * Math.pow(1.58, l)),
     evolutions: [],
   },
   {
@@ -315,7 +315,7 @@ export const UPGRADES: UpgradeDef[] = [
     currency: 'coins',
     value: (l) => `+${l * 10}%`,
     max: 15,
-    cost: (l) => Math.round(45 * Math.pow(1.3, l)),
+    cost: (l) => Math.round(65 * Math.pow(1.46, l)),
     evolutions: [{ at: 5, name: '炸弹预警更长' }, { at: 10, name: '炸弹预警再长' }],
   },
 ];

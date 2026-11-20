@@ -46,22 +46,22 @@ interface TankConvoy {
 function buildStage1Convoys(): TankConvoy[] {
   return [
     {
-      tank: { tier: 1, name: '轻甲突击坦', fireInterval: 5.2 },
-      hp: 260,
+      tank: { tier: 1, name: '轻甲突击坦', fireInterval: 4.5 },
+      hp: 360,
       r: 1.45,
       rewards: [
         { reward: { kind: 'weapon', tier: 2 }, look: 'crate' },
         { reward: { kind: 'hero', hero: 'pyro' }, look: 'hero' },
         { reward: { kind: 'drone', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'turret', duration: 24 }, look: 'turret' },
-        { reward: { kind: 'rate', amount: 25 }, look: 'crate' },
+        { reward: { kind: 'turret', duration: 22 }, look: 'turret' },
+        { reward: { kind: 'rate', amount: 22 }, look: 'crate' },
         { reward: { kind: 'shield', amount: 8 }, look: 'armor' },
       ],
-      gate: { kind: 'add', value: 12 },
+      gate: { kind: 'add', value: 10 },
     },
     {
-      tank: { tier: 2, name: '重装主战坦', fireInterval: 4.3 },
-      hp: 2100,
+      tank: { tier: 2, name: '重装主战坦', fireInterval: 3.7 },
+      hp: 3100,
       r: 1.55,
       rewards: [
         { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
@@ -69,26 +69,26 @@ function buildStage1Convoys(): TankConvoy[] {
         { reward: { kind: 'weapon', tier: 4 }, look: 'crate' },
         { reward: { kind: 'ammo', level: 2 }, look: 'armor' },
         { reward: { kind: 'mystery' }, look: 'mystery' },
-        { reward: { kind: 'damage', amount: 35 }, look: 'crate' },
+        { reward: { kind: 'damage', amount: 30 }, look: 'crate' },
         { reward: { kind: 'drone', amount: 1 }, look: 'armor' },
       ],
       gate: { kind: 'mul', value: 1.5 },
     },
     {
-      tank: { tier: 3, name: '天启双管坦', fireInterval: 3.5, twin: true },
-      hp: 14500,
+      tank: { tier: 3, name: '天启双管坦', fireInterval: 3.0, twin: true },
+      hp: 21000,
       r: 1.65,
       rewards: [
         { reward: { kind: 'weapon', tier: 6 }, look: 'crate' },
         { reward: { kind: 'hero', hero: 'commander' }, look: 'hero' },
         { reward: { kind: 'ammo', level: 3 }, look: 'armor' },
         { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'turret', duration: 26 }, look: 'turret' },
+        { reward: { kind: 'turret', duration: 24 }, look: 'turret' },
         { reward: { kind: 'drone', amount: 2 }, look: 'armor' },
         { reward: { kind: 'airstrike' }, look: 'crate' },
-        { reward: { kind: 'shield', amount: 14 }, look: 'armor' },
+        { reward: { kind: 'shield', amount: 12 }, look: 'armor' },
       ],
-      gate: { kind: 'add', value: 26 },
+      gate: { kind: 'add', value: 22 },
     },
   ];
 }
@@ -96,22 +96,22 @@ function buildStage1Convoys(): TankConvoy[] {
 function buildStage2Convoys(): TankConvoy[] {
   return [
     {
-      tank: { tier: 1, name: '钢铁步战坦', fireInterval: 4.8 },
-      hp: 340,
+      tank: { tier: 1, name: '钢铁步战坦', fireInterval: 4.1 },
+      hp: 480,
       r: 1.45,
       rewards: [
         { reward: { kind: 'weapon', tier: 2 }, look: 'crate' },
         { reward: { kind: 'hero', hero: 'pyro' }, look: 'hero' },
         { reward: { kind: 'drone', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'turret', duration: 24 }, look: 'turret' },
-        { reward: { kind: 'rate', amount: 28 }, look: 'crate' },
-        { reward: { kind: 'shield', amount: 10 }, look: 'armor' },
+        { reward: { kind: 'turret', duration: 22 }, look: 'turret' },
+        { reward: { kind: 'rate', amount: 24 }, look: 'crate' },
+        { reward: { kind: 'shield', amount: 9 }, look: 'armor' },
       ],
-      gate: { kind: 'add', value: 14 },
+      gate: { kind: 'add', value: 12 },
     },
     {
-      tank: { tier: 2, name: '沙漠重甲坦', fireInterval: 4.0 },
-      hp: 3200,
+      tank: { tier: 2, name: '沙漠重甲坦', fireInterval: 3.4 },
+      hp: 4600,
       r: 1.55,
       rewards: [
         { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
@@ -119,38 +119,38 @@ function buildStage2Convoys(): TankConvoy[] {
         { reward: { kind: 'ammo', level: 1 }, look: 'armor' },
         { reward: { kind: 'weapon', tier: 4 }, look: 'crate' },
         { reward: { kind: 'mystery' }, look: 'mystery' },
-        { reward: { kind: 'damage', amount: 35 }, look: 'crate' },
+        { reward: { kind: 'damage', amount: 30 }, look: 'crate' },
         { reward: { kind: 'airstrike' }, look: 'crate' },
       ],
       gate: { kind: 'mul', value: 1.5 },
     },
     {
-      tank: { tier: 3, name: '赤焰双管坦', fireInterval: 3.3, twin: true },
-      hp: 17500,
+      tank: { tier: 3, name: '赤焰双管坦', fireInterval: 2.9, twin: true },
+      hp: 25500,
       r: 1.62,
       rewards: [
         { reward: { kind: 'weapon', tier: 5 }, look: 'crate' },
         { reward: { kind: 'hero', hero: 'commander' }, look: 'hero' },
         { reward: { kind: 'ammo', level: 2 }, look: 'armor' },
-        { reward: { kind: 'turret', duration: 26 }, look: 'turret' },
+        { reward: { kind: 'turret', duration: 24 }, look: 'turret' },
         { reward: { kind: 'drone', amount: 2 }, look: 'armor' },
-        { reward: { kind: 'rate', amount: 35 }, look: 'crate' },
-        { reward: { kind: 'shield', amount: 12 }, look: 'armor' },
+        { reward: { kind: 'rate', amount: 30 }, look: 'crate' },
+        { reward: { kind: 'shield', amount: 10 }, look: 'armor' },
       ],
-      gate: { kind: 'add', value: 22 },
+      gate: { kind: 'add', value: 18 },
     },
     {
-      tank: { tier: 4, name: '黄金天启巨坦', fireInterval: 2.9, twin: true },
-      hp: 44000,
+      tank: { tier: 4, name: '黄金天启巨坦', fireInterval: 2.5, twin: true },
+      hp: 64000,
       r: 1.72,
       rewards: [
         { reward: { kind: 'weapon', tier: 6 }, look: 'crate' },
         { reward: { kind: 'mystery' }, look: 'mystery' },
         { reward: { kind: 'ammo', level: 3 }, look: 'armor' },
         { reward: { kind: 'multishot', amount: 1 }, look: 'armor' },
-        { reward: { kind: 'turret', duration: 28 }, look: 'turret' },
+        { reward: { kind: 'turret', duration: 26 }, look: 'turret' },
         { reward: { kind: 'drone', amount: 2 }, look: 'armor' },
-        { reward: { kind: 'damage', amount: 50 }, look: 'crate' },
+        { reward: { kind: 'damage', amount: 42 }, look: 'crate' },
         { reward: { kind: 'airstrike' }, look: 'crate' },
       ],
       gate: { kind: 'mul', value: 1.5 },
@@ -304,101 +304,101 @@ export function generateBlitz(stage: BlitzStage = 1): LevelSpec {
     });
   }
 
-  const waveInterval = stage === 2 ? 5.5 : 6.5;
+  const waveInterval = stage === 2 ? 5.2 : 6.0;
   for (let t = 6; t < duration - 4; t += waveInterval) {
     const p = t / duration;
-    spawns.push({ t, wave: Math.round((stage === 2 ? 32 : 26) + p * (stage === 2 ? 34 : 26)) });
+    spawns.push({ t, wave: Math.round((stage === 2 ? 36 : 30) + p * (stage === 2 ? 38 : 30)) });
   }
 
   // 中途巨尸穿插施压
   spawns.push({
     t: 22,
-    zombie: { kind: 'giant', x: -0.6, d: 2, hp: stage === 2 ? 1100 : 750, reward: { kind: 'soldiers', amount: 8 } },
+    zombie: { kind: 'giant', x: -0.6, d: 2, hp: stage === 2 ? 1650 : 1150, reward: { kind: 'soldiers', amount: 6 } },
   });
   spawns.push({
     t: 48,
-    zombie: { kind: 'giant', x: 0.6, d: 2, hp: stage === 2 ? 3200 : 2100, reward: { kind: 'airstrike' } },
+    zombie: { kind: 'giant', x: 0.6, d: 2, hp: stage === 2 ? 4800 : 3200, reward: { kind: 'airstrike' } },
   });
 
   if (stage === 1) {
     // 第 1 阶：总共 6 个 Boss（4 轮中途 Boss + 终局双王）
     spawns.push({
       t: 14,
-      boss: { kind: 'brute', x: 0, hp: 2200 },
+      boss: { kind: 'brute', x: 0, hp: 3300 },
       banner: { d: 0, text: '先锋巨尸王突袭中路！收编右路坦克一起轰！', tone: 'boss' },
     });
     spawns.push({
       t: 30,
-      boss: { kind: 'thrower', x: 0.25, hp: 5200 },
+      boss: { kind: 'thrower', x: 0.25, hp: 7800 },
       banner: { d: 0, text: '投弹屠夫王登场！注意躲避红圈炮击', tone: 'boss' },
     });
     spawns.push({
       t: 46,
-      boss: { kind: 'brute', x: -0.25, hp: 11000 },
+      boss: { kind: 'brute', x: -0.25, hp: 16500 },
       banner: { d: 0, text: '铁甲暴君杀入中路！全军与友军坦克集火！', tone: 'boss' },
     });
     spawns.push({
       t: 62,
-      boss: { kind: 'thrower', x: 0, hp: 17500 },
+      boss: { kind: 'thrower', x: 0, hp: 26000 },
       banner: { d: 0, text: '烈焰投弹王压境！准备迎接终局总攻', tone: 'boss' },
     });
     spawns.push({
       t: duration,
-      boss: { kind: 'brute', x: -0.8, hp: 26000 },
+      boss: { kind: 'brute', x: -0.8, hp: 39000 },
       banner: { d: 0, text: '终局双王总攻！坦克编队全火力齐射！', tone: 'boss' },
     });
     spawns.push({
       t: duration + 0.4,
-      boss: { kind: 'thrower', x: 0.8, hp: 21000 },
+      boss: { kind: 'thrower', x: 0.8, hp: 32000 },
     });
   } else {
     // 第 2 阶：总共 10 个 Boss（连环双王压境 + 终局三王总攻）+ 中路移动锯片
     hazards.push({ kind: 'saw', x0: -1.45, x1: 1.45, d0: 7.0, d1: 7.6 });
     spawns.push({
       t: 11,
-      boss: { kind: 'brute', x: 0, hp: 3000 },
+      boss: { kind: 'brute', x: 0, hp: 4600 },
       banner: { d: 0, text: '狂暴先锋王突袭！快抢右路首辆重装坦克！', tone: 'boss' },
     });
     spawns.push({
       t: 24,
-      boss: { kind: 'thrower', x: 0.3, hp: 6800 },
+      boss: { kind: 'thrower', x: 0.3, hp: 10500 },
       banner: { d: 0, text: '重炮投弹王进场！中路密集尸潮同步狂攻', tone: 'boss' },
     });
     spawns.push({
       t: 38,
-      boss: { kind: 'brute', x: -0.75, hp: 12500 },
+      boss: { kind: 'brute', x: -0.75, hp: 19000 },
       banner: { d: 0, text: '双王合击！重坦编队全线压制！', tone: 'boss' },
     });
     spawns.push({
       t: 38.4,
-      boss: { kind: 'thrower', x: 0.75, hp: 10500 },
+      boss: { kind: 'thrower', x: 0.75, hp: 16000 },
     });
     spawns.push({
       t: 54,
-      boss: { kind: 'brute', x: 0, hp: 21000 },
+      boss: { kind: 'brute', x: 0, hp: 32000 },
       banner: { d: 0, text: '地狱暴君冲阵！炸毁油桶清屏！', tone: 'boss' },
     });
     spawns.push({
       t: 70,
-      boss: { kind: 'brute', x: -0.75, hp: 30000 },
+      boss: { kind: 'brute', x: -0.75, hp: 46000 },
       banner: { d: 0, text: '精英双王来袭！击毁黄金天启巨坦入队！', tone: 'boss' },
     });
     spawns.push({
       t: 70.4,
-      boss: { kind: 'thrower', x: 0.75, hp: 26000 },
+      boss: { kind: 'thrower', x: 0.75, hp: 39000 },
     });
     spawns.push({
       t: duration,
-      boss: { kind: 'brute', x: -1.0, hp: 44000 },
+      boss: { kind: 'brute', x: -1.0, hp: 66000 },
       banner: { d: 0, text: '终局三王总攻！全装甲坦克群齐射！', tone: 'boss' },
     });
     spawns.push({
       t: duration + 0.35,
-      boss: { kind: 'thrower', x: 0, hp: 34000 },
+      boss: { kind: 'thrower', x: 0, hp: 52000 },
     });
     spawns.push({
       t: duration + 0.7,
-      boss: { kind: 'brute', x: 1.0, hp: 40000 },
+      boss: { kind: 'brute', x: 1.0, hp: 60000 },
     });
   }
 

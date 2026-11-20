@@ -11,15 +11,15 @@ import { UPGRADES, WEAPONS, ZOMBIES, soldierDps, upgradeEffects, type UpgradeId,
  */
 export const ECON = {
   /** 每过一关，所有金币数额乘这么多 */
-  growth: 1.22,
+  growth: 1.2,
   /** 击杀金币 = 丧尸基础金币 × 这个系数 */
-  kill: 0.6,
+  kill: 0.44,
   /** 中途 Boss 赏金 */
-  midBoss: 30,
+  midBoss: 26,
   /** 最终 Boss 赏金（双 Boss 各拿 60%） */
-  finalBoss: 90,
+  finalBoss: 80,
   /** 通关奖励 */
-  clear: 110,
+  clear: 95,
   /** Boss 关赏金和通关奖励的倍数 */
   bossLevel: 2,
   /** 新手奖励：前几关输了额外给（第 1 关输一把就能买到第一批升级） */
