@@ -316,9 +316,194 @@ export class Sfx {
             this.tone('triangle', 660, 880, 0.15, 0.1);
           }
           break;
+        case 'tankFire':
+          // 重装坦克开火：低沉主炮轰鸣 + 预警双音
+          if (this.ready('tankFire', 0.14)) {
+            this.hiss(0.32, 0.34, 'lowpass', 1400, 110);
+            this.tone('sine', 120, 36, 0.28, 0.32);
+            this.tone('square', 960, 740, 0.08, 0.06, 0.08);
+          }
+          break;
+        case 'tankCapture':
+          // 收编坦克入队：高昂铜管三连音 + 引擎轰鸣
+          this.tone('triangle', 440, 660, 0.14, 0.16);
+          this.tone('triangle', 554, 880, 0.16, 0.18, 0.09);
+          this.tone('sine', 660, 1100, 0.22, 0.2, 0.18);
+          this.tone('sine', 110, 52, 0.32, 0.24, 0.05);
+          break;
+        case 'allyTankFire':
+          if (this.ready('allyTankFire', 0.1)) {
+            this.hiss(0.18, 0.22, 'lowpass', 1100, 140);
+            this.tone('sine', 135, 42, 0.18, 0.24);
+          }
+          break;
+        case 'allyShellHit':
+          if (this.ready('allyShellHit', 0.09)) {
+            this.hiss(0.24, 0.26, 'lowpass', 950, 90);
+            this.tone('sine', 96, 32, 0.24, 0.26);
+          }
+          break;
+        case 'airstrikeLaunch':
+          // 战机呼啸掠过：带通扫频喷气声
+          this.hiss(0.75, 0.24, 'bandpass', 1800, 320);
+          this.tone('sawtooth', 320, 110, 0.55, 0.08, 0.06);
+          break;
+        case 'shieldBlock':
+          if (this.ready('shieldBlock', 0.09)) {
+            this.tone('sine', 880, 1480, 0.09, 0.1);
+            this.tone('triangle', 1320, 1760, 0.11, 0.07, 0.03);
+          }
+          break;
+        case 'lightningArc':
+          // 高压电弧劈啪声：高频尖啸 + 短促白噪电击
+          if (this.ready('lightningArc', 0.065)) {
+            this.hiss(0.085, 0.18, 'highpass', 3200, 1100);
+            this.tone('sawtooth', 1680 + Math.random() * 420, 290, 0.08, 0.065);
+            this.tone('square', 920, 210, 0.06, 0.04, 0.02);
+          }
+          break;
+        case 'orbitalLaser':
+          // 天基离子炮降临：超高频聚能扫频 + 低沉震地轰鸣
+          if (this.ready('orbitalLaser', 0.2)) {
+            this.tone('sine', 2100, 180, 0.42, 0.16);
+            this.tone('sawtooth', 420, 62, 0.52, 0.12, 0.04);
+            this.hiss(0.55, 0.34, 'bandpass', 2400, 260, 0.03);
+            this.tone('sine', 95, 28, 0.5, 0.36, 0.05);
+          }
+          break;
+        case 'mechDrop':
+          // 泰坦机甲轨道空投呼啸
+          if (this.ready('mechDrop', 0.15)) {
+            this.hiss(0.45, 0.22, 'bandpass', 2200, 400);
+            this.tone('sine', 780, 140, 0.42, 0.14);
+          }
+          break;
+        case 'mechLand':
+          // 泰坦机甲重锤落地：低频冲击波 + 金属机械锁定音
+          if (this.ready('mechLand', 0.15)) {
+            this.boom(2.0);
+            this.tone('triangle', 320, 640, 0.1, 0.12, 0.12);
+            this.tone('triangle', 480, 960, 0.14, 0.12, 0.19);
+          }
+          break;
+        case 'overdriveStart':
+          // 战术过载爆发：能量上扬和弦 + 重低音冲击
+          if (this.ready('overdriveStart', 0.3)) {
+            this.hiss(0.42, 0.28, 'bandpass', 500, 3200);
+            this.tone('sine', 120, 44, 0.35, 0.32);
+            this.tone('triangle', 523, 784, 0.14, 0.14, 0.04);
+            this.tone('triangle', 659, 1047, 0.18, 0.15, 0.1);
+            this.tone('triangle', 1047, 1568, 0.28, 0.16, 0.16);
+          }
+          break;
+        case 'draftOffer':
+          // 三选一战术进化弹卡提示音
+          if (this.ready('draftOffer', 0.25)) {
+            this.tone('triangle', 587, 880, 0.12, 0.14);
+            this.tone('triangle', 880, 1175, 0.18, 0.14, 0.08);
+          }
+          break;
+        case 'perkChosen':
+          // 选中进化卡确认和弦
+          if (this.ready('perkChosen', 0.15)) {
+            this.tone('triangle', 659, 988, 0.12, 0.15);
+            this.tone('triangle', 988, 1319, 0.18, 0.16, 0.07);
+            this.tone('sine', 1319, 1760, 0.22, 0.12, 0.14);
+          }
+          break;
+        case 'gateFlip':
+          // 红转蓝大反转门：清亮升调双和弦
+          if (this.ready('gateFlip', 0.14)) {
+            this.tone('triangle', 587, 880, 0.11, 0.16);
+            this.tone('triangle', 880, 1319, 0.16, 0.18, 0.06);
+            this.tone('sine', 1319, 1760, 0.2, 0.14, 0.12);
+          }
+          break;
+        case 'cryoNova':
+          // 液氮冰冻冲击波：高频晶莹冰裂 + 低温嘶鸣
+          if (this.ready('cryoNova', 0.15)) {
+            this.hiss(0.45, 0.24, 'highpass', 3400, 900);
+            this.tone('sine', 1960, 620, 0.22, 0.12);
+            this.tone('triangle', 2637, 1319, 0.18, 0.09, 0.06);
+            this.tone('sine', 110, 42, 0.25, 0.22);
+          }
+          break;
+        case 'mysteryRoll':
+          // 神秘盲盒开奖：老虎机三连叮咚大奖音
+          if (this.ready('mysteryRoll', 0.15)) {
+            this.tone('triangle', 659, 659, 0.08, 0.14);
+            this.tone('triangle', 880, 880, 0.08, 0.15, 0.07);
+            this.tone('triangle', 1175, 1175, 0.1, 0.16, 0.14);
+            this.tone('sine', 1568, 2093, 0.24, 0.16, 0.21);
+          }
+          break;
+        case 'heroJoin':
+          // 传奇英雄入队：史诗铜管号角三连音
+          if (this.ready('heroJoin', 0.2)) {
+            this.tone('sawtooth', 392, 523, 0.14, 0.11);
+            this.tone('triangle', 523, 659, 0.16, 0.16, 0.08);
+            this.tone('triangle', 659, 1047, 0.28, 0.18, 0.16);
+            this.tone('sine', 130, 58, 0.28, 0.22, 0.04);
+          }
+          break;
+        case 'heroSkill':
+          // 英雄特技释放：火浪 / 电磁狙击 / 号角鼓舞
+          if (this.ready('heroSkill', 0.12)) {
+            if (e.kind === 'pyro') {
+              this.hiss(0.32, 0.22, 'bandpass', 1200, 340);
+              this.tone('sawtooth', 240, 95, 0.24, 0.09);
+            } else if (e.kind === 'railgun') {
+              this.tone('sine', 2200, 260, 0.2, 0.14);
+              this.hiss(0.14, 0.2, 'highpass', 3000, 1200);
+            } else {
+              this.tone('triangle', 523, 784, 0.12, 0.13);
+              this.tone('triangle', 784, 1047, 0.16, 0.13, 0.08);
+            }
+          }
+          break;
+        case 'turretDeploy':
+          // 自动加特林炮台落地锁定：金属液压声 + 电机预转
+          if (this.ready('turretDeploy', 0.16)) {
+            this.tone('square', 220, 440, 0.09, 0.1);
+            this.hiss(0.18, 0.18, 'bandpass', 1800, 700, 0.04);
+            this.tone('triangle', 520, 980, 0.16, 0.12, 0.1);
+          }
+          break;
+        case 'feverStart':
+          // 30 连击 FEVER 时刻：高能电子号角连奏
+          if (this.ready('feverStart', 0.35)) {
+            this.hiss(0.38, 0.24, 'bandpass', 600, 3600);
+            this.tone('triangle', 587, 880, 0.12, 0.15);
+            this.tone('triangle', 880, 1175, 0.14, 0.16, 0.07);
+            this.tone('triangle', 1175, 1760, 0.28, 0.18, 0.14);
+          }
+          break;
+        case 'truckBreak':
+          // 击毁黄金军火补给车：厚重爆破 + 漫天金币钻石雨
+          if (this.ready('truckBreak', 0.2)) {
+            this.boom(2.2);
+            for (let i = 0; i < CHORD_GEM.length; i++) {
+              this.tone('triangle', CHORD_GEM[i], CHORD_GEM[i], 0.14, 0.11, 0.1 + i * 0.06);
+            }
+          }
+          break;
         case 'reward':
-          // 换枪的声音由 weaponUp 统一放
-          if (e.reward.kind !== 'weapon') this.coin();
+          // 换枪的声音由 weaponUp 统一放；无人机/多弹道/弹药进化给高亮科技和弦
+          if (e.reward.kind === 'drone' || e.reward.kind === 'multishot' || e.reward.kind === 'ammo') {
+            if (this.ready('buff', 0.08)) {
+              this.tone('triangle', 660, 990, 0.12, 0.12);
+              this.tone('triangle', 990, 1480, 0.18, 0.12, 0.07);
+            }
+          } else if (
+            e.reward.kind !== 'weapon' &&
+            e.reward.kind !== 'boom' &&
+            e.reward.kind !== 'freeze' &&
+            e.reward.kind !== 'hero' &&
+            e.reward.kind !== 'turret' &&
+            e.reward.kind !== 'mystery'
+          ) {
+            this.coin();
+          }
           break;
         case 'blocked':
           // 大障碍卡住：一声沉重的金属撞击

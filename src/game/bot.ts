@@ -1,3 +1,4 @@
+import { BLITZ_LANES } from './blitz';
 import { CARNAGE_LANES } from './carnage';
 import { BOSS_STRIKE_HALF, HALVES, LANES, THROW_RADIUS, WEAPONS, soldierDps } from './config';
 import type { Rng } from './rng';
@@ -25,9 +26,87 @@ export class Bot {
 
   target(w: World): number {
     if (w.spec.mode === 'carnage') return this.dodge(w, this.carnageTarget(w));
+    if (w.spec.mode === 'blitz') return this.dodge(w, this.blitzTarget(w));
     // 红圈里的兵全死，看到就躲（防线里就是换到另一条道）
     if (w.defense) return this.dodge(w, this.defenseTarget(w));
     return w.state === 'boss' ? this.dodge(w, this.bossTarget(w)) : this.runTarget(w);
+  }
+
+  /** 广告奇袭三路决策：右路放行奖励立刻吃、左路极速 +1 门顺手扩军、中路油桶/贴脸尸潮与 Boss 及时清、尽早收编右路重装坦克参战 */
+  private blitzTarget(w: World): number {
+    const sq = w.squad;
+    let frontTankD = Infinity;
+    let frontTank: (typeof w.barrels)[number] | null = null;
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
+      if (b.alive && b.tank && b.d < frontTankD) {
+        frontTankD = b.d;
+        frontTank = b;
+      }
+    }
+
+    // 1. 右路刚放行的奖励舱或增益门：最高优先级立刻切右吃满！
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
+      if (b.alive && b.blitzLane === 'right' && !b.tank && b.d < frontTankD && b.d > -1 && b.d < 16) {
+        return BLITZ_LANES.right;
+      }
+    }
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
+      if (!g.consumed && g.blitzLane === 'right' && g.d < frontTankD && g.d > 0 && g.d < 14) {
+        return BLITZ_LANES.right;
+      }
+    }
+
+    // 2. 紧贴阵型的中路危险尸潮或巨尸：先拉中路清场保兵力
+    let urgentMid = 0;
+    let nearestMidX: number = BLITZ_LANES.mid;
+    let nearestMidD = Infinity;
+    for (let i = 0; i < w.zombies.length; i++) {
+      const z = w.zombies[i];
+      if (!z.alive || z.d > 14.5) continue;
+      urgentMid += (THREAT[z.kind] ?? 1) * (z.d < 8 ? 2.2 : 1);
+      if (z.d < nearestMidD) {
+        nearestMidD = z.d;
+        nearestMidX = z.x;
+      }
+    }
+    if (urgentMid >= Math.max(5, sq.count * 0.14)) return nearestMidX;
+
+    // 3. 中路爆裂红油桶周围有尸潮：点爆清屏
+    for (let i = 0; i < w.barrels.length; i++) {
+      const b = w.barrels[i];
+      if (b.alive && b.blitzLane === 'mid' && b.d > 6 && b.d < 26) {
+        return b.x;
+      }
+    }
+
+    // 4. 贴脸 Boss 优先集火打掉
+    let boss: (typeof w.bosses)[number] | null = null;
+    for (let i = 0; i < w.bosses.length; i++) {
+      const b = w.bosses[i];
+      if (b.alive && b.active && (!boss || b.d < boss.d)) boss = b;
+    }
+    if (boss && boss.d < 20) return boss.x;
+
+    // 5. 左路极速 +1 门快滑到脚下时切左吃门扩军
+    let nearLeft: Gate | null = null;
+    for (let i = 0; i < w.gates.length; i++) {
+      const g = w.gates[i];
+      if (!g.consumed && g.blitzLane === 'left' && g.d > 0 && g.d < 9 && (!nearLeft || g.d < nearLeft.d)) {
+        nearLeft = g;
+      }
+    }
+    if (sq.count < 22) return BLITZ_LANES.left;
+    // 尽早打爆第一辆右路重坦收编入队！
+    if (frontTank && frontTank.d <= 24 && (w.allyTanks.length === 0 || sq.count >= 30 || !nearLeft)) {
+      return BLITZ_LANES.right;
+    }
+    if (nearLeft && (sq.count < 110 || nearLeft.d < 4.5)) return BLITZ_LANES.left;
+    if (boss) return boss.x;
+    if (frontTank && frontTank.d <= 26) return BLITZ_LANES.right;
+    return BLITZ_LANES.left;
   }
 
   /** 狂潮自动驾驶：兼顾左侧蓝门增兵、中央弹药牌、右侧火箭炮架拆解与终局巨人集火 */
@@ -247,6 +326,7 @@ export class Bot {
     if (g.kind === 'add') st.n += g.value + (g.value < 0 ? Math.min(-g.value, 3) : 1);
     else if (g.kind === 'mul') st.n *= g.value;
     else if (g.kind === 'weapon') st.tier = Math.max(st.tier, Math.min(WEAPONS.length - 1, g.value));
+    else if (g.kind === 'mystery') st.n = st.n * 1.18 + 3;
     else st.rate *= 1 + g.value / 100;
   }
 
@@ -296,6 +376,9 @@ export class Bot {
       const b = w.barrels[i];
       if (!b.alive || b.d < d0 || b.d > d1 || Math.abs(b.x - x) > 1.8) continue;
       if (b.reward.kind === 'weapon' && b.reward.tier > w.squad.tier) score += 0.5;
+      else if (b.reward.kind === 'hero' || b.reward.kind === 'turret') score += 0.42;
+      else if (b.reward.kind === 'mystery' || b.truck) score += 0.36;
+      else if (b.reward.kind === 'freeze' || b.reward.kind === 'boom') score += 0.28;
       else if (b.reward.kind === 'soldiers') score += 0.2;
       else if (b.reward.kind === 'airstrike') score += 0.1;
     }

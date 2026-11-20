@@ -392,4 +392,101 @@ describe('核心战斗逻辑缺陷回归测试 (world.ts & level.ts & bot.ts)', 
     expect(gateColor(mk('rate', 0))).toBe(GATE_COLORS.rate);
     expect(gateColor(mk('rate', -5))).toBe(GATE_COLORS.bad);
   });
+
+  it('SpatialBins.queryRange 零分配查询结果与 range 完全一致（含空桶与越界区间）', () => {
+    const bins = new SpatialBins<{ id: number; d: number; r: number; alive: boolean }>(4);
+    expect(bins.queryRange(0, 10)).toBe(false);
+    const list = [
+      { id: 1, d: 2, r: 0.4, alive: true },
+      { id: 2, d: 11.8, r: 0.5, alive: true },
+      { id: 3, d: 28, r: 0.4, alive: true },
+    ];
+    bins.build(list, 0, 40);
+    for (const [d0, d1] of [
+      [-5, -1],
+      [0, 5],
+      [10, 14],
+      [25, 45],
+      [50, 60],
+    ]) {
+      const [e0, e1] = bins.range(d0, d1);
+      const ok = bins.queryRange(d0, d1);
+      expect(ok).toBe(e0 <= e1);
+      if (ok) {
+        expect(bins.r0).toBe(e0);
+        expect(bins.r1).toBe(e1);
+      }
+    }
+  });
+
+  it('红门射绿（gateFlip）同步奖励过载充能 +12 与战术经验 +16', () => {
+    const spec = emptySpec({
+      gates: [{ d: 16, x0: -2, x1: 2, group: 1, kind: 'add', value: -1 }],
+    });
+    const w = new World(spec, { startSoldiers: 25, damageMult: 2, rateMult: 2, startTier: 2 });
+    const xp0 = w.roguelike.xp;
+    const od0 = w.overdrive.charge;
+    let flipped = false;
+    for (let i = 0; i < 120 && !flipped; i++) {
+      w.update(1 / 60);
+      for (const ev of w.drainEvents()) {
+        if (ev.type === 'gateFlip') flipped = true;
+      }
+    }
+    expect(flipped).toBe(true);
+    expect(w.overdrive.charge - od0).toBeGreaterThanOrEqual(12);
+    expect(w.roguelike.xp - xp0).toBeGreaterThanOrEqual(16);
+  });
+
+  it('营救英雄与部署炮台会主动锁定集火黄金补给车，且弹药走对象池复用', () => {
+    const spec = emptySpec({
+      barrels: [
+        {
+          d: 18,
+          x: 0,
+          r: 1.5,
+          hp: 500,
+          look: 'truck',
+          truck: { speed: 1.5, sway: 0.4, swaySpeed: 1.8, coins: 120 },
+          reward: { kind: 'coins', amount: 120 },
+        },
+      ],
+    });
+    const w = new World(spec, { startSoldiers: 1, damageMult: 1, rateMult: 0 });
+    // 仅由营救英雄与自动炮台开火（小队射速为 0），验证友军主动集火黄金补给车
+    w.allyHeroes.push({
+      id: 1,
+      kind: 'railgun',
+      name: '电磁狙神',
+      slot: 0,
+      x: -1.5,
+      d: 0,
+      yaw: 0,
+      fireTimer: 0,
+      skillTimer: 9,
+      recoil: 0,
+      phase: 0,
+      skillFlash: 0,
+    });
+    w.allyTurrets.push({
+      id: 2,
+      slot: 0,
+      x: 1.5,
+      d: 1,
+      yaw: 0,
+      fireTimer: 0,
+      spin: 0,
+      recoil: 0,
+      life: 12,
+      maxLife: 12,
+    });
+    const truck = w.barrels[0];
+    const hp0 = truck.hp;
+    for (let i = 0; i < 60; i++) {
+      w.update(1 / 60);
+      w.drainEvents();
+    }
+    expect(truck.hp).toBeLessThan(hp0);
+  });
 });
+

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import type { Bullet } from '../game/world';
 import { commitInstances } from './dispose';
+import { ITEM_SCALE } from './scale';
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -174,7 +175,7 @@ export class Flashes {
     g.fill();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0xffffff, transparent: true, opacity: 0.72, blending: THREE.AdditiveBlending, depthWrite: false });
     this.mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), mat, cap);
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
@@ -183,7 +184,7 @@ export class Flashes {
   }
 
   setColor(color: number) {
-    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.5);
+    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.35);
   }
 
   spawn(x: number, y: number, z: number, size: number) {
@@ -395,7 +396,7 @@ export class Streaks {
 
   constructor(scene: THREE.Scene, private readonly cap = 90) {
     this.pool = Array.from({ length: cap }, () => ({ x: 0, y: 0, z: 0, v: 0, len: 1, life: 0, max: 1 }));
-    const mat = new THREE.MeshBasicMaterial({ color: 0xfff6d8, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const mat = new THREE.MeshBasicMaterial({ color: 0xfff6d8, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false });
     this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, cap);
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
@@ -478,7 +479,7 @@ export class Rings {
     if (!item) {
       const mesh = new THREE.Mesh(
         getRingGeometry(),
-        new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false }),
+        new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
       );
       mesh.rotation.x = -Math.PI / 2;
       mesh.renderOrder = 3;
@@ -501,7 +502,7 @@ export class Rings {
       const k = Math.min(1, r.t / r.life);
       const s = r.size * (0.2 + 0.8 * Math.sqrt(k));
       r.mesh.scale.set(s, s, s);
-      (r.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.6;
+      (r.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.42;
       if (k >= 1) r.mesh.visible = false;
     }
   }
@@ -533,7 +534,7 @@ export class Pillar {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 4, 64);
     const tex = new THREE.CanvasTexture(canvas);
-    this.material = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+    this.material = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
     const geo = new THREE.CylinderGeometry(1, 1, 1, 32, 1, true);
     geo.translate(0, 0.5, 0);
     this.mesh = new THREE.Mesh(geo, this.material);
@@ -557,7 +558,7 @@ export class Pillar {
     const grow = Math.min(1, k / 0.15);
     const w = this.width * (0.35 + 0.65 * grow) * (1 - 0.6 * Math.max(0, k - 0.15));
     this.mesh.scale.set(w, 9 * grow, w);
-    this.material.opacity = Math.min(1, (1 - k) * 1.6) * 0.85;
+    this.material.opacity = Math.min(1, (1 - k) * 1.6) * 0.46;
     if (k >= 1) this.mesh.visible = false;
   }
 
@@ -589,7 +590,7 @@ export class BulletMesh {
     this.cap = cap;
     const core = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
     this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.062, 0.062, 1), core, cap);
-    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.65, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false });
     this.glow = new THREE.InstancedMesh(new THREE.BoxGeometry(0.17, 0.17, 1.22), glowMat, cap);
     for (const m of [this.mesh, this.glow]) {
       m.frustumCulled = false;
@@ -603,9 +604,9 @@ export class BulletMesh {
   setColor(color: number, tier = 0, glow = color) {
     const safeTier = Math.max(0, Math.min(BULLET_STYLE.length - 1, tier));
     this.style = BULLET_STYLE[safeTier];
-    (this.glow.material as THREE.MeshBasicMaterial).opacity = this.style.alpha;
+    (this.glow.material as THREE.MeshBasicMaterial).opacity = this.style.alpha * 0.56;
     (this.glow.material as THREE.MeshBasicMaterial).color.set(glow);
-    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.55);
+    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.35);
   }
 
   update(bullets: readonly Bullet[]) {
@@ -613,14 +614,14 @@ export class BulletMesh {
     for (let i = 0; i < n; i++) {
       const b = bullets[i];
       const st = this.style;
-      const len = (0.65 + Math.min(0.55, b.travel * 0.06)) * st.len;
+      const len = (0.65 + Math.min(0.55, b.travel * 0.06)) * st.len * ITEM_SCALE;
       _e.set(0, Math.atan2(-b.vx, b.vd), 0);
       _q.setFromEuler(_e);
-      _p.set(b.x, 0.74, -b.d);
-      _s.set(st.core, st.core, len);
+      _p.set(b.x, 0.74 * ITEM_SCALE, -b.d);
+      _s.set(st.core * ITEM_SCALE, st.core * ITEM_SCALE, len);
       _m.compose(_p, _q, _s);
       this.mesh.setMatrixAt(i, _m);
-      _s.set(st.glow, st.glow, len);
+      _s.set(st.glow * ITEM_SCALE, st.glow * ITEM_SCALE, len);
       _m.compose(_p, _q, _s);
       this.glow.setMatrixAt(i, _m);
     }
@@ -757,7 +758,7 @@ export class Explosions {
       shade: 1,
     }));
     const geo = new THREE.IcosahedronGeometry(1, 1);
-    this.fire = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), cap);
+    this.fire = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), cap);
     this.smoke = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.6, depthWrite: false }), cap);
     for (const m of [this.fire, this.smoke]) {
       m.frustumCulled = false;
@@ -869,7 +870,7 @@ export class Explosions {
         ns++;
       } else {
         const fade = 1 - k;
-        _c.setRGB(1, 0.62 - k * 0.4, 0.22 - k * 0.22).multiplyScalar(fade * it.shade);
+        _c.setRGB(1, 0.52 - k * 0.36, 0.14 - k * 0.14).multiplyScalar(fade * it.shade * 0.85);
         this.fire.setMatrixAt(nf, _m);
         this.fire.setColorAt(nf, _c);
         nf++;
@@ -941,5 +942,178 @@ export class ZombieBars {
   end() {
     commitInstances(this.bg, this.n, this.prevCount);
     this.prevCount = commitInstances(this.fill, this.n, this.prevCount, undefined, true);
+  }
+}
+
+interface BoltItem {
+  line: THREE.Line;
+  glow: THREE.Line;
+  t: number;
+  life: number;
+}
+
+/** 3D 高能链式闪电电弧：带折线抖动 + 发光外晕（配合 UnrealBloom 产生刺眼电光！） */
+export class LightningBolts {
+  private readonly items: BoltItem[] = [];
+  private readonly maxPts = 28;
+
+  constructor(scene: THREE.Scene, cap = 18) {
+    for (let i = 0; i < cap; i++) {
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.maxPts * 3), 3));
+      const coreMat = new THREE.LineBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      const glowMat = new THREE.LineBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+      const line = new THREE.Line(geo, coreMat);
+      const glow = new THREE.Line(geo.clone(), glowMat);
+      line.visible = false;
+      glow.visible = false;
+      line.renderOrder = 10;
+      glow.renderOrder = 9;
+      line.frustumCulled = false;
+      glow.frustumCulled = false;
+      scene.add(line, glow);
+      this.items.push({ line, glow, t: 1, life: 1 });
+    }
+  }
+
+  spawn(points: readonly { x: number; d: number; y: number }[]) {
+    if (points.length < 2) return;
+    let item = this.items.find((it) => it.t >= it.life);
+    if (!item) item = this.items[Math.floor(Math.random() * this.items.length)];
+    item.t = 0;
+    item.life = 0.24;
+
+    const corePos = item.line.geometry.attributes.position as THREE.BufferAttribute;
+    const glowPos = item.glow.geometry.attributes.position as THREE.BufferAttribute;
+    let idx = 0;
+    for (let s = 0; s < points.length - 1 && idx < this.maxPts - 1; s++) {
+      const a = points[s];
+      const b = points[s + 1];
+      const segs = Math.min(3, Math.floor((this.maxPts - 1 - idx) / Math.max(1, points.length - 1 - s)));
+      for (let k = 0; k < segs && idx < this.maxPts - 1; k++) {
+        const u = k / segs;
+        const j = k === 0 ? 0 : 0.28;
+        const x = a.x + (b.x - a.x) * u + (Math.random() - 0.5) * j;
+        const y = (a.y + (b.y - a.y) * u) * ITEM_SCALE + (Math.random() - 0.5) * j * 0.6;
+        const z = -(a.d + (b.d - a.d) * u) + (Math.random() - 0.5) * j;
+        corePos.setXYZ(idx, x, y, z);
+        glowPos.setXYZ(idx, x + (Math.random() - 0.5) * 0.14, y + (Math.random() - 0.5) * 0.14, z);
+        idx++;
+      }
+    }
+    const last = points[points.length - 1];
+    corePos.setXYZ(idx, last.x, last.y * ITEM_SCALE, -last.d);
+    glowPos.setXYZ(idx, last.x, last.y * ITEM_SCALE, -last.d);
+    idx++;
+
+    corePos.needsUpdate = true;
+    glowPos.needsUpdate = true;
+    item.line.geometry.setDrawRange(0, idx);
+    item.glow.geometry.setDrawRange(0, idx);
+    item.line.visible = true;
+    item.glow.visible = true;
+  }
+
+  update(dt: number) {
+    for (let i = 0; i < this.items.length; i++) {
+      const it = this.items[i];
+      if (it.t >= it.life) continue;
+      it.t += dt;
+      const k = Math.min(1, it.t / it.life);
+      const op = 1 - k * k;
+      (it.line.material as THREE.LineBasicMaterial).opacity = op;
+      (it.glow.material as THREE.LineBasicMaterial).opacity = op * 0.72;
+      if (k >= 1) {
+        it.line.visible = false;
+        it.glow.visible = false;
+      }
+    }
+  }
+
+  clear() {
+    for (const it of this.items) {
+      it.t = it.life;
+      it.line.visible = false;
+      it.glow.visible = false;
+    }
+  }
+}
+
+interface BeamItem {
+  group: THREE.Group;
+  core: THREE.Mesh;
+  sheath: THREE.Mesh;
+  disc: THREE.Mesh;
+  t: number;
+  life: number;
+  radius: number;
+}
+
+/** 轨道离子激光炮光束：从高空天基卫星贯通战场的双层离子光柱 + 地面灼烧圆环 */
+export class OrbitalBeams {
+  private readonly items: BeamItem[] = [];
+
+  constructor(private readonly scene: THREE.Scene) {}
+
+  spawn(x: number, z: number, radius: number, color = 0x38bdf8) {
+    let item = this.items.find((b) => b.t >= b.life);
+    if (!item) {
+      const group = new THREE.Group();
+      const coreGeo = new THREE.CylinderGeometry(0.28, 0.34, 48, 16, 1, true);
+      coreGeo.translate(0, 24, 0);
+      const core = new THREE.Mesh(
+        coreGeo,
+        new THREE.MeshBasicMaterial({ color: 0xf0f9ff, transparent: true, opacity: 1, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+      );
+      const sheathGeo = new THREE.CylinderGeometry(0.85, 1.05, 48, 20, 1, true);
+      sheathGeo.translate(0, 24, 0);
+      const sheath = new THREE.Mesh(
+        sheathGeo,
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.38, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      const disc = new THREE.Mesh(
+        new THREE.CircleGeometry(1, 32),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.48, blending: THREE.AdditiveBlending, depthWrite: false }),
+      );
+      disc.rotation.x = -Math.PI / 2;
+      disc.position.y = 0.08;
+      group.add(sheath, core, disc);
+      group.renderOrder = 12;
+      this.scene.add(group);
+      item = { group, core, sheath, disc, t: 0, life: 0.72, radius };
+      this.items.push(item);
+    }
+    item.t = 0;
+    item.life = 0.72;
+    item.radius = radius;
+    item.group.position.set(x, 0, z);
+    item.group.visible = true;
+    (item.sheath.material as THREE.MeshBasicMaterial).color.set(color);
+    (item.disc.material as THREE.MeshBasicMaterial).color.set(color);
+  }
+
+  update(dt: number) {
+    for (let i = 0; i < this.items.length; i++) {
+      const b = this.items[i];
+      if (b.t >= b.life) continue;
+      b.t += dt;
+      const k = Math.min(1, b.t / b.life);
+      const pop = k < 0.14 ? k / 0.14 : 1 - (k - 0.14) / 0.86;
+      const w = Math.max(0.05, pop) * (0.65 + b.radius * 0.22);
+      b.core.scale.set(w * 0.75, 1, w * 0.75);
+      b.sheath.scale.set(w * 1.35, 1, w * 1.35);
+      b.disc.scale.setScalar(b.radius * (0.45 + 0.65 * Math.sqrt(k)));
+      (b.core.material as THREE.MeshBasicMaterial).opacity = Math.min(1, pop * 1.4);
+      (b.sheath.material as THREE.MeshBasicMaterial).opacity = pop * 0.38;
+      (b.disc.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.48;
+      if (k >= 1) b.group.visible = false;
+    }
+  }
+
+  clear() {
+    for (const b of this.items) {
+      b.t = b.life;
+      b.group.visible = false;
+    }
   }
 }

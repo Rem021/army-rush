@@ -19,6 +19,9 @@ export class SpatialBins<T extends { d: number; r: number; alive: boolean }> {
   lo = 0;
   maxR = 0.5;
   activeCount = 0;
+  /** queryRange 的结果区间（零分配复用） */
+  r0 = 1;
+  r1 = 0;
 
   constructor(readonly binSize = 2) {}
 
@@ -40,10 +43,22 @@ export class SpatialBins<T extends { d: number; r: number; alive: boolean }> {
     this.activeCount = n;
   }
 
-  range(dmin: number, dmax: number): [number, number] {
-    if (this.activeCount === 0) return [1, 0];
+  /** 零分配写入 [r0, r1] 查询桶范围，返回是否有有效桶 */
+  queryRange(dmin: number, dmax: number): boolean {
+    if (this.activeCount === 0) {
+      this.r0 = 1;
+      this.r1 = 0;
+      return false;
+    }
     const b0 = Math.max(0, Math.floor((dmin - this.maxR - this.lo) / this.binSize));
     const b1 = Math.min(this.activeCount - 1, Math.floor((dmax + this.maxR - this.lo) / this.binSize));
-    return [b0, b1];
+    this.r0 = b0;
+    this.r1 = b1;
+    return b0 <= b1;
+  }
+
+  range(dmin: number, dmax: number): [number, number] {
+    this.queryRange(dmin, dmax);
+    return [this.r0, this.r1];
   }
 }

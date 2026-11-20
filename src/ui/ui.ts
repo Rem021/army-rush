@@ -1,20 +1,43 @@
-import { AMMO, BOSSES, MODES, SKINS, UPGRADES, WEAPONS, soldierDps, type GameMode, type UpgradeId } from '../game/config';
-import { modeUnlocked, progressLevel } from '../game/access';
-export { modeUnlocked, progressLevel } from '../game/access';
+import {
+  AMMO,
+  BLITZ_STAGES,
+  BOSSES,
+  MODES,
+  SKINS,
+  UPGRADES,
+  WEAPONS,
+  soldierDps,
+  type BlitzStage,
+  type GameMode,
+  type UpgradeId,
+} from '../game/config';
+import { blitzStageUnlocked, clearedStages, modeUnlocked, progressLevel } from '../game/access';
+export { blitzStageUnlocked, clearedStages, modeUnlocked, progressLevel } from '../game/access';
 import { isBossLevel, recommendUpgrade, upgradeGain } from '../game/economy';
+import { PERK_MAP, type PerkDef, type PerkId, type PerkRarity } from '../game/perks';
 import { TACTICS, type TacticId } from '../game/tactics';
 import type { Boss, World } from '../game/world';
 import { formatNumber } from '../render/label';
 import type { SaveData } from '../save';
-import { EMBLEM, ICON, MODE_STYLE, RANK_SHIELD, SVG_DEFS } from './icons';
+import { EMBLEM, ICON, MODE_STYLE, PERK_ICON, RANK_SHIELD, SVG_DEFS } from './icons';
+
+const RARITY_LABEL: Record<PerkRarity, string> = {
+  rare: '精良',
+  epic: '史诗',
+  legendary: '传说',
+};
 
 export interface UIHandlers {
   start(): void;
   nova(): void;
+  overdrive(): void;
+  choosePerk(id: PerkId): void;
   revokeAdmin(): void;
   upgrade(id: UpgradeId): void;
   skin(id: string): void;
   mode(id: GameMode): void;
+  blitzStage(stage: BlitzStage): void;
+  tryMode(mode: GameMode, stage?: BlitzStage): void;
   next(): void;
   retry(): void;
   home(): void;
@@ -32,6 +55,13 @@ export interface UIHandlers {
   resetProgress(): void;
 }
 
+export interface UnlockCallout {
+  title: string;
+  desc: string;
+  mode: GameMode;
+  stage?: BlitzStage;
+}
+
 export interface ResultInfo {
   mode: GameMode;
   won: boolean;
@@ -47,6 +77,7 @@ export interface ResultInfo {
   advice?: string;
   detail?: string;
   practice?: boolean;
+  unlockedCallout?: UnlockCallout;
 }
 
 type Screen = 'menu' | 'hud' | 'result' | 'pause';
@@ -95,6 +126,7 @@ function nextEvolution(u: (typeof UPGRADES)[number], lvl: number) {
 const MODE_TIPS: Partial<Record<GameMode, string>> = {
   defense: '左右拖动换道：门道打门、拆补给变强，另一边的尸潮别让它冲到脚下',
   campaign: '左右拖动选道，子弹只打正前方',
+  blitz: '左道高速 +1 门直通养兵 · 中道红油桶清怪迎多 Boss · 右道打爆坦克收编助战 + 拿神器！',
   carnage: '左侧 +1 增兵 · 黄色 +99 装弹 · 右侧拆炮架 · 中路清红军',
   endless: '越往后越难，看你能撑多远',
 };
@@ -142,7 +174,6 @@ export class UI {
   private readonly hudFillEl: HTMLElement;
   private readonly hudMarksEl: HTMLElement;
   private readonly hudCoinsEl: HTMLElement;
-  private readonly hudCoinsPill: HTMLElement;
   private readonly hudCoinsIcon: HTMLElement;
   private readonly hudGemsEl: HTMLElement;
   private readonly hudGemsPill: HTMLElement;
@@ -155,6 +186,29 @@ export class UI {
   private readonly hudRateText: HTMLElement;
   private readonly hudAmmoEl: HTMLElement;
   private readonly hudAmmoText: HTMLElement;
+  private readonly blitzHudEl: HTMLElement;
+  private readonly blitzTanksEl: HTMLElement;
+  private readonly blitzDronesEl: HTMLElement;
+  private readonly blitzMultiEl: HTMLElement;
+  private readonly blitzShieldEl: HTMLElement;
+  private readonly blitzDmgEl: HTMLElement;
+  private readonly blitzStagesEl: HTMLElement;
+  private readonly xpStripEl: HTMLElement;
+  private readonly xpLevelEl: HTMLElement;
+  private readonly xpFillEl: HTMLElement;
+  private readonly comboPillEl: HTMLElement;
+  private readonly feverPillEl: HTMLElement;
+  private readonly perkStripEl: HTMLElement;
+  private readonly allyStripEl: HTMLElement;
+  private readonly allyHeroesEl: HTMLElement;
+  private readonly allyTurretsEl: HTMLElement;
+  private readonly btnOverdrive: HTMLButtonElement;
+  private readonly odTitleEl: HTMLElement;
+  private readonly odPctEl: HTMLElement;
+  private readonly odFillEl: HTMLElement;
+  private readonly draftEl: HTMLElement;
+  private readonly draftSubEl: HTMLElement;
+  private readonly draftCardsEl: HTMLElement;
   private readonly carnageHudEl: HTMLElement;
   private readonly carnageComboEl: HTMLElement;
   private readonly carnageCountEl: HTMLElement;
@@ -172,6 +226,7 @@ export class UI {
   private readonly weaponUpEl: HTMLElement;
   private readonly resultBalanceEl: HTMLElement;
   private readonly resultTacticBtn: HTMLElement;
+  private readonly resultUnlockEl: HTMLElement;
 
   // Dirty-checking state for HUD
   private lastPct = -1;
@@ -185,6 +240,23 @@ export class UI {
   private lastCueVisible = false;
   private lastResumeHidden = true;
   private lastResumeText = '';
+  private lastBlitzTanks = '';
+  private lastBlitzDrones = -1;
+  private lastBlitzMulti = -1;
+  private lastBlitzShield = -1;
+  private lastBlitzDmg = -1;
+  private lastXpPct = -1;
+  private lastXpLevel = -1;
+  private lastCombo = -1;
+  private lastFeverText = '';
+  private lastAllyHeroes = -1;
+  private lastAllyTurrets = -1;
+  private lastPerkKey = '';
+  private lastOdCharge = -1;
+  private lastOdActive = false;
+  private lastOdReady = false;
+  private lastOdDisabled = true;
+  private lastOdTitle = '';
   private lastCarnageCombo = -1;
   private lastCarnageKills = -1;
   private lastCarnageSquad = -1;
@@ -194,6 +266,7 @@ export class UI {
   private lastNovaReady = false;
   private lastNovaTitle = '';
   private lastNovaCharge = -1;
+  private pendingUnlock: UnlockCallout | null = null;
 
   private bossBars: BossBarNodes[] = [];
   private bossKey = '';
@@ -215,6 +288,8 @@ export class UI {
   private weaponUpReturn: Animation | null = null;
   private evolveTimer = 0;
   private flying = 0;
+  private readonly pulseAt = { combo: 0, coins: 0, gems: 0 };
+  private readonly flyTargetCache = new Map<string, { x: number; y: number }>();
 
   constructor(
     root: HTMLElement,
@@ -236,11 +311,34 @@ export class UI {
             <div class="pill hud-gems" id="hud-gems-pill"><span class="gem-ico">${ICON.gem}</span><span id="hud-gems">0</span></div>
           </div>
         </div>
+        <div id="xp-strip" class="xp-strip">
+          <span class="xp-lv" id="xp-lv">LV.0</span>
+          <div class="xp-track"><i id="xp-fill"></i></div>
+          <span class="combo-pill" id="combo-pill" hidden>0 连击</span>
+          <span class="fever-pill" id="fever-pill" hidden>FEVER · 2×金币</span>
+        </div>
+        <div id="perk-strip" class="perk-strip" hidden></div>
+        <div id="ally-strip" class="ally-strip" hidden>
+          <span class="ally-chip hero" id="ally-heroes" hidden>英雄 ×0</span>
+          <span class="ally-chip turret" id="ally-turrets" hidden>炮台 ×0</span>
+        </div>
+        <div id="blitz-hud" class="blitz-hud" hidden>
+          <span class="blitz-chip tank" id="blitz-tanks">坦克 0/3</span>
+          <span class="blitz-chip drone" id="blitz-drones" hidden>无人机 ×0</span>
+          <span class="blitz-chip multi" id="blitz-multi" hidden>多发 ×1</span>
+          <span class="blitz-chip shield" id="blitz-shield" hidden>护盾 0</span>
+          <span class="blitz-chip dmg" id="blitz-dmg" hidden>火力 +0%</span>
+        </div>
         <div class="hud-row">
           <div class="weapon-badge" id="hud-weapon"><div class="wb-gun">${ICON.gun}</div><div class="wb-text"><b>手枪</b><div class="wb-pips">${WEAPONS.map(() => '<i></i>').join('')}</div></div></div>
           <div class="chip" id="hud-rate">${ICON.bolt}<span>射速 100%</span></div>
           <div class="chip ammo" id="hud-ammo">${ICON.ammo}<span></span></div>
         </div>
+        <button id="btn-overdrive" class="od-btn" type="button" disabled>
+          <span class="od-top"><span class="od-icon">${ICON.bolt}</span><span id="od-title">战术过载</span><b id="od-pct">0%</b></span>
+          <span class="od-sub">射速+75% · 全弹暴击 · SPACE</span>
+          <span class="od-bar"><i id="od-fill"></i></span>
+        </button>
         <div id="carnage-hud" hidden>
           <div class="carnage-score"><small>RAMPAGE / 火力狂潮</small><b id="carnage-combo">0 连击</b><span id="carnage-count">击杀 0</span><span id="carnage-shells">火箭弹 120</span></div>
           <button id="btn-nova" disabled><span id="nova-title">超载蓄能</span><b id="nova-charge">0%</b><i id="nova-fill"></i><small>清屏 + 6 秒双倍弹幕 · E</small></button>
@@ -271,6 +369,7 @@ export class UI {
         <div class="logo"><div class="logo-emblem">${EMBLEM}</div><div class="logo-title">军团冲锋</div><div class="logo-sub">ARMY RUSH</div></div>
         <div class="menu-dock">
           <button class="panel mode-card" id="mode-card"></button>
+          <div class="blitz-stages" id="blitz-stages" hidden></div>
           <div class="home-ups" id="home-ups"></div>
           <div class="carnage-loadout" hidden>固定蓝军 · 36 人加特林 · 主线升级和皮肤不用于本模式</div>
           <div class="brief-actions"><button data-sheet="tactics" id="home-tactic">战术 · 均衡</button><button data-sheet="help">战地手册</button></div>
@@ -297,6 +396,17 @@ export class UI {
         </div>
       </div>
 
+      <div class="draft-modal" id="draft" role="dialog" aria-modal="true" aria-labelledby="draft-title">
+        <div class="draft-shell">
+          <div class="draft-head">
+            <span class="draft-kicker">TACTICAL EVOLUTION PROTOCOL</span>
+            <h2 id="draft-title">战术进化 · 三选一</h2>
+            <p id="draft-sub">选择 1 项战地协议注入军团（点击卡片或按键盘 1 / 2 / 3）</p>
+          </div>
+          <div class="draft-cards" id="draft-cards"></div>
+        </div>
+      </div>
+
       <div class="sheet-wrap" id="sheet-wrap">
         <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
           <div class="sheet-head">
@@ -314,6 +424,7 @@ export class UI {
           <div class="ribbon" id="result-ribbon">胜利</div>
           <div class="stars" id="result-stars"></div>
           <div class="result-sub" id="result-sub"></div>
+          <div class="result-unlock" id="result-unlock" hidden></div>
           <div class="result-stats" id="result-stats"></div>
           <div class="result-advice" id="result-advice"></div>
           <div class="result-detail" id="result-detail"></div>
@@ -354,7 +465,6 @@ export class UI {
     this.hudFillEl = el(root, '#hud-fill');
     this.hudMarksEl = el(root, '#hud-marks');
     this.hudCoinsEl = el(root, '#hud-coins');
-    this.hudCoinsPill = el(root, '.hud-coins');
     this.hudCoinsIcon = el(root, '.hud-coins .coin-ico');
     this.hudGemsEl = el(root, '#hud-gems');
     this.hudGemsPill = el(root, '#hud-gems-pill');
@@ -367,6 +477,29 @@ export class UI {
     this.hudRateText = el(this.hudRateEl, 'span');
     this.hudAmmoEl = el(root, '#hud-ammo');
     this.hudAmmoText = el(this.hudAmmoEl, 'span');
+    this.blitzHudEl = el(root, '#blitz-hud');
+    this.blitzTanksEl = el(root, '#blitz-tanks');
+    this.blitzDronesEl = el(root, '#blitz-drones');
+    this.blitzMultiEl = el(root, '#blitz-multi');
+    this.blitzShieldEl = el(root, '#blitz-shield');
+    this.blitzDmgEl = el(root, '#blitz-dmg');
+    this.blitzStagesEl = el(root, '#blitz-stages');
+    this.xpStripEl = el(root, '#xp-strip');
+    this.xpLevelEl = el(root, '#xp-lv');
+    this.xpFillEl = el(root, '#xp-fill');
+    this.comboPillEl = el(root, '#combo-pill');
+    this.feverPillEl = el(root, '#fever-pill');
+    this.perkStripEl = el(root, '#perk-strip');
+    this.allyStripEl = el(root, '#ally-strip');
+    this.allyHeroesEl = el(root, '#ally-heroes');
+    this.allyTurretsEl = el(root, '#ally-turrets');
+    this.btnOverdrive = el<HTMLButtonElement>(root, '#btn-overdrive');
+    this.odTitleEl = el(root, '#od-title');
+    this.odPctEl = el(root, '#od-pct');
+    this.odFillEl = el(root, '#od-fill');
+    this.draftEl = el(root, '#draft');
+    this.draftSubEl = el(root, '#draft-sub');
+    this.draftCardsEl = el(root, '#draft-cards');
     this.carnageHudEl = el(root, '#carnage-hud');
     this.carnageComboEl = el(root, '#carnage-combo');
     this.carnageCountEl = el(root, '#carnage-count');
@@ -384,6 +517,7 @@ export class UI {
     this.weaponUpEl = el(root, '#weapon-up');
     this.resultBalanceEl = el(root, '#result-balance');
     this.resultTacticBtn = el(root, '.result-tactic');
+    this.resultUnlockEl = el(root, '#result-unlock');
 
     const btnNext = el(root, '#btn-next');
     const on = (sel: string, fn: () => void) => el(root, sel).addEventListener('click', fn);
@@ -393,14 +527,37 @@ export class UI {
     on('#btn-quit', () => h.retreat());
     on('#btn-start', () => h.start());
     on('#btn-nova', () => h.nova());
+    on('#btn-overdrive', () => h.overdrive());
     on('#btn-settings', () => this.openSheet('settings'));
     on('#mode-card', () => this.openSheet('modes'));
     on('#sheet-close', () => this.closeSheet());
     on('#btn-home', () => h.home());
     on('#evolve', () => this.closeEvolve());
+    this.draftCardsEl.addEventListener('click', (ev) => {
+      const card = (ev.target as HTMLElement).closest<HTMLElement>('[data-perk]');
+      if (card?.dataset.perk) h.choosePerk(card.dataset.perk as PerkId);
+    });
     btnNext.addEventListener('click', () => {
       if (btnNext.dataset.mode === 'retry') h.retry();
       else h.next();
+    });
+    this.resultUnlockEl.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement).closest<HTMLElement>('[data-try-unlock]');
+      if (btn && this.pendingUnlock) {
+        h.tryMode(this.pendingUnlock.mode, this.pendingUnlock.stage);
+      }
+    });
+    this.blitzStagesEl.addEventListener('click', (ev) => {
+      const btn = (ev.target as HTMLElement).closest<HTMLElement>('[data-blitz-stage]');
+      if (!btn) return;
+      const stage = Number(btn.dataset.blitzStage) as BlitzStage;
+      if (btn.classList.contains('locked')) {
+        const meta = BLITZ_STAGES.find((x) => x.stage === stage);
+        const cleared = clearedStages(this.save);
+        this.toast(`防线或冲锋通关第 ${meta?.unlock ?? 10} 关解锁（当前 ${cleared}/${meta?.unlock ?? 10}）`);
+        return;
+      }
+      h.blitzStage(stage);
     });
     this.sheetWrapEl.addEventListener('click', (ev) => {
       if (ev.target === ev.currentTarget) this.closeSheet();
@@ -420,12 +577,35 @@ export class UI {
       if (up) h.upgrade(up.dataset.up as UpgradeId);
       const skin = t.closest<HTMLElement>('[data-skin]');
       if (skin) h.skin(skin.dataset.skin!);
+      const blitzBtn = t.closest<HTMLElement>('[data-blitz-stage]');
+      if (blitzBtn) {
+        const stage = Number(blitzBtn.dataset.blitzStage) as BlitzStage;
+        if (blitzBtn.classList.contains('locked')) {
+          const meta = BLITZ_STAGES.find((x) => x.stage === stage);
+          const cleared = clearedStages(this.save);
+          this.toast(`防线或冲锋通关第 ${meta?.unlock ?? 10} 关解锁（当前 ${cleared}/${meta?.unlock ?? 10}）`);
+        } else {
+          h.blitzStage(stage);
+          h.mode('blitz');
+          this.closeSheet();
+        }
+        return;
+      }
       const mode = t.closest<HTMLElement>('[data-mode]');
       if (mode) {
         if (mode.classList.contains('locked')) {
           const id = mode.dataset.mode as GameMode;
-          const m = MODES.find((x) => x.id === id);
-          this.toast(id === 'carnage' ? '防线或冲锋通关第 30 关解锁火力狂潮' : `防线或冲锋通关第 ${m?.unlock ?? 3} 关解锁该模式`);
+          const cleared = clearedStages(this.save);
+          if (id === 'carnage') {
+            this.toast(`防线或冲锋通关第 30 关解锁火力狂潮（当前 ${cleared}/30）`);
+          } else if (id === 'blitz') {
+            this.toast(`防线或冲锋通关第 5 关解锁重装突袭（当前 ${cleared}/5）`);
+          } else if (id === 'endless') {
+            this.toast('防线或冲锋通关第 1 关解锁无尽模式');
+          } else {
+            const m = MODES.find((x) => x.id === id);
+            this.toast(`防线或冲锋通关第 ${m?.unlock ?? 1} 关解锁该模式`);
+          }
         } else {
           h.mode(mode.dataset.mode as GameMode);
           this.closeSheet();
@@ -471,6 +651,21 @@ export class UI {
         else if (toggle.dataset.toggle === 'sensitivity') h.cycleSensitivity();
       }
     });
+    window.addEventListener('resize', () => this.flyTargetCache.clear(), { passive: true });
+  }
+
+  /** 无强制回流的节流弹跳动效（走 Web Animations API，避免读写 offsetWidth 触发布局抖动） */
+  private pulseEl(node: HTMLElement, key: 'combo' | 'coins' | 'gems', cooldownMs = 220, peak = 1.18) {
+    if (this.root.classList.contains('reduced-motion')) return;
+    const now = performance.now();
+    if (now - this.pulseAt[key] < cooldownMs) return;
+    this.pulseAt[key] = now;
+    if (typeof node.animate === 'function') {
+      node.animate(
+        [{ transform: 'scale(1)' }, { transform: `scale(${peak})` }, { transform: 'scale(1)' }],
+        { duration: 220, easing: 'ease-out' },
+      );
+    }
   }
 
   private disarmReset() {
@@ -631,6 +826,43 @@ export class UI {
     this.evolveEl.classList.remove('show');
   }
 
+  get draftOpen(): boolean {
+    return this.draftEl.classList.contains('show');
+  }
+
+  showDraft(choices: readonly PerkDef[], level: number, owned: Partial<Record<PerkId, number>>) {
+    this.draftSubEl.textContent = `LV.${level} 战地进化就绪 · 点击卡片或按键盘 1 / 2 / 3 立即部署`;
+    this.draftCardsEl.innerHTML = choices
+      .map((p, idx) => {
+        const cur = owned[p.id] ?? 0;
+        const next = Math.min(p.maxLevel, cur + 1);
+        const lvBadge = cur === 0 ? 'NEW · LV.1' : `LV.${cur} → LV.${next}`;
+        const desc = p.levels[next - 1] ?? p.levels[0];
+        const color = hex(p.color);
+        const icon = PERK_ICON[p.icon] ?? ICON.bolt;
+        return `<button type="button" class="draft-card rarity-${p.rarity}" data-perk="${p.id}" style="--pc:${color}">
+          <span class="dc-key">${idx + 1}</span>
+          <div class="dc-top">
+            <span class="dc-rarity">${RARITY_LABEL[p.rarity]}</span>
+            <span class="dc-lv ${cur > 0 ? 'up' : ''}">${lvBadge}</span>
+          </div>
+          <div class="dc-ico">${icon}</div>
+          <div class="dc-name">${p.name}</div>
+          <div class="dc-tag">${p.tag}</div>
+          <div class="dc-desc">${desc}</div>
+          <div class="dc-cta">部署此协议</div>
+        </button>`;
+      })
+      .join('');
+    this.draftEl.classList.remove('show');
+    void this.draftEl.offsetWidth;
+    this.draftEl.classList.add('show');
+  }
+
+  hideDraft() {
+    this.draftEl.classList.remove('show');
+  }
+
   get screen(): Screen | null {
     return this.current;
   }
@@ -645,6 +877,7 @@ export class UI {
 
   show(screen: Screen) {
     this.current = screen;
+    this.flyTargetCache.clear();
     for (const id of ['hud', 'menu', 'result', 'pause'] as const) {
       const visible = id === screen || (id === 'hud' && (screen === 'pause' || screen === 'result'));
       this.screens[id].classList.toggle('visible', visible);
@@ -653,6 +886,7 @@ export class UI {
       this.clearResultTimers();
       this.screens.result.querySelectorAll('.confetti').forEach((c) => c.remove());
     }
+    if (screen === 'menu' || screen === 'result' || screen === 'pause') this.hideDraft();
     if (screen === 'hud' || screen === 'pause') this.closeEvolve();
     if (screen !== 'menu' && screen !== 'result') this.closeSheet();
     else if (screen === 'menu') {
@@ -685,6 +919,7 @@ export class UI {
     const s = this.save;
     if (this.current === 'menu') {
       this.root.classList.toggle('carnage-mode', s.mode === 'carnage');
+      this.root.classList.toggle('blitz-mode', s.mode === 'blitz');
     }
     const coins = formatNumber(s.coins);
     el(this.root, '#menu-coins').textContent = coins;
@@ -701,6 +936,10 @@ export class UI {
     el(this.root, '#menu-gems').textContent = String(s.gems);
     el(this.root, '#result-gems').textContent = String(s.gems);
     el(this.root, '.carnage-loadout').hidden = s.mode !== 'carnage';
+    this.blitzStagesEl.hidden = s.mode !== 'blitz';
+    if (s.mode === 'blitz') {
+      this.blitzStagesEl.innerHTML = this.blitzStageButtons();
+    }
     const def = MODES.find((m) => m.id === s.mode)!;
     const style = MODE_STYLE[s.mode];
     const { tag, desc, start } = this.modeSummary(s.mode);
@@ -710,6 +949,20 @@ export class UI {
       <div class="mode-switch">切换${ICON.chevron}</div>`;
     el(this.root, '#start-sub').textContent = start;
     if (this.sheet) this.renderSheet(true);
+  }
+
+  private blitzStageButtons(): string {
+    const s = this.save;
+    return BLITZ_STAGES.map((st) => {
+      const unlocked = blitzStageUnlocked(s, st.stage);
+      const active = s.mode === 'blitz' && s.blitzStage === st.stage;
+      const cleared = s.blitzCleared >= st.stage;
+      const badge = !unlocked ? `过${st.unlock}关解锁` : cleared ? '已通关' : '已解锁';
+      return `<button type="button" class="blitz-stage-btn ${active ? 'active' : ''} ${unlocked ? '' : 'locked'}" data-blitz-stage="${st.stage}" aria-pressed="${active}">
+        <span class="bs-top"><b>${st.stage === 1 ? 'I' : 'II'} · ${st.name}</b><i>${badge}</i></span>
+        <small>${st.short}</small>
+      </button>`;
+    }).join('');
   }
 
   /** 五张永久升级卡片（主页底部和结算弹窗共用）：角标是等级，下面一排点是离下一次进化还差几级，点满就进化 */
@@ -744,6 +997,19 @@ export class UI {
     const s = this.save;
     const def = MODES.find((m) => m.id === mode)!;
     switch (mode) {
+      case 'blitz': {
+        const meta = BLITZ_STAGES.find((x) => x.stage === s.blitzStage) ?? BLITZ_STAGES[0];
+        const tag = s.blitzAdmin
+          ? `试玩 · ${meta.name}`
+          : s.blitzCleared >= 2
+            ? '双阶全通'
+            : `${meta.name}`;
+        return {
+          tag,
+          desc: meta.desc,
+          start: `重装突袭 · ${meta.name}`,
+        };
+      }
       case 'carnage':
         return { tag: s.carnageAdmin ? '管理员已解锁' : '已通关解锁', desc: def.desc, start: '火力狂潮 · 90 秒释放' };
       case 'defense': {
@@ -806,17 +1072,30 @@ export class UI {
         }).join('')}</div>`;
         break;
       case 'modes': {
+        const cleared = clearedStages(s);
         const modesHtml = MODES.map((m) => {
           const locked = !modeUnlocked(s, m.id);
           const style = MODE_STYLE[m.id];
           const { tag, desc } = this.modeSummary(m.id);
+          const lockLabel =
+            m.id === 'carnage'
+              ? `通关 30 关解锁 (${Math.min(cleared, 30)}/30)`
+              : m.id === 'blitz'
+                ? `通关 5 关解锁 (${Math.min(cleared, 5)}/5)`
+                : m.id === 'endless'
+                  ? '通关第 1 关解锁'
+                  : `第 ${m.unlock} 关解锁`;
+          const extra =
+            m.id === 'blitz'
+              ? `<div class="blitz-mode-stages">${this.blitzStageButtons()}</div>`
+              : '';
           return `<button class="row ${s.mode === m.id ? 'active' : ''} ${locked ? 'locked' : ''}" data-mode="${m.id}" aria-pressed="${s.mode === m.id}" style="text-align:left">
             <div class="mode-tile" style="background:${style.bg}">${locked ? ICON.lock : style.icon}</div>
             <div class="row-main">
-              <div class="row-title">${m.name}<span class="lv">${locked ? (m.id === 'carnage' ? '通关第 30 关解锁' : `第 ${m.unlock} 关解锁`) : tag}</span></div>
+              <div class="row-title">${m.name}<span class="lv">${locked ? lockLabel : tag}</span></div>
               <div class="row-sub">${desc}</div>
             </div>
-          </button>`;
+          </button>${extra}`;
         }).join('');
         const practiceHtml = (['defense', 'campaign'] as const)
           .map((id) => {
@@ -828,6 +1107,7 @@ export class UI {
           .join('');
         body.innerHTML =
           modesHtml +
+          `<div class="guide-note blitz-note">重装突袭：过 5 关解锁「重装坦克道」，过 10 关解锁「广告大乱斗」。左道养 +1 数字门，中道轰炸尸潮，右道击毁重装坦克收割无人机、多发弹道、高能护盾等满屏神器，通关额外赢钻石与大量金币！</div>` +
           `<div class="guide-note carnage-note">火力狂潮：${s.carnageAdmin ? '管理员试玩已开启，可直接进入。' : '防线或冲锋通关第 30 关解锁。'}独立火力与击杀纪录，不发主线金币或钻石。</div>` +
           `<div class="guide-note">已通关关卡可随时演练：使用当前升级和战术，不消耗资源，也不结算金币、钻石和战绩。</div>` +
           practiceHtml;
@@ -839,6 +1119,7 @@ export class UI {
         body.innerHTML = `<div class="stat-grid">
           ${stat(ICON.defense, MODE_STYLE.defense.bg, '防线最高', `第 ${s.defenseBest} 关`)}
           ${stat(ICON.campaign, MODE_STYLE.campaign.bg, '冲锋最高', `第 ${s.best} 关`)}
+          ${stat(ICON.tank, MODE_STYLE.blitz.bg, '突袭通关 / 最高击杀', `${s.blitzCleared}/2 · ${formatNumber(s.blitzBest)}`)}
           ${stat(ICON.bolt, MODE_STYLE.carnage.bg, '狂潮最佳击杀', formatNumber(s.carnageBest))}
           ${stat(ICON.endless, MODE_STYLE.endless.bg, '无尽最远', `${formatNumber(s.endlessBest)} 米`)}
           ${stat(ICON.trophy, 'linear-gradient(160deg,#4a5a80,#25304d)', '胜利场次', String(s.wins))}
@@ -852,7 +1133,7 @@ export class UI {
         body.innerHTML = `<div class="guide-note">免费切换，下一局生效。敌人不会因为你变强而加血。</div>${TACTICS.map((t) => `<button class="row tactic-row ${s.tactic === t.id ? 'active' : ''}" data-tactic="${t.id}" aria-pressed="${s.tactic === t.id}"><div class="row-main"><div class="row-title">${t.name}${s.tactic === t.id ? ' · 已选择' : ''}</div><div class="row-sub">${t.desc}</div></div></button>`).join('')}<div class="guide-note">数字门按命中次数涨数；连射更擅长养门。破甲对装甲目标的持续伤害比均衡高约 15%，但养门更慢、清普通尸潮稍弱。关卡路线固定，可用演练比较打法。</div>`;
         break;
       case 'help':
-        body.innerHTML = `<div class="guide"><h3>单手就能玩</h3><p>按住空白处左右拖动，子弹自动打向正前方。手指放在屏幕下部也能换道。设置里可调灵敏度。</p><h3>防线：两条道，两件事</h3><p>开局先拆门道障碍，打破后回到门道接住一串增益门。尸潮接近桥头时切去清怪；一直贪补给会被包围。</p><h3>看清数字，再选路</h3><p>+ 是加人，− 是减员，× 是人数倍率，枪和闪电分别升级武器和射速。红门可以射成正数；数字门按命中次数成长，敌人和障碍按伤害掉血。</p><h3>Boss：先躲，再打</h3><p>砸击先锁红色危险带，整队移出去；两次慢砸后有三连击，停顿时再集火。油桶红圈内的士兵都会被炸。</p><h3>失败也有进步</h3><p>战斗所得会保留，结算会告诉你怎样损兵。免费换战术，升级前到军械库看真实收益。模式页可演练已通关关卡；撤退和主动重试保留战利品，但没有额外新手补贴。</p></div>`;
+        body.innerHTML = `<div class="guide"><h3>单手就能玩</h3><p>按住空白处左右拖动，子弹自动打向正前方。手指放在屏幕下部也能换道。设置里可调灵敏度。</p><h3>防线：两条道，两件事</h3><p>开局先拆门道障碍，打破后回到门道接住一串增益门。尸潮接近桥头时切去清怪；一直贪补给会被包围。</p><h3>重装突袭（过 5 / 10 关解锁）</h3><p>经典三道爽游玩法：左道极速涌来固定数值 +1 数字门（射击不会变数）；中道是密集尸潮、连番登场的多波 Boss 与可引爆清场的红油桶；右道驻守重装坦克与满仓神装，打爆坦克后它会立刻收编入队、开上前线和你一起轰炸敌军，同时释放身后的无人机、扇形多弹道、3D 能量护盾、战机空袭与超级弹药！</p><h3>看清数字，再选路</h3><p>+ 是加人，− 是减员，× 是人数倍率，枪和闪电分别升级武器和射速。普通模式红门可射成正数，重装突袭左道门固定数值高速传送。</p><h3>Boss：先躲，再打</h3><p>砸击先锁红色危险带，整队移出去；两次慢砸后有三连击，停顿时再集火。油桶红圈内的士兵都会被炸。</p><h3>失败也有进步</h3><p>战斗所得会保留，结算会告诉你怎样损兵。免费换战术，升级前到军械库看真实收益。模式页可演练已通关关卡；撤退和主动重试保留战利品，但没有额外新手补贴。</p></div>`;
         break;
       case 'settings':
         body.innerHTML = `
@@ -861,7 +1142,7 @@ export class UI {
           <button class="row" data-toggle="motion" style="text-align:left"><div class="row-main"><div class="row-title">动态效果：${s.motion === 'system' ? '跟随系统' : s.motion === 'reduced' ? '减少' : '完整'}</div><div class="row-sub">减少时关闭镜头震动、推进和全屏闪光</div></div></button>
           <button class="row" data-toggle="sensitivity" style="text-align:left"><div class="row-main"><div class="row-title">拖动灵敏度：${s.sensitivity === 1 ? '标准' : s.sensitivity < 1 ? '精细' : '灵敏'}</div><div class="row-sub">切换精细 / 标准 / 灵敏，移动速度由机动升级决定</div></div></button>
           <button class="row danger-row" data-reset style="text-align:left"><div class="stat-ico" style="background:linear-gradient(160deg,#ff6b6b,#b5121f)">${ICON.close}</div><div class="row-main"><div class="row-title" id="reset-title">重置全部进度</div><div class="row-sub">关卡、金币、钻石、升级、皮肤、战绩全部清零，从头开始</div></div></button>
-          ${s.carnageAdmin ? '<button class="row" data-revoke-admin><div class="row-main"><div class="row-title">管理员试玩 · 已开启</div><div class="row-sub">点击关闭狂潮直通权限，正常通关解锁仍保留</div></div></button>' : ''}
+          ${s.carnageAdmin || s.blitzAdmin ? '<button class="row" data-revoke-admin><div class="row-main"><div class="row-title">管理员试玩 · 已开启</div><div class="row-sub">点击关闭试玩直通权限，正常通关解锁仍保留</div></div></button>' : ''}
           <div class="credits">人物、丧尸、Boss 和道具模型：Quaternius（CC0 公共领域）</div>`;
         break;
       default:
@@ -872,7 +1153,7 @@ export class UI {
 
   // ---------- 游戏内 ----------
 
-  resetHud(title: string, marks: number[] = []) {
+  resetHud(mode: GameMode, title: string, marks: number[] = []) {
     window.clearTimeout(this.weaponUpTimer);
     window.clearTimeout(this.weaponUpEndTimer);
     this.weaponUpReturn?.cancel();
@@ -887,9 +1168,25 @@ export class UI {
     }
     this.flying = 0;
     this.hudTitleEl.textContent = title;
-    const isCarnage = title.startsWith('火力狂潮');
+    const isCarnage = mode === 'carnage';
+    const isBlitz = mode === 'blitz';
     this.carnageHudEl.hidden = !isCarnage;
+    this.blitzHudEl.hidden = !isBlitz;
+    this.xpStripEl.hidden = isCarnage;
+    this.perkStripEl.hidden = true;
+    this.perkStripEl.innerHTML = '';
+    this.btnOverdrive.hidden = isCarnage;
+    this.btnOverdrive.disabled = true;
+    this.btnOverdrive.classList.remove('ready', 'active');
+    this.odTitleEl.textContent = '战术过载';
+    this.odPctEl.textContent = '0%';
+    this.odFillEl.style.width = '0%';
+    this.xpLevelEl.textContent = 'LV.0';
+    this.xpFillEl.style.width = '0%';
+    this.comboPillEl.hidden = true;
+    this.hideDraft();
     this.root.classList.toggle('carnage-mode', isCarnage);
+    this.root.classList.toggle('blitz-mode', isBlitz);
     this.hudMarksEl.innerHTML = marks.map((f) => `<i class="hud-mark" style="left:${(f * 100).toFixed(1)}%">${ICON.skull}</i>`).join('');
     this.marks = [...this.hudMarksEl.querySelectorAll<HTMLElement>('.hud-mark')].map((e, i) => ({ el: e, at: marks[i] * 100 }));
     this.hudCueEl.textContent = '';
@@ -903,6 +1200,31 @@ export class UI {
     this.lastCoins = -1;
     this.lastGems = -1;
     this.lastAmmoName = '';
+    this.lastBlitzTanks = '';
+    this.lastBlitzDrones = -1;
+    this.lastBlitzMulti = -1;
+    this.lastBlitzShield = -1;
+    this.lastBlitzDmg = -1;
+    this.lastXpPct = -1;
+    this.lastXpLevel = -1;
+    this.lastCombo = -1;
+    this.lastFeverText = '';
+    this.lastAllyHeroes = -1;
+    this.lastAllyTurrets = -1;
+    this.lastPerkKey = '';
+    this.lastOdCharge = -1;
+    this.lastOdActive = false;
+    this.lastOdReady = false;
+    this.lastOdDisabled = true;
+    this.lastOdTitle = '';
+    this.feverPillEl.hidden = true;
+    this.allyStripEl.hidden = true;
+    this.allyHeroesEl.hidden = true;
+    this.allyTurretsEl.hidden = true;
+    this.blitzDronesEl.hidden = true;
+    this.blitzMultiEl.hidden = true;
+    this.blitzShieldEl.hidden = true;
+    this.blitzDmgEl.hidden = true;
     this.lastCarnageCombo = -1;
     this.lastCarnageKills = -1;
     this.lastCarnageSquad = -1;
@@ -940,6 +1262,91 @@ export class UI {
   }
 
   updateHud(w: World, best: number) {
+    if (w.spec.mode !== 'carnage') {
+      const rl = w.roguelike;
+      const od = w.overdrive;
+      if (rl.level !== this.lastXpLevel) {
+        this.lastXpLevel = rl.level;
+        this.xpLevelEl.textContent = `LV.${rl.level}`;
+      }
+      const xpPct = rl.nextXp > 0 ? Math.min(100, Math.round((rl.xp / rl.nextXp) * 100)) : 100;
+      if (xpPct !== this.lastXpPct) {
+        this.lastXpPct = xpPct;
+        this.xpFillEl.style.width = `${xpPct}%`;
+      }
+      const combo = od.combo;
+      if (combo !== this.lastCombo) {
+        this.lastCombo = combo;
+        this.comboPillEl.hidden = combo < 5;
+        if (combo >= 5) {
+          this.comboPillEl.textContent = `${combo} 连击`;
+          this.comboPillEl.classList.toggle('hot', combo >= 25);
+          this.pulseEl(this.comboPillEl, 'combo', 220, 1.16);
+        }
+      }
+      const feverText = w.fever.active > 0 ? `FEVER · 2×金币 ${w.fever.active.toFixed(1)}s` : '';
+      if (feverText !== this.lastFeverText) {
+        this.lastFeverText = feverText;
+        this.feverPillEl.hidden = !feverText;
+        if (feverText) this.feverPillEl.textContent = feverText;
+      }
+      const heroN = w.allyHeroes.length;
+      const turretN = w.allyTurrets.length;
+      if (heroN !== this.lastAllyHeroes || turretN !== this.lastAllyTurrets) {
+        this.lastAllyHeroes = heroN;
+        this.lastAllyTurrets = turretN;
+        this.allyStripEl.hidden = heroN === 0 && turretN === 0;
+        this.allyHeroesEl.hidden = heroN === 0;
+        this.allyTurretsEl.hidden = turretN === 0;
+        if (heroN > 0) this.allyHeroesEl.textContent = `英雄 ×${heroN}`;
+        if (turretN > 0) this.allyTurretsEl.textContent = `炮台 ×${turretN}`;
+      }
+      let perkKey = '';
+      for (let i = 0; i < rl.order.length; i++) {
+        const id = rl.order[i];
+        perkKey += `${id}:${rl.perks[id] ?? 0},`;
+      }
+      if (perkKey !== this.lastPerkKey) {
+        this.lastPerkKey = perkKey;
+        this.perkStripEl.hidden = rl.order.length === 0;
+        if (rl.order.length > 0) {
+          this.perkStripEl.innerHTML = rl.order
+            .map((id) => {
+              const p = PERK_MAP[id];
+              const lv = rl.perks[id] ?? 1;
+              return `<span class="perk-badge rarity-${p.rarity}" style="--pc:${hex(p.color)}" title="${p.name} Lv.${lv}">${PERK_ICON[p.icon] ?? ICON.bolt}<b>${p.name.slice(0, 2)}</b><i>${lv}</i></span>`;
+            })
+            .join('');
+        }
+      }
+      const odActive = od.active > 0;
+      const odReady = !odActive && od.charge >= 100;
+      const odDisabled = !odReady || (w.state !== 'run' && w.state !== 'boss');
+      const odPct = odActive ? Math.ceil((od.active / Math.max(0.1, od.duration)) * 100) : Math.floor(od.charge);
+      if (odDisabled !== this.lastOdDisabled) {
+        this.lastOdDisabled = odDisabled;
+        this.btnOverdrive.disabled = odDisabled;
+      }
+      if (odReady !== this.lastOdReady) {
+        this.lastOdReady = odReady;
+        this.btnOverdrive.classList.toggle('ready', odReady);
+      }
+      if (odActive !== this.lastOdActive) {
+        this.lastOdActive = odActive;
+        this.btnOverdrive.classList.toggle('active', odActive);
+      }
+      const odTitle = odActive ? `过载 ${od.active.toFixed(1)}s` : odReady ? '释放过载！' : '战术过载';
+      if (odTitle !== this.lastOdTitle) {
+        this.lastOdTitle = odTitle;
+        this.odTitleEl.textContent = odTitle;
+      }
+      if (odPct !== this.lastOdCharge) {
+        this.lastOdCharge = odPct;
+        this.odPctEl.textContent = odActive ? 'MAX' : `${odPct}%`;
+        this.odFillEl.style.width = `${Math.max(0, Math.min(100, odPct))}%`;
+      }
+    }
+
     if (w.spec.mode === 'carnage') {
       const c = w.carnage;
       if (c.combo !== this.lastCarnageCombo) {
@@ -976,6 +1383,34 @@ export class UI {
         this.lastNovaCharge = chargePct;
         this.novaChargeEl.textContent = `${chargePct}%`;
         this.novaFillEl.style.width = `${chargePct}%`;
+      }
+    } else if (w.spec.mode === 'blitz') {
+      const b = w.blitz;
+      const tankText = b.allyTanks > 0 ? `友军坦 ×${b.allyTanks} (${b.tanksDestroyed}/${b.totalTanks})` : `重坦 ${b.tanksDestroyed}/${b.totalTanks}`;
+      if (tankText !== this.lastBlitzTanks) {
+        this.lastBlitzTanks = tankText;
+        this.blitzTanksEl.textContent = tankText;
+      }
+      if (b.drones !== this.lastBlitzDrones) {
+        this.lastBlitzDrones = b.drones;
+        this.blitzDronesEl.hidden = b.drones <= 0;
+        if (b.drones > 0) this.blitzDronesEl.textContent = `无人机 ×${b.drones}`;
+      }
+      if (b.multishot !== this.lastBlitzMulti) {
+        this.lastBlitzMulti = b.multishot;
+        this.blitzMultiEl.hidden = b.multishot <= 1;
+        if (b.multishot > 1) this.blitzMultiEl.textContent = `多发 ×${b.multishot}`;
+      }
+      if (b.shield !== this.lastBlitzShield) {
+        this.lastBlitzShield = b.shield;
+        this.blitzShieldEl.hidden = b.shield <= 0;
+        if (b.shield > 0) this.blitzShieldEl.textContent = `护盾 ${b.shield}`;
+      }
+      const dmgPct = Math.round(b.damageBonus);
+      if (dmgPct !== this.lastBlitzDmg) {
+        this.lastBlitzDmg = dmgPct;
+        this.blitzDmgEl.hidden = dmgPct <= 0;
+        if (dmgPct > 0) this.blitzDmgEl.textContent = `火力 +${dmgPct}%`;
       }
     }
 
@@ -1027,11 +1462,7 @@ export class UI {
       this.lastGems = w.gems;
       this.hudGemsEl.textContent = String(w.gems);
       this.hudGemsPill.classList.toggle('visible', w.gems > 0);
-      if (gained) {
-        this.hudGemsPill.classList.remove('bump');
-        void this.hudGemsPill.offsetWidth;
-        this.hudGemsPill.classList.add('bump');
-      }
+      if (gained) this.pulseEl(this.hudGemsIcon, 'gems', 240, 1.24);
     }
 
     const shown = Math.floor(w.coins);
@@ -1039,11 +1470,7 @@ export class UI {
       const gained = shown > this.lastCoins && this.lastCoins >= 0;
       this.lastCoins = shown;
       this.hudCoinsEl.textContent = formatNumber(shown);
-      if (gained) {
-        this.hudCoinsPill.classList.remove('bump');
-        void this.hudCoinsPill.offsetWidth;
-        this.hudCoinsPill.classList.add('bump');
-      }
+      if (gained) this.pulseEl(this.hudCoinsIcon, 'coins', 200, 1.22);
     }
 
     this.updateBossBars(w);
@@ -1057,7 +1484,29 @@ export class UI {
       }
     }
     let released = false;
-    if (w.spec.mode !== 'carnage' && w.defense) {
+    let blitzRewardRush = false;
+    let lootTruckOnRoad = false;
+    for (let i = 0; i < w.barrels.length; i++) {
+      const br = w.barrels[i];
+      if (br.alive && br.truck && br.d > w.squad.d && br.d < w.squad.d + 36) {
+        lootTruckOnRoad = true;
+        break;
+      }
+    }
+    if (w.spec.mode === 'blitz') {
+      let tankD = Infinity;
+      for (let i = 0; i < w.barrels.length; i++) {
+        const br = w.barrels[i];
+        if (br.alive && br.look === 'tank') tankD = Math.min(tankD, br.d);
+      }
+      for (let i = 0; i < w.barrels.length; i++) {
+        const br = w.barrels[i];
+        if (br.alive && br.blitzLane === 'right' && br.look !== 'tank' && br.d < tankD && br.d > w.squad.d && br.d < 22) {
+          blitzRewardRush = true;
+          break;
+        }
+      }
+    } else if (w.spec.mode !== 'carnage' && w.defense) {
       for (let i = 0; i < w.gates.length; i++) {
         const g = w.gates[i];
         if (!g.consumed && g.d > w.squad.d && g.d < 16) {
@@ -1068,12 +1517,18 @@ export class UI {
     }
     const danger = w.projectiles.length > 0 || attackingBoss !== null;
     const text = w.projectiles.length
-      ? '油桶将落地 · 整队移出红圈'
+      ? w.spec.mode === 'blitz'
+        ? '坦克炮弹预警 · 整队移出红圈！'
+        : '油桶将落地 · 整队移出红圈'
       : attackingBoss
         ? `${attackingBoss.comboStep < 2 ? '蓄力重击' : '快速连击'} ${attackingBoss.comboStep + 1}/5 · 移出危险带`
-        : released
-          ? '补给已放行 · 回门道接门'
-          : '';
+        : lootTruckOnRoad
+          ? '黄金补给车逃窜中 · 集火截击爆金币与钻石！'
+          : blitzRewardRush
+            ? '坦克已破防 · 右道冲刺收割满仓神器！'
+            : released
+              ? '补给已放行 · 回门道接门'
+              : '';
     if (text !== this.lastCueText) {
       this.lastCueText = text;
       this.hudCueEl.textContent = text;
@@ -1118,17 +1573,22 @@ export class UI {
     if (this.root.classList.contains('reduced-motion')) return;
     if (this.flying >= 8 && !force) return;
     if (!force && this.current !== 'hud') return;
-    const targetNode =
-      to === '.hud-coins .coin-ico'
-        ? this.hudCoinsIcon
-        : to === '#hud-gems-pill .gem-ico'
-          ? this.hudGemsIcon
-          : to === '#result-balance'
-            ? this.resultBalanceEl
-            : el(this.root, to);
-    const target = targetNode.getBoundingClientRect();
-    const tx = target.left + target.width / 2;
-    const ty = target.top + target.height / 2;
+    let cached = this.flyTargetCache.get(to);
+    if (!cached) {
+      const targetNode =
+        to === '.hud-coins .coin-ico'
+          ? this.hudCoinsIcon
+          : to === '#hud-gems-pill .gem-ico'
+            ? this.hudGemsIcon
+            : to === '#result-balance'
+              ? this.resultBalanceEl
+              : el(this.root, to);
+      const target = targetNode.getBoundingClientRect();
+      cached = { x: target.left + target.width / 2, y: target.top + target.height / 2 };
+      if (target.width > 0 && target.height > 0) this.flyTargetCache.set(to, cached);
+    }
+    const tx = cached.x;
+    const ty = cached.y;
     const c = document.createElement('div');
     c.className = 'fly-coin';
     c.innerHTML = icon;
@@ -1256,6 +1716,17 @@ export class UI {
       stars.innerHTML = [0, 1, 2].map((i) => (i < info.stars! ? ICON.star.replace('<svg', '<svg class="on"') : ICON.starOff)).join('');
     }
     el(this.root, '#result-sub').textContent = info.sub;
+    this.pendingUnlock = info.unlockedCallout ?? null;
+    if (info.unlockedCallout) {
+      this.resultUnlockEl.hidden = false;
+      this.resultUnlockEl.innerHTML = `<div class="unlock-card">
+        <div class="unlock-copy"><span class="unlock-badge">新模式解锁</span><b>${info.unlockedCallout.title}</b><small>${info.unlockedCallout.desc}</small></div>
+        <button type="button" class="btn btn-blue unlock-cta" data-try-unlock>立即体验</button>
+      </div>`;
+    } else {
+      this.resultUnlockEl.hidden = true;
+      this.resultUnlockEl.innerHTML = '';
+    }
     el(this.root, '#result-advice').textContent = info.advice ?? '';
     el(this.root, '#result-detail').textContent = info.detail ?? '';
     for (const sel of ['.reward', '.result-ups-title', '#result-ups']) {
@@ -1264,6 +1735,7 @@ export class UI {
     this.resultTacticBtn.style.display = info.mode === 'carnage' ? 'none' : '';
     this.screens.result.classList.toggle('practice', !!info.practice);
     this.root.classList.toggle('carnage-mode', info.mode === 'carnage');
+    this.root.classList.toggle('blitz-mode', info.mode === 'blitz');
     el(this.root, '#result-stats').innerHTML = info.stats.map(([k, v]) => `<div><span>${k}</span><b>${v}</b></div>`).join('');
     const next = el(this.root, '#btn-next');
     next.style.display = info.next ? '' : 'none';

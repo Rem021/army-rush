@@ -20,9 +20,10 @@ export interface FormationParams {
   gap: number;
 }
 
-/** 阵型横向半径上限：狂潮模式有四条窄道，需收紧半宽以便大部队能贴到最左/最右补给道 */
+/** 阵型横向半径上限：狂潮模式有四条窄道，广告奇袭有三条功能道，收紧半宽以便精准对准左/中/右道 */
 export function formationLaneCap(mode: GameMode, defense: boolean): number {
   if (mode === 'carnage') return 1.2;
+  if (mode === 'blitz') return 1.45;
   return defense ? TRACK_HALF / 2 - 0.25 : 2.0;
 }
 
@@ -35,12 +36,17 @@ export function computeFormation(
   hi: number,
   out: FormationParams = { sx: 0, sz: 1, shift: 0, gap: FORMATION_SPACING },
 ): FormationParams {
-  const gap = mode === 'carnage' ? 0.25 : FORMATION_SPACING * (defense ? Math.max(0.78, 1 - n / 900) : 1);
+  const gap =
+    mode === 'carnage'
+      ? 0.25
+      : mode === 'blitz'
+        ? FORMATION_SPACING * Math.max(0.7, 1 - n / 520)
+        : FORMATION_SPACING * (defense ? Math.max(0.78, 1 - n / 900) : 1);
   const R = gap * Math.sqrt(Math.max(1, n));
   const laneCap = formationLaneCap(mode, defense);
   const maxR = Math.max(0.6, Math.min(laneCap, (hi - lo) / 2 - 0.35));
   const sx = R > maxR ? maxR / R : 1;
-  const sz = mode === 'carnage' ? Math.min(1.15, 1 / sx) : 1 / sx;
+  const sz = mode === 'carnage' ? Math.min(1.15, 1 / sx) : mode === 'blitz' ? Math.min(1.35, 1 / sx) : 1 / sx;
   out.sx = sx;
   out.sz = sz;
   out.shift = defense ? -R * sz + 0.6 : 0;

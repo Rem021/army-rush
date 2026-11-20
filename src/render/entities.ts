@@ -1,22 +1,43 @@
 import * as THREE from 'three';
-import { BOSSES, BOSS_STRIKE_HALF, THROWER_MELEE_TIME, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
-import type { Barrel, Boss, Gate, Hazard, Projectile, Strike, Wall } from '../game/world';
+import { AMMO, BOSSES, BOSS_STRIKE_HALF, THROWER_MELEE_TIME, WEAPONS, WALL_HALF, type SkinDef } from '../game/config';
+import { HERO_INFO, type AllyHero, type AllyMech, type AllyTank, type AllyTurret, type Barrel, type Boss, type Gate, type Hazard, type Projectile, type Strike, type Wall } from '../game/world';
 import { bossMotion, bossPose } from './bossMotion';
 import { commitInstances, disposeObject } from './dispose';
 import { HpBar, Label, formatNumber, labelPlane, labelSprite } from './label';
 import { barrelGeometry, coinGeometry, gunGeometry, tiresGeometry, tiresHeight } from './models';
+import { ITEM_SCALE } from './scale';
 import {
+  ammoCoreGeometry,
   armorGeometry,
   barrierGeometry,
+  bombBarrelGeometry,
   buildBossRig,
   cageGeometry,
   crateGeometry,
   crateHeight,
+  cryoBarrelGeometry,
+  damageCoreGeometry,
+  droneGeometry,
   drumMesh,
+  heroGeometry,
+  heroPodGeometry,
+  lootTruckGeometry,
+  mechArmGeometry,
+  mechLegGeometry,
+  mechTorsoGeometry,
   missileGeometry,
+  multishotGeometry,
+  mysteryBoxGeometry,
+  rateBoltGeometry,
   sawBladeGeometry,
   sawRailGeometry,
+  shieldCoreGeometry,
   spikesGeometry,
+  tankHullGeometry,
+  tankTurretGeometry,
+  turretBarrelGeometry,
+  turretBaseGeometry,
+  turretHeadGeometry,
   type BossRig,
 } from './props';
 
@@ -26,12 +47,26 @@ export const GATE_COLORS = {
   mul: 0x1e9bff,
   weapon: 0xff9f1c,
   rate: 0x14c8e0,
+  mystery: 0xa855f7,
 };
 
-const vertexMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+const vertexMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.52, metalness: 0.32 });
 vertexMat.userData.shared = true;
 const _white = new THREE.Color(0xffffff);
 const _wallMat = new THREE.Matrix4();
+
+function sharedGeo<T extends THREE.BufferGeometry>(g: T): T {
+  g.userData.shared = true;
+  return g;
+}
+
+const SHARED_RING_GEO = sharedGeo(new THREE.RingGeometry(0.76, 1, 32));
+const SHARED_GLOW_RING_GEO = sharedGeo(new THREE.RingGeometry(0.5, 0.95, 32));
+const SHARED_DISC_GEO = sharedGeo(new THREE.CircleGeometry(1, 32));
+const SHARED_PLANE_GEO = sharedGeo(new THREE.PlaneGeometry(1, 1));
+const SHARED_HOLO_BEAM_GEO = sharedGeo(new THREE.CylinderGeometry(0.68, 0.96, 3.6, 16, 1, true));
+const SHARED_MECH_BEAM_GEO = sharedGeo(new THREE.CylinderGeometry(0.55, 0.85, 36, 16, 1, true));
+const SHARED_MYSTERY_GEM_GEO = sharedGeo(new THREE.OctahedronGeometry(0.42, 0));
 
 /** 0..1 衰减的弹跳曲线：先冲高再回落 */
 function easePop(k: number): number {
@@ -50,15 +85,15 @@ export const stripeTexture = (() => {
   c.width = c.height = 64;
   const ctx = c.getContext('2d')!;
   ctx.fillStyle = '#ffffff';
-  ctx.globalAlpha = 0.75;
+  ctx.globalAlpha = 0.72;
   ctx.fillRect(0, 0, 64, 64);
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#ffffff';
   for (let i = -64; i < 128; i += 22) {
     ctx.beginPath();
     ctx.moveTo(i, 0);
-    ctx.lineTo(i + 9, 0);
-    ctx.lineTo(i + 9 + 64, 64);
+    ctx.lineTo(i + 8, 0);
+    ctx.lineTo(i + 8 + 64, 64);
     ctx.lineTo(i + 64, 64);
     ctx.closePath();
     ctx.fill();
@@ -73,6 +108,7 @@ export const stripeTexture = (() => {
 export function gateColor(g: Gate): number {
   if (g.kind === 'mul') return GATE_COLORS.mul;
   if (g.kind === 'weapon') return GATE_COLORS.weapon;
+  if (g.kind === 'mystery') return GATE_COLORS.mystery;
   if (g.kind === 'rate') return g.value >= 0 ? GATE_COLORS.rate : GATE_COLORS.bad;
   return g.value >= 0 ? GATE_COLORS.good : GATE_COLORS.bad;
 }
@@ -81,7 +117,9 @@ export class GateView {
   readonly group = new THREE.Group();
   private readonly panelMat: THREE.MeshBasicMaterial;
   private readonly floorMat: THREE.MeshBasicMaterial;
-  private readonly postMat: THREE.MeshLambertMaterial;
+  private readonly postMat: THREE.MeshStandardMaterial;
+  private readonly darkSteelMat: THREE.MeshStandardMaterial;
+  private readonly trimMat: THREE.MeshStandardMaterial;
   private readonly label = new Label(256, 160);
   private readonly labelMesh: THREE.Mesh;
   private readonly inner = new THREE.Group();
@@ -101,33 +139,67 @@ export class GateView {
     const w = gate.x1 - gate.x0;
     this.group.position.set((gate.x0 + gate.x1) / 2, 0, -gate.d);
     this.group.add(this.inner);
-    this.panelMat = new THREE.MeshBasicMaterial({ map: stripeTexture, transparent: true, opacity: 0.5, depthWrite: false, side: THREE.DoubleSide });
-    this.floorMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.32, depthWrite: false });
-    this.postMat = new THREE.MeshLambertMaterial({ color: 0xffffff });
+    this.panelMat = new THREE.MeshBasicMaterial({ map: stripeTexture, transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide });
+    this.floorMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.15, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.postMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.44, metalness: 0.62 });
+    this.darkSteelMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.52, metalness: 0.55 });
+    this.trimMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.58, roughness: 0.35, metalness: 0.4 });
 
-    const panel = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.3, 1.75), this.panelMat);
-    panel.position.y = 0.97;
+    const s = ITEM_SCALE;
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.34 * s, 1.72 * s), this.panelMat);
+    panel.position.y = 0.98 * s;
     panel.renderOrder = 2;
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.1, 2.2), this.floorMat);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.14, 1.95 * s), this.floorMat);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, 0.03, 0.9);
-    const topBar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.3, 0.16, 0.16), this.postMat);
-    topBar.position.y = 1.86;
-    this.inner.add(panel, floor, topBar);
+    floor.position.set(0, 0.025, 0.78 * s);
+
+    // 顶部装甲龙门横梁 + 凹槽导光带 + 加强桁架肋
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.2 * s, 0.24 * s, 0.3 * s), this.postMat);
+    topBar.position.y = 1.92 * s;
+    topBar.castShadow = true;
+    const topCrown = new THREE.Mesh(new THREE.BoxGeometry(w - 0.46 * s, 0.1 * s, 0.22 * s), this.darkSteelMat);
+    topCrown.position.y = 2.08 * s;
+    const topGlow = new THREE.Mesh(new THREE.BoxGeometry(w - 0.38 * s, 0.075 * s, 0.32 * s), this.trimMat);
+    topGlow.position.y = 1.92 * s;
+    this.inner.add(panel, floor, topBar, topCrown, topGlow);
+
+    const postR = 0.19 * s;
     for (const side of [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.17, 2.0, 10), this.postMat);
-      post.position.set(side * (w / 2 - 0.17), 1.0, 0);
+      const px = side * (w / 2 - postR);
+      // 阶梯装甲底座与防撞基座
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(postR * 2.3, 0.26 * s, postR * 2.5), this.darkSteelMat);
+      plinth.position.set(px, 0.13 * s, 0);
+      plinth.castShadow = true;
+      // 主立柱钢骨
+      const post = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.55, 2.04 * s, postR * 1.65), this.postMat);
+      post.position.set(px, 1.04 * s, 0);
       post.castShadow = true;
-      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.21, 10, 8), this.postMat);
-      cap.position.set(side * (w / 2 - 0.17), 2.02, 0);
-      this.inner.add(post, cap);
+      // 外侧装甲护板与三条加固钢肋
+      const armor = new THREE.Mesh(new THREE.BoxGeometry(postR * 0.42, 1.65 * s, postR * 1.88), this.darkSteelMat);
+      armor.position.set(px + side * postR * 0.72, 1.02 * s, 0);
+      // 内侧能量投射镜面光条
+      const emitter = new THREE.Mesh(new THREE.BoxGeometry(postR * 0.26, 1.54 * s, postR * 0.56), this.trimMat);
+      emitter.position.set(px - side * postR * 0.74, 1.02 * s, 0);
+      // 柱顶装甲帽与信号灯块
+      const capBase = new THREE.Mesh(new THREE.BoxGeometry(postR * 2.0, 0.14 * s, postR * 2.05), this.darkSteelMat);
+      capBase.position.set(px, 2.08 * s, 0);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.5, 0.11 * s, postR * 1.5), this.trimMat);
+      cap.position.set(px, 2.19 * s, 0);
+      this.inner.add(plinth, post, armor, emitter, capBase, cap);
+
+      // 立柱双道金属箍环
+      for (const ry of [0.58 * s, 1.44 * s]) {
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.84, 0.1 * s, postR * 1.94), this.darkSteelMat);
+        rib.position.set(px, ry, 0);
+        this.inner.add(rib);
+      }
     }
-    this.labelMesh = labelPlane(this.label, Math.min(3.3, w - 0.5), 2.06);
-    this.labelMesh.position.set(0, 0.98, 0.05);
+    this.labelMesh = labelPlane(this.label, Math.min(3.3 * s, w - 0.4), 2.06 * s);
+    this.labelMesh.position.set(0, 0.98 * s, 0.05);
     this.inner.add(this.labelMesh);
     if (gate.kind === 'weapon') {
-      this.gun = new THREE.Mesh(gunGeometry(Math.max(0, gate.value), 3.6), vertexMat);
-      this.gun.position.set(0, 2.55, 0);
+      this.gun = new THREE.Mesh(gunGeometry(Math.max(0, gate.value), 3.6 * s), vertexMat);
+      this.gun.position.set(0, 2.6 * s, 0);
       this.gun.castShadow = true;
       this.inner.add(this.gun);
     }
@@ -145,25 +217,28 @@ export class GateView {
       this.base.set(color);
       this.panelMat.color.set(color);
       this.floorMat.color.set(color);
-      this.postMat.color.set(color).multiplyScalar(1.1);
+      this.trimMat.color.set(color).lerp(_white, 0.15);
+      this.trimMat.emissive.set(color);
     }
-    const stroke = 'rgba(20,30,40,0.85)';
+    const stroke = 'rgba(15,23,42,0.9)';
     if (g.kind === 'mul') this.label.set(`×${g.value}`, { fill: '#ffffff', stroke, size: 100 });
     else if (g.kind === 'add') this.label.set(g.value > 0 ? `+${g.value}` : String(g.value), { fill: '#ffffff', stroke, size: 100 });
     else if (g.kind === 'rate') this.label.set(`${g.value > 0 ? '+' : ''}${g.value}%`, { fill: '#ffffff', stroke, size: 80, icon: 'bolt', sub: '射速' });
+    else if (g.kind === 'mystery') this.label.set('?', { fill: '#fef08a', stroke: '#4c1d95', size: 104, sub: '幸运盲盒' });
     else {
       const tier = Math.max(0, Math.min(WEAPONS.length - 1, g.value));
       this.label.set(`Lv.${tier}`, { fill: '#ffffff', stroke, size: 80, sub: WEAPONS[tier].name });
       if (this.gun && tier !== this.gunTier) {
         this.gunTier = tier;
         if (!this.gun.geometry.userData?.shared) this.gun.geometry.dispose();
-        this.gun.geometry = gunGeometry(tier, 3.6);
+        this.gun.geometry = gunGeometry(tier, 3.6 * ITEM_SCALE);
       }
     }
   }
 
   update(dt: number, time: number) {
     const g = this.gate;
+    this.group.position.x = (g.x0 + g.x1) / 2;
     this.group.position.z = -g.d;
     this.refresh();
     if (g.value !== this.lastValue) {
@@ -171,13 +246,14 @@ export class GateView {
       this.lastValue = g.value;
     }
     this.pop = Math.max(0, this.pop - dt * 4);
-    this.panelMat.color.copy(this.base).lerp(_white, g.bump * 0.45);
-    if (!g.consumed) this.panelMat.opacity = 0.5 + g.bump * 0.25;
+    this.panelMat.color.copy(this.base).lerp(_white, g.bump * 0.32);
+    this.trimMat.emissiveIntensity = 0.56 + g.bump * 0.35;
+    if (!g.consumed) this.panelMat.opacity = 0.34 + g.bump * 0.2;
     this.inner.rotation.z = Math.sin(time * 47) * g.bump * 0.025;
     this.labelMesh.scale.setScalar(1 + g.bump * 0.08 + easePop(this.pop) * 0.35);
     if (this.gun) {
       this.gun.rotation.y = time * 1.6;
-      this.gun.position.y = 2.55 + Math.sin(time * 3) * 0.1;
+      this.gun.position.y = (2.6 + Math.sin(time * 3) * 0.1) * ITEM_SCALE;
       this.gun.scale.setScalar(1 + g.bump * 0.15);
     }
     if (!g.consumed) {
@@ -188,13 +264,13 @@ export class GateView {
     this.fade = Math.min(1, this.fade + dt * (g.taken ? 5 : 2.5));
     const k = this.fade;
     if (g.taken) {
-      this.panelMat.opacity = 0.5 + (1 - k) * 0.35 - k * 0.5;
+      this.panelMat.opacity = 0.34 + (1 - k) * 0.26 - k * 0.34;
       this.inner.position.y = -k * k * 2.4;
     } else {
       this.inner.position.y = -k * 2.4;
-      this.panelMat.opacity = 0.5 * (1 - k);
+      this.panelMat.opacity = 0.34 * (1 - k);
     }
-    this.floorMat.opacity = 0.32 * (1 - k);
+    this.floorMat.opacity = 0.15 * (1 - k);
     (this.labelMesh.material as THREE.MeshBasicMaterial).opacity = 1 - k;
     if (k >= 1) this.group.visible = false;
   }
@@ -225,13 +301,21 @@ export class BarrelView {
   readonly group = new THREE.Group();
   readonly reward = new THREE.Group();
   private readonly body: THREE.Mesh;
+  private readonly turret?: THREE.Mesh;
+  private readonly turretY: number;
+  private readonly tankBar?: HpBar;
+  private readonly tankBarSprite?: THREE.Sprite;
   private readonly label = new Label(256, 128);
   private readonly labelSprite: THREE.Sprite;
   private readonly rewardLabel?: Label;
+  private readonly isPickupPod: boolean;
+  private readonly podBeam?: THREE.Mesh;
+  private readonly bombHalo?: THREE.Mesh;
+  private readonly bombHaloRadius: number = 1;
   private flyT = -1;
   private readonly flyFrom = new THREE.Vector3();
   /** 每个桶自己一份材质，被打时单独闪白 */
-  private readonly mat: THREE.MeshLambertMaterial;
+  private readonly mat: THREE.MeshStandardMaterial;
   /** 掉血到 75% / 50% / 25% 时各崩一次，渲染器据此放碎块 */
   private stage = 0;
   private stageHit = false;
@@ -245,9 +329,39 @@ export class BarrelView {
     prop?: (name: string, fit: number) => THREE.BufferGeometry | null,
   ) {
     this.group.position.set(barrel.x, 0, -barrel.d);
+    this.group.scale.setScalar(ITEM_SCALE);
+    this.isPickupPod = barrel.blitzLane === 'right' && !barrel.tank;
     let geom: THREE.BufferGeometry;
-    const external = prop ? externalProp(barrel, prop) : null;
-    if (external) {
+    const customLook =
+      barrel.tank ||
+      barrel.truck ||
+      barrel.look === 'bomb' ||
+      barrel.look === 'cryo' ||
+      barrel.look === 'mystery' ||
+      barrel.look === 'hero' ||
+      barrel.look === 'turret' ||
+      barrel.look === 'truck';
+    const external = prop && !customLook ? externalProp(barrel, prop) : null;
+    if (barrel.tank) {
+      geom = tankHullGeometry(barrel.tank.tier, barrel.r);
+      this.topY = (barrel.r / 1.5) * 2.05;
+    } else if (barrel.truck || barrel.look === 'truck') {
+      geom = lootTruckGeometry(barrel.r);
+      this.topY = barrel.r * 1.48;
+    } else if (barrel.look === 'bomb') {
+      geom = bombBarrelGeometry(barrel.r);
+      this.topY = barrel.r * 2.15;
+    } else if (barrel.look === 'cryo') {
+      geom = cryoBarrelGeometry(barrel.r);
+      this.topY = barrel.r * 2.18;
+    } else if (barrel.look === 'mystery') {
+      geom = mysteryBoxGeometry(barrel.r);
+      this.topY = barrel.r * 1.9;
+    } else if (barrel.look === 'hero') {
+      const accent = barrel.reward.kind === 'hero' ? HERO_INFO[barrel.reward.hero].color : 0x38bdf8;
+      geom = heroPodGeometry(barrel.r, accent);
+      this.topY = barrel.r * 2.15;
+    } else if (external) {
       geom = external;
       this.topY = external.boundingBox!.max.y;
     } else if (barrel.look === 'tires') {
@@ -256,7 +370,7 @@ export class BarrelView {
     } else if (barrel.look === 'cage') {
       geom = cageGeometry(skin);
       this.topY = 1.72;
-    } else if (barrel.look === 'crate') {
+    } else if (barrel.look === 'crate' || barrel.look === 'turret') {
       geom = crateGeometry();
       this.topY = crateHeight();
     } else if (barrel.look === 'armor') {
@@ -270,42 +384,245 @@ export class BarrelView {
     this.mat.userData.shared = false;
     this.body = new THREE.Mesh(geom, this.mat);
     this.body.castShadow = true;
-    if (barrel.block && (barrel.look === 'crate' || barrel.look === 'cage')) {
+    if (barrel.block && (barrel.look === 'crate' || barrel.look === 'cage' || barrel.look === 'turret')) {
       this.body.scale.setScalar(barrel.r / 1.2);
       this.topY *= barrel.r / 1.2;
     }
     this.group.add(this.body);
 
+    this.turretY = (barrel.r / 1.5) * 1.06;
+    if (barrel.tank) {
+      this.turret = new THREE.Mesh(tankTurretGeometry(barrel.tank.tier, barrel.r, barrel.tank.twin), this.mat);
+      this.turret.position.set(0, this.turretY, 0);
+      this.turret.castShadow = true;
+      this.group.add(this.turret);
+    }
+    if (barrel.tank || barrel.truck) {
+      this.tankBar = new HpBar(360, 96);
+      const barMat = new THREE.SpriteMaterial({ map: this.tankBar.texture, depthTest: false, depthWrite: false, toneMapped: false });
+      this.tankBarSprite = new THREE.Sprite(barMat);
+      this.tankBarSprite.scale.set(3.4, 0.9, 1);
+      this.tankBarSprite.position.set(0, this.topY + 1.15, 0);
+      this.tankBarSprite.renderOrder = 20;
+      this.group.add(this.tankBarSprite);
+    }
+
     const big = barrel.r >= 1.5 ? 1.12 : 1;
     this.labelSprite = labelSprite(this.label, 2.6 * big, 1.3 * big);
     this.labelSprite.position.set(0, this.topY * 0.5 + 0.2, barrel.r + 0.4);
+    if (barrel.tank || barrel.truck || this.isPickupPod) this.labelSprite.visible = false;
     this.group.add(this.labelSprite);
 
     const r = barrel.reward;
-    if (r.kind === 'weapon') {
-      const gun = new THREE.Mesh(gunGeometry(r.tier, 4.6), vertexMat);
+    let beamColor = 0;
+    if (barrel.tank || barrel.truck) {
+      // 坦克与黄金补给车自带顶部血条与名牌，无需重复悬空图标遮挡车身
+      this.reward.visible = false;
+      if (barrel.truck) {
+        this.bombHaloRadius = 1.92;
+        this.bombHalo = new THREE.Mesh(
+          SHARED_RING_GEO,
+          new THREE.MeshBasicMaterial({
+            color: 0xfacc15,
+            transparent: true,
+            opacity: 0.36,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            side: THREE.DoubleSide,
+          }),
+        );
+        this.bombHalo.rotation.x = -Math.PI / 2;
+        this.bombHalo.position.y = 0.06;
+        this.bombHalo.scale.setScalar(this.bombHaloRadius);
+        this.group.add(this.bombHalo);
+      }
+    } else if (r.kind === 'weapon') {
+      beamColor = 0xffd34d;
+      const gun = new THREE.Mesh(gunGeometry(r.tier, 4.8), vertexMat);
       gun.rotation.y = Math.PI / 2;
       gun.castShadow = true;
       this.reward.add(gun);
       this.reward.add(glowRing(0xffd34d));
+      if (this.isPickupPod) {
+        this.rewardLabel = new Label(256, 96);
+        this.rewardLabel.set(WEAPONS[r.tier].name, { fill: '#ffffff', stroke: '#7c2d12', pill: '#f59e0b', size: 46 });
+        const s = labelSprite(this.rewardLabel, 2.2, 0.82, false);
+        s.position.y = 0.92;
+        this.reward.add(s);
+      }
     } else if (r.kind === 'airstrike') {
+      beamColor = 0xff5a3a;
       const m = new THREE.Mesh(missileGeometry(), vertexMat);
       m.rotation.z = Math.PI / 2;
-      m.scale.setScalar(1.3);
+      m.scale.setScalar(1.45);
+      m.castShadow = true;
       this.reward.add(m);
       this.reward.add(glowRing(0xff5a3a));
       this.rewardLabel = new Label(256, 96);
-      this.rewardLabel.set('空袭', { fill: '#ffffff', stroke: '#7a1a0a', pill: '#e3462f', size: 58 });
-      const s = labelSprite(this.rewardLabel, 1.6, 0.6, false);
-      s.position.y = 0.85;
+      this.rewardLabel.set('战机空袭', { fill: '#ffffff', stroke: '#7a1a0a', pill: '#e3462f', size: 50 });
+      const s = labelSprite(this.rewardLabel, 2.1, 0.78, false);
+      s.position.y = 0.96;
+      this.reward.add(s);
+    } else if (r.kind === 'drone') {
+      beamColor = 0x38bdf8;
+      const d = new THREE.Mesh(droneGeometry(1.3), vertexMat);
+      d.castShadow = true;
+      this.reward.add(d);
+      this.reward.add(glowRing(0x38bdf8));
+      this.rewardLabel = new Label(256, 96);
+      this.rewardLabel.set(`+${r.amount} 无人机`, { fill: '#ffffff', stroke: '#0c4a6e', pill: '#0284c7', size: 46 });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.8, false);
+      s.position.y = 0.94;
+      this.reward.add(s);
+    } else if (r.kind === 'multishot') {
+      beamColor = 0xa855f7;
+      const ms = new THREE.Mesh(multishotGeometry(), vertexMat);
+      ms.scale.setScalar(1.2);
+      ms.castShadow = true;
+      this.reward.add(ms);
+      this.reward.add(glowRing(0xa855f7));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(`+${r.amount} 扇形弹道`, { fill: '#ffffff', stroke: '#4c1d95', pill: '#9333ea', size: 44 });
+      const s = labelSprite(this.rewardLabel, 2.35, 0.92, false);
+      s.position.y = 0.95;
+      this.reward.add(s);
+    } else if (r.kind === 'ammo') {
+      const ammoDef = AMMO[Math.min(AMMO.length - 1, Math.max(0, r.level))];
+      beamColor = ammoDef.color ?? 0x38bdf8;
+      const core = new THREE.Mesh(ammoCoreGeometry(r.level), vertexMat);
+      core.scale.setScalar(1.18);
+      core.castShadow = true;
+      this.reward.add(core);
+      this.reward.add(glowRing(beamColor));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(ammoDef.name, { fill: '#ffffff', stroke: '#1e1b4b', pill: '#4f46e5', size: 48 });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
+      s.position.y = 0.96;
+      this.reward.add(s);
+    } else if (r.kind === 'damage') {
+      beamColor = 0xf97316;
+      const dmgMesh = new THREE.Mesh(damageCoreGeometry(), vertexMat);
+      dmgMesh.scale.setScalar(1.22);
+      dmgMesh.castShadow = true;
+      this.reward.add(dmgMesh);
+      this.reward.add(glowRing(0xf97316));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(`火力 +${r.amount}%`, { fill: '#ffffff', stroke: '#7c2d12', pill: '#ea580c', size: 46 });
+      const s = labelSprite(this.rewardLabel, 2.25, 0.92, false);
+      s.position.y = 0.98;
+      this.reward.add(s);
+    } else if (r.kind === 'shield') {
+      beamColor = 0x22d3ee;
+      const shMesh = new THREE.Mesh(shieldCoreGeometry(), vertexMat);
+      shMesh.scale.setScalar(1.25);
+      shMesh.castShadow = true;
+      this.reward.add(shMesh);
+      this.reward.add(glowRing(0x22d3ee));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(`护盾 +${r.amount}`, { fill: '#ffffff', stroke: '#155e75', pill: '#0891b2', size: 50 });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.9, false);
+      s.position.y = 0.96;
+      this.reward.add(s);
+    } else if (r.kind === 'boom') {
+      this.reward.add(glowRing(0xef4444));
+      this.rewardLabel = new Label(256, 96);
+      this.rewardLabel.set('引爆清场', { fill: '#fff7ed', stroke: '#7f1d1d', pill: '#dc2626', size: 48 });
+      const s = labelSprite(this.rewardLabel, 1.9, 0.72, false);
+      s.position.y = 0.42;
+      this.reward.add(s);
+      // 地面警示爆破圈
+      this.bombHaloRadius = 1.48;
+      this.bombHalo = new THREE.Mesh(
+        SHARED_RING_GEO,
+        new THREE.MeshBasicMaterial({
+          color: 0xff3b30,
+          transparent: true,
+          opacity: 0.35,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      this.bombHalo.rotation.x = -Math.PI / 2;
+      this.bombHalo.position.y = 0.06;
+      this.bombHalo.scale.setScalar(this.bombHaloRadius);
+      this.group.add(this.bombHalo);
+    } else if (r.kind === 'freeze') {
+      this.reward.add(glowRing(0x38bdf8));
+      this.rewardLabel = new Label(256, 96);
+      this.rewardLabel.set('液氮急冻', { fill: '#f0f9ff', stroke: '#0c4a6e', pill: '#0284c7', size: 48 });
+      const s = labelSprite(this.rewardLabel, 1.95, 0.74, false);
+      s.position.y = 0.44;
+      this.reward.add(s);
+      this.bombHaloRadius = 1.5;
+      this.bombHalo = new THREE.Mesh(
+        SHARED_RING_GEO,
+        new THREE.MeshBasicMaterial({
+          color: 0x38bdf8,
+          transparent: true,
+          opacity: 0.34,
+          blending: THREE.AdditiveBlending,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
+      );
+      this.bombHalo.rotation.x = -Math.PI / 2;
+      this.bombHalo.position.y = 0.06;
+      this.bombHalo.scale.setScalar(this.bombHaloRadius);
+      this.group.add(this.bombHalo);
+    } else if (r.kind === 'hero') {
+      const info = HERO_INFO[r.hero];
+      beamColor = info.color;
+      const miniHero = new THREE.Mesh(heroGeometry(r.hero), vertexMat);
+      miniHero.scale.setScalar(0.75);
+      miniHero.position.y = -0.35;
+      miniHero.castShadow = true;
+      this.reward.add(miniHero);
+      this.reward.add(glowRing(info.color));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set(`营救 · ${info.name}`, { fill: '#ffffff', stroke: '#0f172a', pill: info.pill, size: 42 });
+      const s = labelSprite(this.rewardLabel, 2.45, 0.92, false);
+      s.position.y = 1.05;
+      this.reward.add(s);
+    } else if (r.kind === 'turret') {
+      beamColor = 0x38bdf8;
+      const miniHead = new THREE.Mesh(turretHeadGeometry(), vertexMat);
+      miniHead.scale.setScalar(0.9);
+      miniHead.position.y = -0.55;
+      miniHead.castShadow = true;
+      this.reward.add(miniHead);
+      this.reward.add(glowRing(0x38bdf8));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set('自动机枪炮台', { fill: '#ffffff', stroke: '#0c4a6e', pill: '#0284c7', size: 44 });
+      const s = labelSprite(this.rewardLabel, 2.4, 0.9, false);
+      s.position.y = 0.98;
+      this.reward.add(s);
+    } else if (r.kind === 'mystery') {
+      beamColor = 0xa855f7;
+      const gem = new THREE.Mesh(SHARED_MYSTERY_GEM_GEO, new THREE.MeshStandardMaterial({ color: 0xfacc15, emissive: 0xa855f7, emissiveIntensity: 0.45, roughness: 0.25, metalness: 0.6 }));
+      gem.castShadow = true;
+      this.reward.add(gem);
+      this.reward.add(glowRing(0xa855f7));
+      this.rewardLabel = new Label(256, 112);
+      this.rewardLabel.set('? 黄金盲盒', { fill: '#fef08a', stroke: '#4c1d95', pill: '#7e22ce', size: 46 });
+      const s = labelSprite(this.rewardLabel, 2.35, 0.9, false);
+      s.position.y = 0.96;
       this.reward.add(s);
     } else {
+      if (r.kind === 'rate') {
+        beamColor = 0x14c8e0;
+        const bolt = new THREE.Mesh(rateBoltGeometry(), vertexMat);
+        bolt.scale.setScalar(1.18);
+        bolt.castShadow = true;
+        this.reward.add(bolt);
+        this.reward.add(glowRing(0x14c8e0));
+      }
       this.rewardLabel = new Label(256, 128);
       if (r.kind === 'soldiers') this.rewardLabel.set(`+${r.amount}`, { fill: '#ffffff', stroke: '#1d7a33', pill: '#2fd14a', size: 70 });
       else if (r.kind === 'coins') this.rewardLabel.set(`+${r.amount}`, { fill: '#ffffff', stroke: '#9a6a00', pill: '#ffbf1f', size: 70 });
-      else this.rewardLabel.set(`+${r.amount}%`, { fill: '#ffffff', stroke: '#0a5a6a', pill: '#14c8e0', size: 60, icon: 'bolt' });
-      const s = labelSprite(this.rewardLabel, 2.0, 1.0, false);
-      s.position.y = 0.3;
+      else this.rewardLabel.set(`射速 +${r.amount}%`, { fill: '#ffffff', stroke: '#0a5a6a', pill: '#14c8e0', size: 48, icon: 'bolt' });
+      const s = labelSprite(this.rewardLabel, 2.2, 0.92, false);
+      s.position.y = r.kind === 'rate' ? 0.96 : 0.3;
       this.reward.add(s);
       if (r.kind === 'coins') {
         const coin = new THREE.Mesh(coinGeometry(), vertexMat);
@@ -313,7 +630,11 @@ export class BarrelView {
         this.reward.add(coin);
       }
     }
-    this.reward.position.set(0, this.topY + 1.0, 0);
+    if (this.isPickupPod && beamColor) {
+      this.podBeam = holoBeam(beamColor);
+      this.group.add(this.podBeam);
+    }
+    this.reward.position.set(0, this.topY + (this.isPickupPod ? 0.85 : 1.0), 0);
     this.group.add(this.reward);
   }
 
@@ -329,31 +650,61 @@ export class BarrelView {
     return this.barrel.maxHp > 0 ? this.barrel.hp / this.barrel.maxHp : 1;
   }
 
+  /** 缩放后的世界空间顶面高度（渲染器放特效/火花用） */
+  get worldTopY(): number {
+    return this.topY * ITEM_SCALE;
+  }
+
+  /** 奖励是否正在飞向小队（屏幕外不可见桶可跳过 update，但飞行中的奖励仍需更新） */
+  get isFlying(): boolean {
+    return this.flyT >= 0;
+  }
+
   /** 桶被打爆后奖励飞向队伍 */
   startFly() {
+    this.body.visible = false;
+    if (this.turret) this.turret.visible = false;
+    if (this.tankBarSprite) this.tankBarSprite.visible = false;
+    if (this.podBeam) this.podBeam.visible = false;
+    if (this.bombHalo) this.bombHalo.visible = false;
+    this.labelSprite.visible = false;
+    if (this.barrel.tank || this.barrel.truck || this.barrel.reward.kind === 'boom' || this.barrel.reward.kind === 'freeze') {
+      this.reward.visible = false;
+      return;
+    }
     this.flyT = 0;
     this.reward.getWorldPosition(this.flyFrom);
     this.group.remove(this.reward);
     this.group.parent?.add(this.reward);
     this.reward.position.copy(this.flyFrom);
-    this.body.visible = false;
-    this.labelSprite.visible = false;
+    this.reward.scale.setScalar(ITEM_SCALE);
   }
 
   update(dt: number, time: number, squadPos: THREE.Vector3) {
     const b = this.barrel;
     if (b.alive) {
+      this.group.position.x = b.x;
       this.group.position.z = -b.d;
-      const base = b.block && (b.look === 'crate' || b.look === 'cage') ? b.r / 1.2 : 1;
+      const base = b.block && (b.look === 'crate' || b.look === 'cage' || b.look === 'turret') ? b.r / 1.2 : 1;
       const pulse = b.bump * (0.65 + 0.35 * Math.max(0, Math.sin(time * 58)));
-      const s = (1 + pulse * 0.11) * base;
-      this.body.scale.set(s, (1 - pulse * 0.08) * base, s);
+      const s = (1 + pulse * (b.tank || b.truck ? 0.045 : 0.11)) * base;
+      this.body.scale.set(s, (1 - pulse * (b.tank || b.truck ? 0.03 : 0.08)) * base, s);
       const ratio = b.maxHp > 0 ? b.hp / b.maxHp : 1;
-      this.mat.emissive.setRGB(pulse * 0.52, pulse * 0.42, pulse * 0.28);
-      const shake = b.bump * (0.075 + (1 - ratio) * 0.085);
+      this.mat.emissive.setRGB(pulse * 0.36, pulse * 0.28, pulse * 0.18);
+      const shake = b.bump * (b.tank || b.truck ? 0.045 : 0.075 + (1 - ratio) * 0.085);
       this.body.position.x = Math.sin(time * 59) * shake;
-      this.body.position.z = -pulse * 0.09;
+      this.body.position.z = -pulse * (b.tank || b.truck ? 0.05 : 0.09);
       this.body.rotation.z = Math.sin(time * 47) * shake * 0.55;
+      if (b.truck) {
+        this.body.position.y = Math.abs(Math.sin(time * 18 + b.id)) * 0.08;
+        this.body.rotation.y = Math.cos(b.truckPhase ?? 0) * 0.14;
+      }
+      if (this.turret && b.tank) {
+        // 炮塔平滑瞄准玩家小队 + 开炮后坐力回弹
+        const aimYaw = Math.max(-0.65, Math.min(0.65, Math.atan2(squadPos.x - b.x, Math.max(4, b.d))));
+        this.turret.rotation.y += (aimYaw - this.turret.rotation.y) * Math.min(1, dt * 6);
+        this.turret.position.set(this.body.position.x, this.turretY, -b.recoil * 0.42 + this.body.position.z);
+      }
       const stage = ratio < 0.25 ? 3 : ratio < 0.5 ? 2 : ratio < 0.75 ? 1 : 0;
       if (stage > this.stage) {
         this.stage = stage;
@@ -361,24 +712,50 @@ export class BarrelView {
       }
       const ceilHp = Math.max(0, Math.ceil(b.hp));
       const low = ratio < 0.25;
-      if (ceilHp !== this.lastCeilHp || low !== this.lastLow) {
-        this.lastCeilHp = ceilHp;
-        this.lastLow = low;
-        this.label.set(formatNumber(ceilHp), { fill: low ? '#ffe066' : '#ffffff', stroke: '#d9480f', size: 88 });
+      if ((b.tank || b.truck) && this.tankBar) {
+        if (ceilHp !== this.lastCeilHp || low !== this.lastLow) {
+          this.lastCeilHp = ceilHp;
+          this.lastLow = low;
+          if (b.tank) {
+            const barColor = b.tank.tier === 4 ? '#f59e0b' : b.tank.tier === 3 ? '#ef4444' : '#f97316';
+            this.tankBar.set(ratio, formatNumber(ceilHp), barColor, b.tank.name);
+          } else {
+            this.tankBar.set(ratio, formatNumber(ceilHp), '#facc15', '黄金补给车');
+          }
+        }
+      } else if (!this.isPickupPod) {
+        if (ceilHp !== this.lastCeilHp || low !== this.lastLow) {
+          this.lastCeilHp = ceilHp;
+          this.lastLow = low;
+          this.label.set(formatNumber(ceilHp), { fill: low ? '#ffe066' : '#ffffff', stroke: '#d9480f', size: 88 });
+        }
+        const big = b.r >= 1.5 ? 1.12 : 1;
+        this.labelSprite.scale.set(2.6 * big * (1 + b.bump * 0.1), 1.3 * big * (1 + b.bump * 0.1), 1);
       }
-      const big = b.r >= 1.5 ? 1.12 : 1;
-      this.labelSprite.scale.set(2.6 * big * (1 + b.bump * 0.1), 1.3 * big * (1 + b.bump * 0.1), 1);
-      this.reward.rotation.y = time * 1.8;
-      this.reward.position.y = this.topY + 1.0 + Math.sin(time * 3) * 0.12;
+      this.reward.rotation.y = time * (this.isPickupPod ? 2.4 : 1.8);
+      this.reward.position.y = this.topY + (this.isPickupPod ? 0.85 : 1.0) + Math.sin(time * (this.isPickupPod ? 4.2 : 3)) * 0.16;
+      if (this.isPickupPod) {
+        const beat = 1 + Math.sin(time * 5.2 + b.id) * 0.08;
+        this.reward.scale.setScalar(beat);
+        if (this.podBeam) {
+          (this.podBeam.material as THREE.MeshBasicMaterial).opacity = 0.13 + Math.sin(time * 4.5 + b.id) * 0.05;
+          this.podBeam.scale.set(0.95 + Math.sin(time * 6 + b.id) * 0.1, 1, 0.95 + Math.sin(time * 6 + b.id) * 0.1);
+        }
+      }
+      if (this.bombHalo) {
+        const sc = 0.9 + Math.sin(time * 7 + b.id) * 0.18;
+        this.bombHalo.scale.setScalar(this.bombHaloRadius * sc);
+        (this.bombHalo.material as THREE.MeshBasicMaterial).opacity = 0.22 + Math.max(0, Math.sin(time * 7 + b.id)) * 0.24;
+      }
       return;
     }
     if (this.flyT < 0) return;
     this.flyT += dt;
-    const k = Math.min(1, this.flyT / 0.45);
+    const k = Math.min(1, this.flyT / 0.42);
     this.reward.position.lerpVectors(this.flyFrom, squadPos, k * k);
-    this.reward.position.y += Math.sin(k * Math.PI) * 2.5;
-    this.reward.rotation.y += dt * 12;
-    this.reward.scale.setScalar(1 - k * 0.6);
+    this.reward.position.y += Math.sin(k * Math.PI) * 2.4;
+    this.reward.rotation.y += dt * 15;
+    this.reward.scale.setScalar(ITEM_SCALE * (1 + Math.sin(k * Math.PI) * 0.35 - k * 0.55));
     if (k >= 1) {
       this.reward.visible = false;
       this.flyT = -1;
@@ -387,6 +764,7 @@ export class BarrelView {
 
   dispose() {
     this.label.dispose();
+    this.tankBar?.dispose();
     this.rewardLabel?.dispose();
     this.reward.removeFromParent();
     disposeObject(this.group);
@@ -394,10 +772,26 @@ export class BarrelView {
   }
 }
 
+function holoBeam(color: number): THREE.Mesh {
+  const beam = new THREE.Mesh(
+    SHARED_HOLO_BEAM_GEO,
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity: 0.14,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    }),
+  );
+  beam.position.y = 1.85;
+  return beam;
+}
+
 function glowRing(color: number): THREE.Mesh {
   const ring = new THREE.Mesh(
-    new THREE.RingGeometry(0.5, 0.95, 32),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+    SHARED_GLOW_RING_GEO,
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = -0.45;
@@ -411,9 +805,9 @@ export class BossStrikeView {
   readonly group = new THREE.Group();
   private readonly fillMat = new THREE.MeshBasicMaterial({ color: 0xff2424, transparent: true, opacity: 0.25, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
   private readonly edgeMat = new THREE.MeshBasicMaterial({ color: 0xffb047, transparent: true, opacity: 0.9, depthWrite: false, depthTest: false, side: THREE.DoubleSide });
-  private readonly fill = new THREE.Mesh(new THREE.PlaneGeometry(BOSS_STRIKE_HALF * 2, 1), this.fillMat);
+  private readonly fill = new THREE.Mesh(SHARED_PLANE_GEO, this.fillMat);
   private readonly edges = [-1, 1].map((side) => {
-    const edge = new THREE.Mesh(new THREE.PlaneGeometry(0.09, 1), this.edgeMat);
+    const edge = new THREE.Mesh(SHARED_PLANE_GEO, this.edgeMat);
     edge.position.x = side * BOSS_STRIKE_HALF;
     return edge;
   });
@@ -422,10 +816,12 @@ export class BossStrikeView {
     this.group.visible = false;
     this.fill.position.y = 0.04;
     this.fill.rotation.x = -Math.PI / 2;
+    this.fill.scale.set(BOSS_STRIKE_HALF * 2, 1, 1);
     this.fill.renderOrder = 15;
     for (const edge of this.edges) {
       edge.position.y = 0.05;
       edge.rotation.x = -Math.PI / 2;
+      edge.scale.set(0.09, 1, 1);
       edge.renderOrder = 16;
     }
     this.group.add(this.fill, ...this.edges);
@@ -437,8 +833,8 @@ export class BossStrikeView {
     this.group.visible = b.alive && b.active && b.attacking;
     if (!this.group.visible) return;
     this.group.position.set(b.attackX, 0, -b.attackD);
-    this.fill.scale.y = b.attackLength;
-    for (const edge of this.edges) edge.scale.y = b.attackLength;
+    this.fill.scale.set(BOSS_STRIKE_HALF * 2, b.attackLength, 1);
+    for (const edge of this.edges) edge.scale.set(0.09, b.attackLength, 1);
     this.fillMat.opacity = 0.16 + b.windup * 0.25;
     this.edgeMat.opacity = 0.55 + b.windup * 0.4;
   }
@@ -470,7 +866,7 @@ export class BossView {
   ) {
     if (dropIn) this.dropT = 0;
     const def = BOSSES[boss.kind];
-    this.scale = def.scale;
+    this.scale = def.scale * ITEM_SCALE;
     this.rig = buildBossRig(boss.kind);
     this.rig.root.scale.setScalar(this.scale);
     this.rig.root.rotation.y = Math.PI;
@@ -592,13 +988,14 @@ export class HazardView {
     if (hazard.kind === 'spikes') {
       const depth = hazard.d1 - hazard.d0;
       const m = new THREE.Mesh(spikesGeometry(w, depth), vertexMat);
+      m.scale.y = ITEM_SCALE;
       m.position.set((hazard.x0 + hazard.x1) / 2, 0, -(hazard.d0 + hazard.d1) / 2);
       m.castShadow = true;
       this.group.add(m);
     } else {
       const rail = new THREE.Mesh(sawRailGeometry(w), vertexMat);
       rail.position.set((hazard.x0 + hazard.x1) / 2, 0.01, -hazard.d0);
-      this.blade = new THREE.Mesh(sawBladeGeometry(0.85), vertexMat);
+      this.blade = new THREE.Mesh(sawBladeGeometry(0.85 * ITEM_SCALE), vertexMat);
       this.blade.castShadow = true;
       this.group.add(rail, this.blade);
     }
@@ -607,7 +1004,7 @@ export class HazardView {
   update(time: number) {
     const h = this.hazard;
     if (this.blade) {
-      this.blade.position.set(h.x, 0.62, -h.d0);
+      this.blade.position.set(h.x, 0.62 * ITEM_SCALE, -h.d0);
       this.blade.rotation.z = -time * 14;
     } else {
       const m = this.group.children[0];
@@ -629,8 +1026,12 @@ export class WallsView {
   private lastKey = '';
 
   constructor(scene: THREE.Scene) {
-    this.red = new THREE.InstancedMesh(barrierGeometry(0xd9361f), vertexMat, 200);
-    this.white = new THREE.InstancedMesh(barrierGeometry(0xf4f4f4), vertexMat, 200);
+    const redGeo = barrierGeometry(0xd9361f);
+    redGeo.scale(ITEM_SCALE, ITEM_SCALE, 1);
+    const whiteGeo = barrierGeometry(0xf4f4f4);
+    whiteGeo.scale(ITEM_SCALE, ITEM_SCALE, 1);
+    this.red = new THREE.InstancedMesh(redGeo, vertexMat, 200);
+    this.white = new THREE.InstancedMesh(whiteGeo, vertexMat, 200);
     for (const m of [this.red, this.white]) {
       m.castShadow = true;
       m.count = 0;
@@ -699,6 +1100,7 @@ export class ProjectileView {
   private readonly fill: THREE.Mesh;
   private readonly ring: THREE.Mesh;
   private readonly skull: THREE.Mesh;
+  private readonly radius: number;
 
   constructor(
     scene: THREE.Scene,
@@ -706,31 +1108,36 @@ export class ProjectileView {
     radius: number,
     barrelGeom?: THREE.BufferGeometry | null,
   ) {
+    this.radius = radius;
     if (barrelGeom) {
       const mesh = new THREE.Mesh(barrelGeom, vertexMat);
+      mesh.scale.setScalar(ITEM_SCALE);
       mesh.castShadow = true;
       this.drum = mesh;
     } else {
       this.drum = drumMesh();
-      this.drum.scale.setScalar(1.4);
+      this.drum.scale.setScalar(1.4 * ITEM_SCALE);
     }
     const mat = new THREE.MeshBasicMaterial({ color: 0xff2a2a, transparent: true, opacity: 0.3, depthWrite: false, depthTest: false });
-    this.fill = new THREE.Mesh(new THREE.CircleGeometry(radius, 40), mat);
+    this.fill = new THREE.Mesh(SHARED_DISC_GEO, mat);
     this.fill.rotation.x = -Math.PI / 2;
+    this.fill.scale.setScalar(radius * 0.05);
     this.fill.renderOrder = 15;
     this.ring = new THREE.Mesh(
-      new THREE.RingGeometry(radius - 0.16, radius, 48),
+      SHARED_RING_GEO,
       new THREE.MeshBasicMaterial({ color: 0xff3b3b, transparent: true, opacity: 0.9, depthWrite: false, depthTest: false }),
     );
     this.ring.renderOrder = 16;
     this.ring.rotation.x = -Math.PI / 2;
+    this.ring.scale.setScalar(radius);
     this.fill.position.set(proj.tx, 0.05, -proj.td);
     this.ring.position.set(proj.tx, 0.06, -proj.td);
     this.skull = new THREE.Mesh(
-      new THREE.PlaneGeometry(radius * 0.8, radius * 0.8),
+      SHARED_PLANE_GEO,
       new THREE.MeshBasicMaterial({ map: skullMark(), transparent: true, opacity: 0.9, depthWrite: false, depthTest: false }),
     );
     this.skull.rotation.x = -Math.PI / 2;
+    this.skull.scale.setScalar(radius * 0.8);
     this.skull.renderOrder = 17;
     this.skull.position.set(proj.tx, 0.07, -proj.td);
     this.group.add(this.drum, this.fill, this.ring, this.skull);
@@ -745,12 +1152,12 @@ export class ProjectileView {
     const y = 5 + Math.sin(k * Math.PI) * 9 - k * 4.5;
     this.drum.position.set(x, Math.max(0.4, y), -d);
     this.drum.rotation.set(k * 9, 0, k * 6);
-    this.fill.scale.setScalar(Math.max(0.05, k));
+    this.fill.scale.setScalar(this.radius * Math.max(0.05, k));
     const fillMat = this.fill.material as THREE.MeshBasicMaterial;
     fillMat.opacity = 0.25 + k * 0.3;
     const blink = Math.abs(Math.sin(k * k * 28));
     (this.ring.material as THREE.MeshBasicMaterial).opacity = 0.55 + 0.45 * blink;
-    this.ring.scale.setScalar(1 + (1 - blink) * 0.04);
+    this.ring.scale.setScalar(this.radius * (1 + (1 - blink) * 0.04));
     (this.skull.material as THREE.MeshBasicMaterial).opacity = 0.5 + 0.5 * blink;
   }
 
@@ -771,12 +1178,13 @@ export class StrikeView {
     readonly strike: Strike,
   ) {
     this.missile = new THREE.Mesh(missileGeometry(), vertexMat);
-    this.missile.scale.setScalar(1.6);
+    this.missile.scale.setScalar(1.6 * ITEM_SCALE);
     this.mark = new THREE.Mesh(
-      new THREE.RingGeometry(1.2, 1.45, 32),
+      SHARED_RING_GEO,
       new THREE.MeshBasicMaterial({ color: 0xffd34d, transparent: true, opacity: 0.85, depthWrite: false }),
     );
     this.mark.rotation.x = -Math.PI / 2;
+    this.mark.scale.setScalar(1.45);
     this.group.add(this.missile, this.mark);
     scene.add(this.group);
   }
@@ -795,3 +1203,365 @@ export class StrikeView {
     disposeObject(this.group);
   }
 }
+
+/** 被玩家收编的友军重装坦克：蓝金涂装 + 底部能量光环 + 掉头入队动画 + 炮塔自动索敌轰炸 */
+export class AllyTankView {
+  readonly group = new THREE.Group();
+  private readonly rig = new THREE.Group();
+  private readonly hull: THREE.Mesh;
+  private readonly turret: THREE.Mesh;
+  private readonly turretY: number;
+  private readonly mat: THREE.MeshStandardMaterial;
+  private readonly halo: THREE.Mesh;
+  private readonly haloMat: THREE.MeshBasicMaterial;
+  private readonly badge = new Label(256, 72);
+  private readonly badgeSprite: THREE.Sprite;
+
+  constructor(
+    scene: THREE.Scene,
+    readonly tank: AllyTank,
+  ) {
+    this.group.position.set(tank.x, 0, -tank.d);
+    this.group.scale.setScalar(ITEM_SCALE);
+    this.mat = vertexMat.clone();
+    this.mat.userData.shared = false;
+
+    this.hull = new THREE.Mesh(tankHullGeometry(tank.tier, tank.r, true), this.mat);
+    this.hull.castShadow = true;
+    this.rig.add(this.hull);
+
+    this.turretY = (tank.r / 1.5) * 1.06;
+    this.turret = new THREE.Mesh(tankTurretGeometry(tank.tier, tank.r, tank.twin, true), this.mat);
+    this.turret.position.set(0, this.turretY, 0);
+    this.turret.castShadow = true;
+    this.rig.add(this.turret);
+    this.group.add(this.rig);
+
+    this.haloMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.halo = new THREE.Mesh(SHARED_RING_GEO, this.haloMat);
+    this.halo.rotation.x = -Math.PI / 2;
+    this.halo.position.y = 0.06;
+    this.halo.scale.setScalar(tank.r * 1.38);
+    this.group.add(this.halo);
+
+    this.badge.set(tank.twin ? '友军双管坦' : '友军重坦', {
+      fill: '#ffffff',
+      stroke: '#0c4a6e',
+      pill: '#0284c7',
+      size: 38,
+    });
+    this.badgeSprite = labelSprite(this.badge, 1.9, 0.56, false);
+    this.badgeSprite.position.set(0, (tank.r / 1.5) * 2.55, 0);
+    this.group.add(this.badgeSprite);
+
+    scene.add(this.group);
+  }
+
+  update(time: number) {
+    const t = this.tank;
+    this.group.position.set(t.x, 0, -t.d);
+    // 车体朝向：hullYaw=0 指向敌阵 (-z)，hullYaw=PI 指向玩家 (+z)
+    this.rig.rotation.y = Math.PI - t.hullYaw;
+    // 行驶引擎轻微震动
+    const bob = Math.sin(time * 28 + t.id) * 0.025;
+    this.hull.position.y = bob;
+    this.turret.rotation.y = -t.turretYaw;
+    this.turret.position.set(0, this.turretY + bob, -t.recoil * 0.36);
+
+    // 收编高光 + 开炮微闪
+    const glow = Math.max(t.captureGlow * 0.52, t.recoil * 0.18);
+    this.mat.emissive.setRGB(glow * 0.2, glow * 0.48, glow * 0.72);
+    const ringScale = 1 + t.captureGlow * 0.45 + Math.sin(time * 5 + t.id) * 0.04;
+    this.halo.scale.setScalar(t.r * 1.38 * ringScale);
+    this.haloMat.opacity = 0.26 + t.captureGlow * 0.34 + Math.sin(time * 4 + t.id) * 0.06;
+    this.badgeSprite.position.y = (t.r / 1.5) * 2.55 + Math.sin(time * 3 + t.id) * 0.08;
+  }
+
+  dispose() {
+    this.badge.dispose();
+    this.group.removeFromParent();
+    disposeObject(this.group);
+  }
+}
+
+/** 空投泰坦机甲 3D 实体：双足重装机甲 + 双臂多管旋转机炮 + 轨道降落光柱 + 底部反应堆光环 */
+export class AllyMechView {
+  readonly group = new THREE.Group();
+  private readonly body = new THREE.Group();
+  private readonly upper = new THREE.Group();
+  private readonly legL: THREE.Mesh;
+  private readonly legR: THREE.Mesh;
+  private readonly armL: THREE.Mesh;
+  private readonly armR: THREE.Mesh;
+  private readonly mat: THREE.MeshStandardMaterial;
+  private readonly halo: THREE.Mesh;
+  private readonly haloMat: THREE.MeshBasicMaterial;
+  private readonly dropBeam: THREE.Mesh;
+  private readonly badge = new Label(256, 72);
+  private readonly badgeSprite: THREE.Sprite;
+
+  constructor(
+    scene: THREE.Scene,
+    readonly mech: AllyMech,
+  ) {
+    this.group.position.set(mech.x, 0, -mech.d);
+    this.group.scale.setScalar(ITEM_SCALE * 1.18);
+    this.mat = vertexMat.clone();
+    this.mat.roughness = 0.36;
+    this.mat.metalness = 0.56;
+    this.mat.userData.shared = false;
+
+    const legGeo = mechLegGeometry();
+    this.legL = new THREE.Mesh(legGeo, this.mat);
+    this.legL.position.set(-0.34, 1.15, 0);
+    this.legL.castShadow = true;
+    this.legR = new THREE.Mesh(legGeo, this.mat);
+    this.legR.position.set(0.34, 1.15, 0);
+    this.legR.castShadow = true;
+
+    const torso = new THREE.Mesh(mechTorsoGeometry(), this.mat);
+    torso.castShadow = true;
+    this.upper.add(torso);
+
+    const armGeo = mechArmGeometry();
+    this.armL = new THREE.Mesh(armGeo, this.mat);
+    this.armL.position.set(-0.82, 1.88, -0.04);
+    this.armL.castShadow = true;
+    this.armR = new THREE.Mesh(armGeo, this.mat);
+    this.armR.position.set(0.82, 1.88, -0.04);
+    this.armR.castShadow = true;
+    this.upper.add(this.armL, this.armR);
+
+    this.body.add(this.legL, this.legR, this.upper);
+    this.group.add(this.body);
+
+    this.haloMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.35,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.halo = new THREE.Mesh(SHARED_RING_GEO, this.haloMat);
+    this.halo.rotation.x = -Math.PI / 2;
+    this.halo.position.y = 0.06;
+    this.halo.scale.setScalar(1.24);
+    this.group.add(this.halo);
+
+    this.dropBeam = new THREE.Mesh(
+      SHARED_MECH_BEAM_GEO,
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.4,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    this.dropBeam.position.y = 18;
+    this.group.add(this.dropBeam);
+
+    this.badge.set('泰坦机甲', {
+      fill: '#ffffff',
+      stroke: '#1e1b4b',
+      pill: '#f59e0b',
+      size: 38,
+    });
+    this.badgeSprite = labelSprite(this.badge, 1.85, 0.54, false);
+    this.badgeSprite.position.set(0, 3.35, 0);
+    this.group.add(this.badgeSprite);
+
+    scene.add(this.group);
+  }
+
+  update(time: number) {
+    const m = this.mech;
+    this.group.position.set(m.x, 0, -m.d);
+    if (m.dropT < 1) {
+      const k = 1 - m.dropT;
+      this.body.position.y = k * k * 28;
+      this.dropBeam.visible = true;
+      (this.dropBeam.material as THREE.MeshBasicMaterial).opacity = Math.max(0.05, k * 0.45);
+      this.halo.scale.setScalar(1.24 * (1 + k * 0.7));
+    } else {
+      const stride = Math.sin(m.phase) * 0.45;
+      this.body.position.y = Math.abs(Math.sin(m.phase)) * 0.09;
+      this.legL.rotation.x = stride;
+      this.legR.rotation.x = -stride;
+      this.dropBeam.visible = false;
+      this.halo.scale.setScalar(1.24 * (1 + Math.sin(time * 5 + m.id) * 0.05));
+    }
+    this.upper.rotation.y = -m.yaw;
+    this.armL.position.z = -0.04 + m.recoil * 0.24;
+    this.armR.position.z = -0.04 + m.recoil * 0.24;
+    const glow = m.recoil * 0.25 + (m.dropT < 1 ? 0.35 : 0);
+    this.mat.emissive.setRGB(glow * 0.18, glow * 0.52, glow * 0.78);
+    this.badgeSprite.position.y = 3.35 + this.body.position.y + Math.sin(time * 3 + m.id) * 0.06;
+  }
+
+  dispose() {
+    this.badge.dispose();
+    this.group.removeFromParent();
+    disposeObject(this.group);
+  }
+}
+
+/** 营救入队的传奇英雄 3D 实体：高大重甲身形 + 专属能量光环 + 名字铭牌 + 大招脉冲高光 */
+export class AllyHeroView {
+  readonly group = new THREE.Group();
+  private readonly mesh: THREE.Mesh;
+  private readonly mat: THREE.MeshStandardMaterial;
+  private readonly halo: THREE.Mesh;
+  private readonly haloMat: THREE.MeshBasicMaterial;
+  private readonly badge = new Label(256, 72);
+  private readonly badgeSprite: THREE.Sprite;
+  private readonly accent = new THREE.Color();
+
+  constructor(
+    scene: THREE.Scene,
+    readonly hero: AllyHero,
+  ) {
+    const info = HERO_INFO[hero.kind];
+    this.accent.set(info.color);
+    this.group.position.set(hero.x, 0, -hero.d);
+    this.group.scale.setScalar(ITEM_SCALE * 1.42);
+
+    this.mat = vertexMat.clone();
+    this.mat.roughness = 0.38;
+    this.mat.metalness = 0.48;
+    this.mat.userData.shared = false;
+
+    this.mesh = new THREE.Mesh(heroGeometry(hero.kind), this.mat);
+    this.mesh.castShadow = true;
+    this.group.add(this.mesh);
+
+    this.haloMat = new THREE.MeshBasicMaterial({
+      color: info.color,
+      transparent: true,
+      opacity: 0.36,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.halo = new THREE.Mesh(SHARED_RING_GEO, this.haloMat);
+    this.halo.rotation.x = -Math.PI / 2;
+    this.halo.position.y = 0.05;
+    this.halo.scale.setScalar(0.72);
+    this.group.add(this.halo);
+
+    this.badge.set(info.name, {
+      fill: '#ffffff',
+      stroke: '#0f172a',
+      pill: info.pill,
+      size: 40,
+    });
+    this.badgeSprite = labelSprite(this.badge, 1.85, 0.52, false);
+    this.badgeSprite.position.set(0, 1.95, 0);
+    this.group.add(this.badgeSprite);
+
+    scene.add(this.group);
+  }
+
+  update(time: number) {
+    const h = this.hero;
+    this.group.position.set(h.x, 0, -h.d);
+    this.mesh.rotation.y = -h.yaw;
+    const stride = Math.abs(Math.sin(h.phase)) * 0.08;
+    this.mesh.position.set(0, stride, h.recoil * 0.16);
+    this.mesh.rotation.z = Math.sin(h.phase) * 0.05;
+
+    const glow = Math.max(h.skillFlash * 0.55, h.recoil * 0.22);
+    this.mat.emissive.copy(this.accent).multiplyScalar(glow);
+    this.halo.scale.setScalar(0.72 * (1 + h.skillFlash * 0.55 + Math.sin(time * 5 + h.id) * 0.06));
+    this.haloMat.opacity = 0.28 + h.skillFlash * 0.4 + Math.sin(time * 4 + h.id) * 0.06;
+    this.badgeSprite.position.y = 1.95 + stride + Math.sin(time * 3.5 + h.id) * 0.05;
+  }
+
+  dispose() {
+    this.badge.dispose();
+    this.group.removeFromParent();
+    disposeObject(this.group);
+  }
+}
+
+/** 桥面空降双管自动加特林炮台 3D 实体：三足底座 + 旋转机匣 + 高速自旋 6 管枪管 + 剩余寿命光环 */
+export class AllyTurretView {
+  readonly group = new THREE.Group();
+  private readonly head = new THREE.Group();
+  private readonly barrel: THREE.Mesh;
+  private readonly mat: THREE.MeshStandardMaterial;
+  private readonly halo: THREE.Mesh;
+  private readonly haloMat: THREE.MeshBasicMaterial;
+
+  constructor(
+    scene: THREE.Scene,
+    readonly turret: AllyTurret,
+  ) {
+    this.group.position.set(turret.x, 0, -turret.d);
+    this.group.scale.setScalar(ITEM_SCALE * 1.15);
+
+    this.mat = vertexMat.clone();
+    this.mat.roughness = 0.4;
+    this.mat.metalness = 0.58;
+    this.mat.userData.shared = false;
+
+    const base = new THREE.Mesh(turretBaseGeometry(), this.mat);
+    base.castShadow = true;
+    this.group.add(base);
+
+    const headMesh = new THREE.Mesh(turretHeadGeometry(), this.mat);
+    headMesh.castShadow = true;
+    this.head.add(headMesh);
+
+    this.barrel = new THREE.Mesh(turretBarrelGeometry(), this.mat);
+    this.barrel.position.set(0, 0.84, -0.32);
+    this.barrel.castShadow = true;
+    this.head.add(this.barrel);
+    this.group.add(this.head);
+
+    this.haloMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.34,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.halo = new THREE.Mesh(SHARED_RING_GEO, this.haloMat);
+    this.halo.rotation.x = -Math.PI / 2;
+    this.halo.position.y = 0.05;
+    this.halo.scale.setScalar(0.82);
+    this.group.add(this.halo);
+
+    scene.add(this.group);
+  }
+
+  update(time: number) {
+    const tu = this.turret;
+    this.group.position.set(tu.x, 0, -tu.d);
+    this.head.rotation.y = -tu.yaw;
+    this.barrel.rotation.z = tu.spin;
+    this.barrel.position.z = -0.32 + tu.recoil * 0.14;
+
+    const ratio = tu.maxLife > 0 ? Math.max(0, Math.min(1, tu.life / tu.maxLife)) : 1;
+    const glow = tu.recoil * 0.3;
+    this.mat.emissive.setRGB(glow * 0.2, glow * 0.55, glow * 0.85);
+    this.halo.scale.setScalar(0.82 * (0.65 + ratio * 0.45));
+    this.haloMat.opacity = ratio < 0.2 ? 0.15 + Math.abs(Math.sin(time * 14)) * 0.45 : 0.26 + Math.sin(time * 4 + tu.id) * 0.06;
+  }
+
+  dispose() {
+    this.group.removeFromParent();
+    disposeObject(this.group);
+  }
+}
+

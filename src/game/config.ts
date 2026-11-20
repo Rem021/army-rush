@@ -159,7 +159,36 @@ export const DEFENSE_VIEW_D = DEFENSE_SPAWN_D + 14;
 /** 防线模式：两条道之间的隔离墙从这里开始，下面是交战区，丧尸会拐过来 */
 export const DEFENSE_WALL_D = 13;
 
-export type GameMode = 'defense' | 'campaign' | 'endless' | 'carnage';
+export type GameMode = 'defense' | 'campaign' | 'endless' | 'blitz' | 'carnage';
+
+export type BlitzStage = 1 | 2;
+
+export interface BlitzStageDef {
+  stage: BlitzStage;
+  name: string;
+  short: string;
+  desc: string;
+  unlock: number;
+}
+
+export const BLITZ_STAGES: readonly BlitzStageDef[] = [
+  {
+    stage: 1,
+    name: '重装坦克道',
+    short: '重装坦克道',
+    desc: '经典三路爽游阵：左路极速固定 +1 传送门、中路高密尸潮+6大 Boss+红油桶、右路轰爆坦克收编参战并横扫满仓神装',
+    unlock: 5,
+  },
+  {
+    stage: 2,
+    name: '广告大乱斗',
+    short: '广告大乱斗',
+    desc: '终极三路大乱斗：左路高速增兵流、中路狂暴尸潮+10大 Boss 连番压境、右路收编黄金天启双管巨坦与全套满级重装加成',
+    unlock: 10,
+  },
+] as const;
+
+export const MAX_BLITZ_COUNT = 160;
 
 export interface ModeDef {
   id: GameMode;
@@ -170,6 +199,7 @@ export interface ModeDef {
 }
 
 export const MODES: ModeDef[] = [
+  { id: 'blitz', name: '广告奇袭', desc: '左路 +1 数字门 · 中路敌军尸潮 · 右路超硬重甲坦克与海量奖励加成（5 关 / 10 关分幕解锁）', unlock: 5 },
   { id: 'carnage', name: '火力狂潮', desc: '图中同款阵列：左侧 +1 蓝门、红军巨人、+99 弹药与多管火箭炮', unlock: 30 },
   { id: 'defense', name: '防线', desc: '原地死守：一边数字门和重甲补给滑过来，一边尸潮和 Boss 涌过来', unlock: 1 },
   { id: 'campaign', name: '冲锋', desc: '一路冲到底，终点有 Boss，第 5 关起双 Boss', unlock: 1 },
@@ -247,8 +277,8 @@ export const UPGRADES: UpgradeDef[] = [
     currency: 'gems',
     value: (l) => `${startSoldiers(l)} 人`,
     max: 25,
-    // 兵力最直接，只能用钻石买（只有最终 Boss 稳定给），越往后越贵
-    cost: (l) => 3 + l + Math.floor((l * l) / 5),
+    // 兵力最直接，只能用钻石买（只有最终 Boss 稳定给），越往后梯度越陡
+    cost: (l) => 3 + l * 2 + Math.floor((l * l) / 2),
     evolutions: GATE_EVOLVE.map((at, i) => ({ at, name: `数字门 +${(i + 1) * 10}%` })),
   },
   {
@@ -257,7 +287,7 @@ export const UPGRADES: UpgradeDef[] = [
     currency: 'coins',
     value: (l) => `+${l * 12}%`,
     max: 40,
-    cost: (l) => Math.round(50 * Math.pow(1.26, l)),
+    cost: (l) => Math.round(70 * Math.pow(1.42, l)),
     evolutions: WEAPON_EVOLVE.map((at, i) => ({ at, name: WEAPONS[i + 1].name })),
   },
   {
@@ -266,7 +296,7 @@ export const UPGRADES: UpgradeDef[] = [
     currency: 'coins',
     value: (l) => `+${l * 8}%`,
     max: 25,
-    cost: (l) => Math.round(60 * Math.pow(1.28, l)),
+    cost: (l) => Math.round(80 * Math.pow(1.44, l)),
     evolutions: AMMO_EVOLVE.map((at, i) => ({ at, name: AMMO[i + 1].name })),
   },
   {
@@ -274,9 +304,9 @@ export const UPGRADES: UpgradeDef[] = [
     name: '金币',
     currency: 'coins',
     value: (l) => `×${(1 + l * 0.08).toFixed(2)}`,
-    // 金币倍数会滚雪球：封顶约 ×2，价格涨得比战斗升级陡
+    // 金币倍数会滚雪球：封顶约 ×2，价格涨得比战斗升级更陡
     max: 12,
-    cost: (l) => Math.round(90 * Math.pow(1.42, l)),
+    cost: (l) => Math.round(130 * Math.pow(1.58, l)),
     evolutions: [],
   },
   {
@@ -285,7 +315,7 @@ export const UPGRADES: UpgradeDef[] = [
     currency: 'coins',
     value: (l) => `+${l * 10}%`,
     max: 15,
-    cost: (l) => Math.round(45 * Math.pow(1.3, l)),
+    cost: (l) => Math.round(65 * Math.pow(1.46, l)),
     evolutions: [{ at: 5, name: '炸弹预警更长' }, { at: 10, name: '炸弹预警再长' }],
   },
 ];

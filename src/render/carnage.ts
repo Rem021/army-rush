@@ -549,6 +549,7 @@ export class ReferenceCarnageView {
       const g = w.gates[k];
       if (g.consumed || g.d < -3 || g.d > 100) continue;
       const isBlue = g.carnage === 'recruit';
+      if (isBlue ? blue >= 180 : gold >= 90) continue;
       const x = (g.x0 + g.x1) / 2;
       const y = isBlue ? 0.55 : 0.95;
       const a = isBlue ? this.blueBoards : this.yellowBoards;
@@ -572,10 +573,10 @@ export class ReferenceCarnageView {
       if (!pod && b.carnage === 'pod') pod = b;
       if (b.d < 100) {
         if (b.carnage === 'battery') {
-          for (let j = 0; j < POD_OFFSETS.length; j++) {
+          for (let j = 0; j < POD_OFFSETS.length && pods < 100; j++) {
             place(this.pods, pods++, b.x + POD_OFFSETS[j][0], POD_OFFSETS[j][1], -b.d, 0.82);
           }
-        } else {
+        } else if (pods < 100) {
           place(this.pods, pods++, b.x, 0, -b.d, 0.95);
         }
       }
@@ -619,7 +620,7 @@ export class ReferenceCarnageView {
 
     this.bullets.update(w.bullets);
     let mi = 0;
-    for (let i = 0; i < w.rockets.length; i++) {
+    for (let i = 0; i < w.rockets.length && mi < 64; i++) {
       const r = w.rockets[i];
       const k = Math.min(1, r.t / r.T);
       const y = 0.8 + Math.sin(k * Math.PI) * 5;

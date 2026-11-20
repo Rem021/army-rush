@@ -1,16 +1,23 @@
 import * as THREE from 'three';
-import { BOSSES, DEFENSE_VIEW_D, MAX_SOLDIERS_SIM, THROW_RADIUS, TRACK_HALF, WEAPONS, ZOMBIES, type SkinDef, type ZombieKind } from '../game/config';
-import type { GameEvent, World, Zombie } from '../game/world';
+import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
+import { AMMO, BOSSES, DEFENSE_VIEW_D, MAX_SOLDIERS_SIM, THROW_RADIUS, TRACK_HALF, WEAPONS, ZOMBIES, type SkinDef, type ZombieKind } from '../game/config';
+import { HERO_INFO, type GameEvent, type World, type Zombie } from '../game/world';
 import type { Models } from './assets';
 import { ReferenceCarnageView } from './carnage';
 import { ModelBossView, bakeSoldierBody, bossModel, buildSoldier, buildZombies, gunStatic, propGeometry, type SoldierKit } from './characters';
 import { Crowd, type AgentPose } from './crowd';
-import { BlobShadows, BulletMesh, Explosions, Flashes, FloatTexts, Particles, Pillar, Rings, Splats, Streaks, ZombieBars } from './effects';
-import { BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, gateColor, stripeTexture } from './entities';
+import { commitInstances } from './dispose';
+import { BlobShadows, BulletMesh, Explosions, Flashes, FloatTexts, LightningBolts, OrbitalBeams, Particles, Pillar, Rings, Splats, Streaks, ZombieBars } from './effects';
+import { AllyHeroView, AllyMechView, AllyTankView, AllyTurretView, BarrelView, BossStrikeView, BossView, GATE_COLORS, GateView, HazardView, ProjectileView, StrikeView, WallsView, gateColor, stripeTexture } from './entities';
 import { Environment } from './environment';
 import { HpBar, formatNumber } from './label';
 import { setGunProvider, soldierBody, soldierLeg } from './models';
-import { zombieBody, zombieLeg } from './props';
+import { droneGeometry, jetGeometry, rocketProjectileGeometry, tankShellGeometry, zombieBody, zombieLeg } from './props';
+import { ITEM_SCALE } from './scale';
 import { VatCrowd } from './vat';
 
 type Pose = AgentPose & { clip?: string; cycle?: number };
@@ -52,7 +59,8 @@ interface Dying {
   yaw: number;
   t: number;
   scale: number;
-  tint?: readonly [number, number, number];
+  /** < 0 表示无着色（己方士兵），>= 0 复用 fillZombieTint 零分配计算 */
+  look: number;
 }
 
 const ZOMBIE_CAPS: Record<ZombieKind, number> = { walker: 700, runner: 360, brute: 90, exploder: 90, giant: 8 };
@@ -68,6 +76,8 @@ const COIN_COLS = [0xffcc33, 0xffe680] as const;
 const TIRES_COLS = [0x2a2a2e, 0x55555c, 0x8f8f96] as const;
 const CAGE_COLS = [0x9aa1aa, 0x3b3f46] as const;
 const CRATE_COLS = [0x5b6b3a, 0x3d4a26, 0xf2c21b] as const;
+const TANK_DEBRIS_COLS = [0x3b4248, 0xff8a1f, 0xffd34d, 0x1e2024] as const;
+const SHIELD_COLS = [0x22d3ee, 0x67e8f9, 0xffffff] as const;
 const WOOD_BARREL_COLS = [0xa8682f, 0x8a5222, 0x6b6f76] as const;
 const CAGE_SPARK_COLS = [0xffffff, 0x9be8a8] as const;
 const EXPLODER_DEBRIS_COLS = [0x8fbf6a, 0xd9ff4a, 0x4d7a35] as const;
@@ -93,6 +103,12 @@ const _heroPos = new THREE.Vector3();
 const _heroLook = new THREE.Vector3();
 const _badge = new THREE.Vector3();
 const _projVec = new THREE.Vector3();
+const _mMat = new THREE.Matrix4();
+const _mQuat = new THREE.Quaternion();
+const _mPos = new THREE.Vector3();
+const _mScale = new THREE.Vector3(1, 1, 1);
+const _mDir = new THREE.Vector3();
+const _mUp = new THREE.Vector3(0, 1, 0);
 const _tint: [number, number, number] = [1, 1, 1];
 const _pairCols: [number, number] = [0xffffff, 0xffffff];
 const _triCols: [number, number, number] = [0xffffff, 0xffe08a, 0xffffff];
@@ -114,16 +130,7 @@ function easeOutBack(t: number): number {
   return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2);
 }
 
-/** 不同丧尸的颜色变化 */
-function zombieTintAlloc(look: number): [number, number, number] {
-  return [0.82 + look * 0.32, 0.9 + ((look * 7) % 1) * 0.18, 1.08 - look * 0.3];
-}
-
-function zombieShadeAlloc(look: number): [number, number, number] {
-  const k = 0.88 + look * 0.24;
-  return [k, k * (0.97 + ((look * 7) % 1) * 0.06), k];
-}
-
+/** 不同丧尸的颜色变化（复用缓冲零分配） */
 function fillZombieTint(look: number, anim: boolean): [number, number, number] {
   if (anim) {
     const k = 0.88 + look * 0.24;
@@ -214,9 +221,39 @@ export class GameRenderer {
   private readonly camLook = new THREE.Vector3();
   private readonly squadPos = new THREE.Vector3();
   private readonly badge: HTMLDivElement;
+  private readonly allyTanks = new Map<number, AllyTankView>();
+  private readonly allyMechs = new Map<number, AllyMechView>();
+  private readonly allyHeroes = new Map<number, AllyHeroView>();
+  private readonly allyTurrets = new Map<number, AllyTurretView>();
+  private readonly lightning: LightningBolts;
+  private readonly orbitalBeams: OrbitalBeams;
+  private readonly composer: EffectComposer | null = null;
+  private readonly bloomPass: UnrealBloomPass | null = null;
+  private readonly envRT: THREE.WebGLRenderTarget | null = null;
+  private readonly blitzDrones: THREE.Mesh[] = [];
+  private readonly shieldAura: THREE.Mesh;
+  private readonly shieldMat: THREE.MeshBasicMaterial;
+  private readonly shieldDome: THREE.Mesh;
+  private readonly shieldDomeMat: THREE.MeshBasicMaterial;
+  private readonly powerAura: THREE.Mesh;
+  private readonly powerAuraMat: THREE.MeshBasicMaterial;
+  private readonly blitzMissiles: THREE.InstancedMesh;
+  private prevBlitzMissiles = 0;
+  private readonly allyShellMesh: THREE.InstancedMesh;
+  private prevAllyShells = 0;
+  private readonly airstrikeJet: THREE.Mesh;
+  private jetT = -1;
+  private jetX = 0;
+  private readonly blitzLanes: THREE.Group;
+  private readonly blitzChevronMesh: THREE.InstancedMesh;
+  private readonly blitzChevronQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, Math.PI / 2));
+  private readonly blitzChevronScale = new THREE.Vector3(1.2, 1.8, 1);
+  private shieldFlash = 0;
+  private ammoName = '';
   private lastBadgeX = NaN;
   private lastBadgeY = NaN;
   private lastBadgeOpacity = '';
+  private lastBadgePulse = 0;
   private time = 0;
   private width = 1;
   private height = 1;
@@ -233,8 +270,31 @@ export class GameRenderer {
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
-    this.renderer.toneMapping = THREE.NoToneMapping;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 0.96;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+
+    // 次世代 PBR 环境反射（IBL）与克制的选择性 HDR 辉光管线（低配自动回退直出）
+    try {
+      const pmrem = new THREE.PMREMGenerator(this.renderer);
+      this.envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
+      this.scene.environment = this.envRT.texture;
+      this.scene.environmentIntensity = 0.36;
+      pmrem.dispose();
+
+      const composer = new EffectComposer(this.renderer);
+      composer.addPass(new RenderPass(this.scene, this.camera));
+      const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.16, 0.3, 1.08);
+      composer.addPass(bloom);
+      composer.addPass(new OutputPass());
+      this.composer = composer;
+      this.bloomPass = bloom;
+    } catch {
+      this.composer = null;
+      this.bloomPass = null;
+    }
 
     canvas.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
@@ -247,9 +307,9 @@ export class GameRenderer {
 
     this.skin = skin;
     this.env = new Environment(this.scene);
-    this.hemi = new THREE.HemisphereLight(0xffffff, 0x9fb3c8, 1.6);
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0x9fb3c8, 0.78);
     this.scene.add(this.hemi);
-    this.sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    this.sun = new THREE.DirectionalLight(0xffffff, 1.88);
     this.sun.castShadow = true;
     const size = mobile ? 1024 : 2048;
     this.sun.shadow.mapSize.set(size, size);
@@ -260,8 +320,8 @@ export class GameRenderer {
     sc.bottom = -14;
     sc.near = 1;
     sc.far = 70;
-    this.sun.shadow.bias = -0.0008;
-    this.sun.shadow.normalBias = 0.02;
+    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.normalBias = 0.025;
     this.scene.add(this.sun, this.sun.target);
 
     // 有外部模型就用烘焙动画的实例网格，没有就退回代码生成的小人
@@ -296,12 +356,14 @@ export class GameRenderer {
     this.sparks = new Particles(
       this.scene,
       new THREE.OctahedronGeometry(1, 0),
-      new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }),
       1000,
     );
-    this.debris = new Particles(this.scene, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshLambertMaterial(), 1100);
+    this.debris = new Particles(this.scene, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.65, metalness: 0.25 }), 1100);
     this.rings = new Rings(this.scene);
     this.pillar = new Pillar(this.scene);
+    this.lightning = new LightningBolts(this.scene);
+    this.orbitalBeams = new OrbitalBeams(this.scene);
     this.streaks = new Streaks(this.scene);
     this.flashes = new Flashes(this.scene);
     this.impacts = new Flashes(this.scene, 48);
@@ -318,6 +380,137 @@ export class GameRenderer {
     this.texts = new FloatTexts(fxLayer);
     this.walls = new WallsView(this.scene);
 
+    // 广告奇袭专属 3D 表现：护航无人机、3D 能量护盾罩、火力光环、追踪导弹、友军重炮弹、空袭战机与左路极速传送带箭头
+    const droneGeo = droneGeometry(0.95 * ITEM_SCALE);
+    const droneMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.36, metalness: 0.58 });
+    for (let i = 0; i < 6; i++) {
+      const mesh = new THREE.Mesh(droneGeo, droneMat);
+      mesh.castShadow = true;
+      mesh.visible = false;
+      this.scene.add(mesh);
+      this.blitzDrones.push(mesh);
+    }
+    this.shieldMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.28,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.shieldAura = new THREE.Mesh(new THREE.RingGeometry(0.86, 1.06, 36), this.shieldMat);
+    this.shieldAura.rotation.x = -Math.PI / 2;
+    this.shieldAura.position.y = 0.08;
+    this.shieldAura.visible = false;
+    this.scene.add(this.shieldAura);
+
+    this.shieldDomeMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.09,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.shieldDome = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.5), this.shieldDomeMat);
+    this.shieldDome.position.y = 0.04;
+    this.shieldDome.visible = false;
+    this.scene.add(this.shieldDome);
+
+    this.powerAuraMat = new THREE.MeshBasicMaterial({
+      color: 0xf97316,
+      transparent: true,
+      opacity: 0.24,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    this.powerAura = new THREE.Mesh(new THREE.RingGeometry(0.68, 0.94, 32), this.powerAuraMat);
+    this.powerAura.rotation.x = -Math.PI / 2;
+    this.powerAura.position.y = 0.05;
+    this.powerAura.visible = false;
+    this.scene.add(this.powerAura);
+
+    this.blitzMissiles = new THREE.InstancedMesh(
+      rocketProjectileGeometry(1.1 * ITEM_SCALE),
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.35,
+        metalness: 0.55,
+        emissive: 0x0ea5e9,
+        emissiveIntensity: 0.35,
+      }),
+      48,
+    );
+    this.blitzMissiles.frustumCulled = false;
+    this.blitzMissiles.count = 0;
+    this.blitzMissiles.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(this.blitzMissiles);
+
+    this.allyShellMesh = new THREE.InstancedMesh(
+      tankShellGeometry(1.15 * ITEM_SCALE),
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.35,
+        metalness: 0.6,
+        emissive: 0xd97706,
+        emissiveIntensity: 0.35,
+      }),
+      40,
+    );
+    this.allyShellMesh.frustumCulled = false;
+    this.allyShellMesh.count = 0;
+    this.allyShellMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    this.scene.add(this.allyShellMesh);
+
+    this.airstrikeJet = new THREE.Mesh(jetGeometry(), new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.35, metalness: 0.65 }));
+    this.airstrikeJet.scale.setScalar(ITEM_SCALE);
+    this.airstrikeJet.castShadow = true;
+    this.airstrikeJet.visible = false;
+    this.scene.add(this.airstrikeJet);
+
+    this.blitzLanes = new THREE.Group();
+    const laneMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, transparent: true, opacity: 0.26, depthWrite: false });
+    const dashGeo = new THREE.PlaneGeometry(0.12, 2.2);
+    const dashQuat = new THREE.Quaternion().setFromEuler(new THREE.Euler(-Math.PI / 2, 0, 0));
+    const dashMesh = new THREE.InstancedMesh(dashGeo, laneMat, 40);
+    let di = 0;
+    for (const lx of [-1.85, 1.85]) {
+      for (let d = -2; d < 64; d += 4.2) {
+        _mPos.set(lx, 0.025, -d);
+        _mMat.compose(_mPos, dashQuat, _mScale);
+        dashMesh.setMatrixAt(di++, _mMat);
+      }
+    }
+    dashMesh.count = di;
+    dashMesh.frustumCulled = false;
+    dashMesh.instanceMatrix.needsUpdate = true;
+    this.blitzLanes.add(dashMesh);
+
+    // 左路高速 +1 传送带流动箭头（单次实例化合批渲染，节省 11 个 Draw Call）
+    const chevMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
+    const chevGeo = new THREE.RingGeometry(0.45, 0.68, 3);
+    this.blitzChevronMesh = new THREE.InstancedMesh(chevGeo, chevMat, 12);
+    this.blitzChevronMesh.frustumCulled = false;
+    this.blitzChevronMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    for (let i = 0; i < 12; i++) {
+      _mPos.set(-3.6, 0.03, -i * 5.2);
+      _mMat.compose(_mPos, this.blitzChevronQuat, this.blitzChevronScale);
+      this.blitzChevronMesh.setMatrixAt(i, _mMat);
+    }
+    this.blitzChevronMesh.count = 12;
+    this.blitzChevronMesh.instanceMatrix.needsUpdate = true;
+    this.blitzLanes.add(this.blitzChevronMesh);
+    this.blitzLanes.visible = false;
+    this.scene.add(this.blitzLanes);
+
     this.badge = document.createElement('div');
     this.badge.className = 'squad-badge';
     fxLayer.appendChild(this.badge);
@@ -333,15 +526,21 @@ export class GameRenderer {
     this.basePixelRatio = Math.max(0.5, Math.min(window.devicePixelRatio || 1, this.mobile ? 2 : 1.5, budget));
     this.applyPixelRatio();
     this.renderer.setSize(w, h, false);
+    this.composer?.setSize(w, h);
+    // Bloom 在半分辨率下计算，视觉柔和一致且 GPU 填充率直降 75%
+    this.bloomPass?.resolution.set(Math.max(1, Math.floor(w * 0.5)), Math.max(1, Math.floor(h * 0.5)));
+    this.renderer.shadowMap.needsUpdate = true;
     this.camera.aspect = w / h;
-    this.camera.fov = w / h < 0.8 ? 68 : w / h < 1.2 ? 60 : 53;
+    this.camera.fov = w / h < 0.8 ? 58 : w / h < 1.2 ? 50 : 44;
     this.camera.updateProjectionMatrix();
     this.referenceCarnage?.resize(w, h);
   }
 
   private applyPixelRatio() {
-    const k = [1, 0.8, 0.62][this.quality];
-    this.renderer.setPixelRatio(Math.max(0.5, this.basePixelRatio * k));
+    const k = [1, 0.85, 0.65][this.quality];
+    const pr = Math.max(0.5, this.basePixelRatio * k);
+    this.renderer.setPixelRatio(pr);
+    this.composer?.setPixelRatio(pr);
   }
 
   /** 每帧报一次真实帧间隔（秒）：持续掉帧就降一档，稳住了再慢慢升回来 */
@@ -366,6 +565,9 @@ export class GameRenderer {
     this.quality = q;
     this.applyPixelRatio();
     this.renderer.setSize(this.width, this.height, false);
+    this.composer?.setSize(this.width, this.height);
+    this.bloomPass?.resolution.set(Math.max(1, Math.floor(this.width * 0.5)), Math.max(1, Math.floor(this.height * 0.5)));
+    this.renderer.shadowMap.needsUpdate = true;
     const shadows = q < 2;
     if (this.sun.castShadow !== shadows) {
       this.sun.castShadow = shadows;
@@ -426,18 +628,40 @@ export class GameRenderer {
     this.gatePopAt.clear();
     this.splats.clear();
     this.explosions.clear();
+    this.lightning.clear();
+    this.orbitalBeams.clear();
     this.texts.clear();
+    for (const v of this.allyTanks.values()) v.dispose();
+    this.allyTanks.clear();
+    for (const v of this.allyMechs.values()) v.dispose();
+    this.allyMechs.clear();
+    for (const v of this.allyHeroes.values()) v.dispose();
+    this.allyHeroes.clear();
+    for (const v of this.allyTurrets.values()) v.dispose();
+    this.allyTurrets.clear();
+    for (let i = 0; i < this.blitzDrones.length; i++) this.blitzDrones[i].visible = false;
+    this.shieldAura.visible = false;
+    this.shieldDome.visible = false;
+    this.powerAura.visible = false;
+    this.airstrikeJet.visible = false;
+    this.jetT = -1;
+    this.shieldFlash = 0;
+    this.prevBlitzMissiles = commitInstances(this.blitzMissiles, 0, this.prevBlitzMissiles);
+    this.prevAllyShells = commitInstances(this.allyShellMesh, 0, this.prevAllyShells);
   }
 
   loadLevel(world: World) {
     this.world = world;
     this.clearNormalViews();
+    this.renderer.shadowMap.needsUpdate = true;
     this.lastBadgeOpacity = '';
+    this.blitzLanes.visible = world.spec.mode === 'blitz';
     if (world.spec.mode === 'carnage') {
       this.referenceCarnage ??= new ReferenceCarnageView(this.models, this.fxLayer, this.soldierKit);
       this.referenceCarnage.load(world);
       this.referenceCarnage.resize(this.width, this.height);
       this.badge.style.opacity = '0';
+      this.lastBadgeOpacity = '0';
       return;
     }
     this.referenceCarnage?.clearEffects();
@@ -458,6 +682,7 @@ export class GameRenderer {
     this.bossBlend = 0;
     this.menuBlend = this.menu ? 1 : 0;
     this.tier = -1;
+    this.ammoName = '';
     this.syncTier(world.squad.tier);
     this.badge.style.setProperty('--team', `#${this.skin.team.toString(16).padStart(6, '0')}`);
     this.placeCamera(world, 1, 0);
@@ -491,7 +716,13 @@ export class GameRenderer {
         this.scene.add(v.group);
       }
     }
-    for (const [id, v] of this.gates) if (!seen.has(id)) (this.dropView(v.group, v), this.gates.delete(id));
+    for (const [id, v] of this.gates) {
+      if (!seen.has(id)) {
+        this.dropView(v.group, v);
+        this.gates.delete(id);
+        this.gatePopAt.delete(id);
+      }
+    }
 
     seen.clear();
     for (let i = 0; i < w.barrels.length; i++) {
@@ -516,6 +747,46 @@ export class GameRenderer {
       }
     }
     for (const [id, v] of this.hazards) if (!seen.has(id)) (this.dropView(v.group, v), this.hazards.delete(id));
+
+    seen.clear();
+    for (let i = 0; i < w.allyTanks.length; i++) {
+      const t = w.allyTanks[i];
+      seen.add(t.id);
+      if (!this.allyTanks.has(t.id)) {
+        this.allyTanks.set(t.id, new AllyTankView(this.scene, t));
+      }
+    }
+    for (const [id, v] of this.allyTanks) if (!seen.has(id)) (v.dispose(), this.allyTanks.delete(id));
+
+    seen.clear();
+    for (let i = 0; i < w.allyMechs.length; i++) {
+      const m = w.allyMechs[i];
+      seen.add(m.id);
+      if (!this.allyMechs.has(m.id)) {
+        this.allyMechs.set(m.id, new AllyMechView(this.scene, m));
+      }
+    }
+    for (const [id, v] of this.allyMechs) if (!seen.has(id)) (v.dispose(), this.allyMechs.delete(id));
+
+    seen.clear();
+    for (let i = 0; i < w.allyHeroes.length; i++) {
+      const h = w.allyHeroes[i];
+      seen.add(h.id);
+      if (!this.allyHeroes.has(h.id)) {
+        this.allyHeroes.set(h.id, new AllyHeroView(this.scene, h));
+      }
+    }
+    for (const [id, v] of this.allyHeroes) if (!seen.has(id)) (v.dispose(), this.allyHeroes.delete(id));
+
+    seen.clear();
+    for (let i = 0; i < w.allyTurrets.length; i++) {
+      const tu = w.allyTurrets[i];
+      seen.add(tu.id);
+      if (!this.allyTurrets.has(tu.id)) {
+        this.allyTurrets.set(tu.id, new AllyTurretView(this.scene, tu));
+      }
+    }
+    for (const [id, v] of this.allyTurrets) if (!seen.has(id)) (v.dispose(), this.allyTurrets.delete(id));
   }
 
   private makeBossView(b: World['bosses'][number], dropIn: boolean): BossView | ModelBossView {
@@ -536,8 +807,9 @@ export class GameRenderer {
 
   private syncTier(rawTier: number) {
     const tier = Math.max(0, Math.min(WEAPONS.length - 1, rawTier));
-    if (tier === this.tier) return;
-    if (this.tier >= 0 && tier > this.tier && this.world) {
+    const curAmmo = this.world?.ammo.name ?? '';
+    if (tier === this.tier && curAmmo === this.ammoName) return;
+    if (tier !== this.tier && this.tier >= 0 && tier > this.tier && this.world) {
       this.tierFlash = 1;
       if (this.reducedMotion) {
         this.weaponCueAge = this.weaponCueDuration;
@@ -557,13 +829,16 @@ export class GameRenderer {
       this.sparks.burst(sq.x, 1.2, -sq.d, 60, 11, 0.9, 0.16, _pairCols, 4, 0.8);
       this.shake(0.12);
     }
-    this.tier = tier;
-    if (this.soldierKit && this.players instanceof SquadHerd) {
-      this.players.gun.setModel(this.soldierKit.guns[tier]);
-      this.muzzle = this.soldierKit.muzzles[tier];
-    } else if (this.players instanceof Crowd) {
-      this.players.setGeometry(soldierBody(this.skin, tier), soldierLeg(this.skin.team));
+    if (tier !== this.tier) {
+      this.tier = tier;
+      if (this.soldierKit && this.players instanceof SquadHerd) {
+        this.players.gun.setModel(this.soldierKit.guns[tier]);
+        this.muzzle = this.soldierKit.muzzles[tier];
+      } else if (this.players instanceof Crowd) {
+        this.players.setGeometry(soldierBody(this.skin, tier), soldierLeg(this.skin.team));
+      }
     }
+    this.ammoName = curAmmo;
     const ammoColor = this.world?.ammo.color ?? null;
     this.bullets.setColor(WEAPONS[tier].color, tier, ammoColor ?? WEAPONS[tier].color);
     this.flashes.setColor(WEAPONS[tier].color);
@@ -629,12 +904,29 @@ export class GameRenderer {
           }
           break;
         }
+        case 'gateFlip': {
+          const g = e.gate;
+          const x = (g.x0 + g.x1) / 2;
+          this.texts.spawn(`红转蓝反转！+${e.bonus}${g.kind === 'rate' ? '%' : ''}`, x, 3.1, -g.d, 'big gold', 1.35, 1.7);
+          this.rings.spawn(x, -g.d, 5.2, 0x22c55e, 0.55);
+          this.rings.spawn(x, -g.d, 3.2, 0xfacc15, 0.42);
+          _triCols[0] = 0x22c55e;
+          _triCols[1] = 0xfacc15;
+          _triCols[2] = 0xffffff;
+          this.sparks.burst(x, 1.6, -g.d + 0.2, 32, 9.5, 0.7, 0.14, _triCols, 6, 0.65);
+          this.shake(0.2);
+          break;
+        }
         case 'gatePass': {
           const g = e.gate;
           let text: string;
           let good: boolean;
           let color: number;
-          if (g.kind === 'weapon') {
+          if (g.kind === 'mystery') {
+            good = true;
+            text = '幸运盲盒！';
+            color = GATE_COLORS.mystery;
+          } else if (g.kind === 'weapon') {
             good = e.after > e.before;
             text = good ? `${WEAPONS[e.after].name}!` : '武器没变';
             color = GATE_COLORS.weapon;
@@ -648,7 +940,7 @@ export class GameRenderer {
             text = g.kind === 'mul' ? `×${g.value}` : good ? `+${delta}` : String(delta);
             color = g.kind === 'mul' ? GATE_COLORS.mul : good ? GATE_COLORS.good : GATE_COLORS.bad;
           }
-          this.texts.spawn(text, sq.x, 2.6, -sq.d, g.kind === 'weapon' && good ? 'big gold' : good ? 'big good' : 'big bad', 1.2, 2);
+          this.texts.spawn(text, sq.x, 2.6, -sq.d, (g.kind === 'weapon' || g.kind === 'mystery') && good ? 'big gold' : good ? 'big good' : 'big bad', 1.2, 2);
           _pairCols[0] = color;
           _pairCols[1] = 0xffffff;
           this.debris.burst((g.x0 + g.x1) / 2, 1.2, -g.d, 20, 8, 0.72, 0.17, _pairCols, 18, 0.55);
@@ -674,15 +966,15 @@ export class GameRenderer {
             vd: 1.6 + Math.random() * 1.4,
             yaw: Math.PI + (Math.random() - 0.5) * 0.45,
             t: 0,
-            scale: def.scale,
-            tint: this.zombies[e.kind] instanceof VatCrowd ? zombieShadeAlloc(e.look) : zombieTintAlloc(e.look),
+            scale: def.scale * ITEM_SCALE,
+            look: e.look,
           });
-          this.impacts.spawn(e.x, 0.75 * def.scale, -e.d + 0.25, 0.55 * big);
-          this.debris.burst(e.x, 0.75 * def.scale, -e.d, Math.round(5 * big), 5.2 * big, 0.55, 0.12 * big, ZOMBIE_DIE_COLS, 19);
-          if (Math.random() < 0.82) this.splats.spawn(e.x, -e.d, def.scale * (e.kind === 'giant' ? 1.75 : 1.22), e.kind === 'exploder' ? 0xb8e04a : 0x5f8f3a);
-          if (e.coins > 0 && Math.random() < 0.6) this.debris.burst(e.x, 1.1, -e.d, Math.min(7, e.coins), 4.6, 0.72, 0.15, COIN_COLS, 22, 0.85);
+          this.impacts.spawn(e.x, 0.75 * def.scale * ITEM_SCALE, -e.d + 0.25, 0.55 * big * ITEM_SCALE);
+          this.debris.burst(e.x, 0.75 * def.scale * ITEM_SCALE, -e.d, Math.round(5 * big), 5.2 * big, 0.55, 0.12 * big * ITEM_SCALE, ZOMBIE_DIE_COLS, 19);
+          if (Math.random() < 0.82) this.splats.spawn(e.x, -e.d, def.scale * ITEM_SCALE * (e.kind === 'giant' ? 1.75 : 1.22), e.kind === 'exploder' ? 0xb8e04a : 0x5f8f3a);
+          if (e.coins > 0 && Math.random() < 0.6) this.debris.burst(e.x, 1.1 * ITEM_SCALE, -e.d, Math.min(7, e.coins), 4.6, 0.72, 0.15 * ITEM_SCALE, COIN_COLS, 22, 0.85);
           if (e.kind === 'giant') {
-            this.explosions.spawn(e.x, 1.5, -e.d, 2.4);
+            this.explosions.spawn(e.x, 1.5 * ITEM_SCALE, -e.d, 2.4 * ITEM_SCALE);
             this.rings.spawn(e.x, -e.d, 5.5, 0xff9f1c, 0.5);
             this.shake(0.45);
           } else if (e.kind === 'brute') {
@@ -692,46 +984,113 @@ export class GameRenderer {
           break;
         }
         case 'soldierDie': {
-          this.dyingPlayers.push({ x: e.x, y: 0, d: e.d, vx: (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 2, vd: -2 - Math.random() * 2, yaw: 0, t: 0, scale: 1 });
+          this.dyingPlayers.push({ x: e.x, y: 0, d: e.d, vx: (Math.random() - 0.5) * 3, vy: 3 + Math.random() * 2, vd: -2 - Math.random() * 2, yaw: 0, t: 0, scale: ITEM_SCALE, look: -1 });
           _pairCols[0] = this.skin.team;
           _pairCols[1] = this.skin.shirt;
-          this.debris.burst(e.x, 0.7, -e.d, 2, 3, 0.5, 0.1, _pairCols, 18);
+          this.debris.burst(e.x, 0.7 * ITEM_SCALE, -e.d, 2, 3, 0.5, 0.1 * ITEM_SCALE, _pairCols, 18);
           break;
         }
         case 'barrelBreak': {
           const b = e.barrel;
           const view = this.barrels.get(b.id);
           const colors =
-            b.look === 'tires' ? TIRES_COLS : b.look === 'cage' ? CAGE_COLS : b.look === 'crate' ? CRATE_COLS : WOOD_BARREL_COLS;
-          this.debris.burst(b.x, 1, -b.d, 26, 9, 1.1, 0.28, colors, 22, 0.5);
-          if (b.look !== 'cage') this.explosions.spawn(b.x, 1, -b.d, 1.8);
-          else this.sparks.burst(b.x, 1, -b.d, 24, 7, 0.6, 0.18, CAGE_SPARK_COLS, 4, 0.6);
-          this.rings.spawn(b.x, -b.d, 5, 0xffb347, 0.45);
-          this.shake(0.3);
-          view?.startFly();
-          if (b.block && w.defense) {
-            const x0 = w.defense.gateSide < 0 ? -TRACK_HALF : 0.3;
-            this.streaks.burst(x0, x0 + TRACK_HALF - 0.3, -(b.d + 40), -b.d, 46, 34);
-            this.texts.spawn('冲啊！', b.x, 2.2, -(b.d - 6), 'big good', 0.8, 1.4);
+            b.tank ? TANK_DEBRIS_COLS : b.look === 'tires' ? TIRES_COLS : b.look === 'cage' ? CAGE_COLS : b.look === 'crate' ? CRATE_COLS : WOOD_BARREL_COLS;
+          const isPickup = b.blitzLane === 'right' && !b.tank;
+          if (b.tank) {
+            this.debris.burst(b.x, 1.2, -b.d, 44, 12, 1.4, 0.34, colors, 20, 0.65);
+            this.sparks.burst(b.x, 1.5, -b.d, 42, 11, 0.9, 0.22, SHIELD_COLS, 6, 0.6);
+            this.explosions.spawn(b.x, 1.3, -b.d, 3.6);
+            this.rings.spawn(b.x, -b.d, 10.5, 0x38bdf8, 0.72);
+            this.rings.spawn(b.x, -b.d, 7.5, 0xffd34d, 0.55);
+            this.shake(0.58);
+            this.streaks.burst(b.x - 1.6, b.x + 1.6, -(b.d + 36), -b.d, 40, 34);
+          } else if (isPickup) {
+            this.rings.spawn(b.x, -b.d, 3.8, 0x38bdf8, 0.38);
+            this.sparks.burst(b.x, 1.1, -b.d, 22, 7.5, 0.55, 0.15, WEAPON_UP_COLS, 8, 0.48);
+            this.shake(0.1);
+          } else {
+            this.debris.burst(b.x, 1, -b.d, 26, 9, 1.1, 0.28, colors, 22, 0.5);
+            if (b.look !== 'cage') this.explosions.spawn(b.x, 1, -b.d, 1.8);
+            else this.sparks.burst(b.x, 1, -b.d, 24, 7, 0.6, 0.18, CAGE_SPARK_COLS, 4, 0.6);
+            this.rings.spawn(b.x, -b.d, 5, 0xffb347, 0.45);
+            this.shake(0.3);
+            if (b.block && w.defense) {
+              const x0 = w.defense.gateSide < 0 ? -TRACK_HALF : 0.3;
+              this.streaks.burst(x0, x0 + TRACK_HALF - 0.3, -(b.d + 40), -b.d, 46, 34);
+              this.texts.spawn('冲啊！', b.x, 2.2, -(b.d - 6), 'big good', 0.8, 1.4);
+            }
           }
+          view?.startFly();
           break;
         }
         case 'reward': {
           const r = e.reward;
+          const pw = Math.max(1.5, w.halfWidth + 0.6);
           if (r.kind === 'weapon') {
             if (e.upgraded) {
               this.texts.spawn(`${WEAPONS[r.tier].name}!`, sq.x, 2.8, -sq.d, 'big gold', 1.4, 1.8);
-              this.rings.spawn(sq.x, -sq.d, 3.6, 0xffd34d, 0.5);
-              this.sparks.burst(sq.x, 1.0, -sq.d, 30, 8, 0.7, 0.14, WEAPON_UP_COLS, 8, 0.5);
+              this.pillar.spawn(sq.x, -sq.d, pw, 0xffd34d);
+              this.rings.spawn(sq.x, -sq.d, 4.4, 0xffd34d, 0.52);
+              this.sparks.burst(sq.x, 1.0, -sq.d, 34, 8.5, 0.75, 0.15, WEAPON_UP_COLS, 8, 0.55);
+              this.shake(0.16);
             }
           } else if (r.kind === 'soldiers') {
             this.texts.spawn(`+${r.amount}`, sq.x, 2.6, -sq.d, 'big good', 1.2, 1.8);
+            this.rings.spawn(sq.x, -sq.d, 3.4, 0x22c55e, 0.4);
           } else if (r.kind === 'coins') {
             this.texts.spawn(`+${r.amount} 金币`, e.x, 2.5, -e.d, 'gold', 1.2, 1.5);
           } else if (r.kind === 'rate') {
-            this.texts.spawn(`射速 +${r.amount}%`, sq.x, 2.6, -sq.d, 'big good', 1.2, 1.8);
+            this.texts.spawn(`射速 +${r.amount}%`, sq.x, 2.8, -sq.d, 'big good', 1.25, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0x14c8e0);
+            this.rings.spawn(sq.x, -sq.d, 4.2, 0x14c8e0, 0.48);
+            this.sparks.burst(sq.x, 1.1, -sq.d, 22, 7.5, 0.6, 0.13, SHIELD_COLS, 6, 0.5);
+          } else if (r.kind === 'drone') {
+            this.texts.spawn(`导弹无人机 +${r.amount}!`, sq.x, 3.1, -sq.d, 'big gold', 1.35, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0x38bdf8);
+            this.rings.spawn(sq.x, -sq.d, 4.8, 0x38bdf8, 0.52);
+            this.sparks.burst(sq.x, 1.8, -sq.d, 28, 8.5, 0.7, 0.14, SHIELD_COLS, 4, 0.55);
+            this.shake(0.16);
+          } else if (r.kind === 'multishot') {
+            this.texts.spawn(e.upgraded ? `扇形弹道 ×${w.blitz.multishot}!` : '弹道已满', sq.x, 3.1, -sq.d, 'big gold', 1.4, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0xa855f7);
+            this.rings.spawn(sq.x, -sq.d, 5.2, 0xa855f7, 0.56);
+            _triCols[0] = 0xa855f7;
+            _triCols[1] = 0xfacc15;
+            _triCols[2] = 0xffffff;
+            this.sparks.burst(sq.x, 1.2, -sq.d, 32, 9.5, 0.75, 0.15, _triCols, 6, 0.55);
+            this.shake(0.18);
+          } else if (r.kind === 'ammo') {
+            const ammoDef = AMMO[Math.min(AMMO.length - 1, Math.max(0, r.level))];
+            const ac = ammoDef.color ?? 0x38bdf8;
+            this.texts.spawn(`${ammoDef.name}装填!`, sq.x, 3.1, -sq.d, 'big gold', 1.35, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, ac);
+            this.rings.spawn(sq.x, -sq.d, 4.8, ac, 0.55);
+            _pairCols[0] = ac;
+            _pairCols[1] = 0xffffff;
+            this.sparks.burst(sq.x, 1.1, -sq.d, 30, 9, 0.7, 0.15, _pairCols, 6, 0.55);
+            this.shake(0.16);
+          } else if (r.kind === 'damage') {
+            this.texts.spawn(`狂暴火力 +${r.amount}%!`, sq.x, 3.0, -sq.d, 'big gold', 1.35, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0xf97316);
+            this.rings.spawn(sq.x, -sq.d, 4.8, 0xf97316, 0.52);
+            this.sparks.burst(sq.x, 1.1, -sq.d, 30, 9, 0.7, 0.15, BOSS_SPARK_COLS, 6, 0.55);
+            this.shake(0.16);
+          } else if (r.kind === 'shield') {
+            this.shieldFlash = 1;
+            this.texts.spawn(`能量护盾 +${r.amount}!`, sq.x, 3.0, -sq.d, 'big good', 1.3, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0x22d3ee);
+            this.rings.spawn(sq.x, -sq.d, 5.0, 0x22d3ee, 0.55);
+            this.sparks.burst(sq.x, 1.2, -sq.d, 26, 8, 0.65, 0.14, SHIELD_COLS, 5, 0.55);
+          } else if (r.kind === 'boom') {
+            this.texts.spawn('爆破清场!', e.x, 2.9, -e.d, 'big gold', 1.3, 1.6);
+            this.pillar.spawn(e.x, -e.d, 2.4, 0xff5a1f);
+          } else if (r.kind === 'freeze' || r.kind === 'hero' || r.kind === 'turret' || r.kind === 'mystery') {
+            // 专属 VFX 由 cryoNova / heroJoin / turretDeploy / mysteryRoll 事件独立触发
           } else {
-            this.texts.spawn('空袭！', sq.x, 3, -sq.d, 'big gold', 1.2, 1.8);
+            this.texts.spawn('战机空袭！', sq.x, 3.2, -sq.d, 'big gold', 1.4, 1.8);
+            this.pillar.spawn(sq.x, -sq.d, pw, 0xff5a3a);
+            this.rings.spawn(sq.x, -sq.d, 5.5, 0xff5a3a, 0.55);
+            this.shake(0.24);
           }
           break;
         }
@@ -787,6 +1146,50 @@ export class GameRenderer {
           this.bosses.find((b) => b.boss === e.boss)?.thrown();
           break;
         }
+        case 'tankFire': {
+          this.projectiles.set(e.proj.id, new ProjectileView(this.scene, e.proj, THROW_RADIUS, null));
+          const tb = e.barrel;
+          this.flashes.spawn(tb.x, 1.4 * ITEM_SCALE, -(tb.d - (tb.r + 0.8) * ITEM_SCALE), 1.6 * ITEM_SCALE);
+          this.sparks.burst(tb.x, 1.4 * ITEM_SCALE, -(tb.d - (tb.r + 0.6) * ITEM_SCALE), 14, 7.5, 0.4, 0.12 * ITEM_SCALE, BOSS_SPARK_COLS, 8, 0.45);
+          this.shake(0.14);
+          break;
+        }
+        case 'tankCapture': {
+          this.pillar.spawn(e.fromX, -e.fromD, 2.4 * ITEM_SCALE, 0x38bdf8);
+          this.rings.spawn(e.fromX, -e.fromD, 7.5 * ITEM_SCALE, 0x38bdf8, 0.65);
+          this.sparks.burst(e.fromX, 1.4 * ITEM_SCALE, -e.fromD, 36, 10, 0.85, 0.16 * ITEM_SCALE, SHIELD_COLS, 5, 0.65);
+          this.texts.spawn(`${e.tank.name} 入队参战！`, e.fromX, 2.6 * ITEM_SCALE, -(e.fromD - 3), 'big good', 1.45, 1.7);
+          break;
+        }
+        case 'allyTankFire': {
+          const at = e.tank;
+          this.flashes.spawn(at.x, 1.1 * ITEM_SCALE, -(at.d + (at.r + 0.9) * ITEM_SCALE), 1.5 * ITEM_SCALE);
+          this.sparks.burst(at.x, 1.1 * ITEM_SCALE, -(at.d + (at.r + 0.7) * ITEM_SCALE), 10, 7, 0.35, 0.11 * ITEM_SCALE, BOSS_SPARK_COLS, 6, 0.35);
+          this.shake(0.08);
+          break;
+        }
+        case 'allyShellHit': {
+          const r = e.r;
+          this.explosions.spawn(e.x, 0.9, -e.d, r * 0.95);
+          this.rings.spawn(e.x, -e.d, r * 2.1, e.tier >= 3 ? 0xfacc15 : 0xff8a1f, 0.42);
+          this.sparks.burst(e.x, 1.0, -e.d, 20, 9.5, 0.6, 0.14, BOSS_SPARK_COLS, 8, 0.45);
+          this.debris.burst(e.x, 0.6, -e.d, 12, 7.5, 0.7, 0.16, IMPACT_DEBRIS_COLS, 20, 0.5);
+          this.shake(0.15);
+          break;
+        }
+        case 'airstrikeLaunch': {
+          this.jetT = 0;
+          this.jetX = Math.max(-2.5, Math.min(2.5, e.x * 0.5));
+          this.airstrikeJet.visible = true;
+          this.shake(0.22);
+          break;
+        }
+        case 'shieldBlock': {
+          this.shieldFlash = 1;
+          this.sparks.burst(e.x, 0.9, -e.d, 14, 6.5, 0.45, 0.12, SHIELD_COLS, 8, 0.45);
+          this.rings.spawn(e.x, -e.d, 3.4, 0x22d3ee, 0.38);
+          break;
+        }
         case 'hiveSpawn': {
           const b = e.boss;
           this.debris.burst(b.x, 1.5, -(b.d - b.r), 18, 6, 0.6, 0.16, HIVE_COLS, 16, 0.5);
@@ -810,20 +1213,17 @@ export class GameRenderer {
           break;
         }
         case 'carnageBlast': {
-          const color = e.nova ? 0x9dfaff : 0xffa340;
+          const color = e.nova ? 0x9dfaff : 0x38bdf8;
           if (!e.nova) {
-            this.explosions.spawn(e.x, 0.8, -e.d, 3, false);
-            this.streaks.burst(e.x - 0.4, e.x + 0.4, -e.d + 8, -e.d + 2, 6, -25);
+            this.explosions.spawn(e.x, 0.8, -e.d, 2.4, false);
           }
-          this.rings.spawn(e.x, -e.d, e.nova ? 40 : e.r * 2, color, e.nova ? 1 : 0.5);
-          this.rings.spawn(e.x, -e.d, e.nova ? 25 : e.r, 0xd59bff, 0.65);
+          this.rings.spawn(e.x, -e.d, e.nova ? 40 : e.r * 2, color, e.nova ? 1 : 0.45);
           _triCols[0] = color;
-          _triCols[1] = 0xd59bff;
+          _triCols[1] = 0xffd34d;
           _triCols[2] = 0xffffff;
-          this.sparks.burst(e.x, 1, -e.d, this.reducedMotion ? 12 : e.nova ? 100 : 28, e.nova ? 20 : 9, 0.7, 0.16, _triCols, 10, 0.6);
-          this.impacts.spawn(e.x, 1, -e.d, e.nova ? 10 : 4);
-          this.shake(e.nova ? 0.35 : 0.1);
-          if (e.nova) this.texts.spawn('全 域 超 载', 0, 3, -18, 'big gold', 1.2, 1);
+          this.sparks.burst(e.x, 1, -e.d, this.reducedMotion ? 8 : e.nova ? 100 : 18, e.nova ? 20 : 8, 0.6, 0.14, _triCols, 10, 0.5);
+          this.impacts.spawn(e.x, 1, -e.d, e.nova ? 10 : 3.2);
+          this.shake(e.nova ? 0.35 : 0.08);
           break;
         }
         case 'splash': {
@@ -836,14 +1236,163 @@ export class GameRenderer {
         }
         case 'blocked': {
           const b = e.barrel;
-          this.texts.spawn('打掉它！', b.x, 0.6, -(b.d - b.r - 3), 'gold', 1.3, 0.7);
-          this.rings.spawn(b.x, -b.d, 5, 0xffd34d, 0.5);
+          this.texts.spawn(b.tank ? `${b.tank.name} 进场！` : '打掉它！', b.x, b.tank ? 2.4 : 0.6, -(b.d - b.r - 3), 'gold', 1.3, 0.8);
+          this.rings.spawn(b.x, -b.d, b.tank ? 6.5 : 5, 0xffd34d, 0.5);
           this.debris.burst(b.x, 0.3, -(b.d - b.r * 0.6), 18, 6, 0.7, 0.2, STONE_COLS, 22, 0.5);
           this.shake(0.35);
           break;
         }
         case 'trap': {
           this.sparks.burst(e.x, 0.5, -e.d, 4, 4, 0.3, 0.1, TRAP_COLS, 10, 0.5);
+          break;
+        }
+        case 'lightningArc': {
+          this.lightning.spawn(e.points);
+          const last = e.points[e.points.length - 1];
+          this.sparks.burst(last.x, last.y * ITEM_SCALE, -last.d, 6, 5.5, 0.25, 0.085, SHIELD_COLS, 4, 0.5);
+          break;
+        }
+        case 'orbitalLaser': {
+          const color = e.level >= 3 ? 0xa855f7 : 0x38bdf8;
+          this.orbitalBeams.spawn(e.x, -e.d, e.r, color);
+          this.rings.spawn(e.x, -e.d, e.r * 2.5, color, 0.65);
+          this.explosions.spawn(e.x, 1.0, -e.d, e.r * 0.85, false);
+          _triCols[0] = color;
+          _triCols[1] = 0xe0f2fe;
+          _triCols[2] = 0xffffff;
+          this.sparks.burst(e.x, 1.4, -e.d, 26, 11, 0.65, 0.14, _triCols, 6, 0.65);
+          this.shake(0.32);
+          break;
+        }
+        case 'mechDrop': {
+          const m = e.mech;
+          this.pillar.spawn(m.x, -m.d, 2.2 * ITEM_SCALE, 0x38bdf8);
+          this.texts.spawn('泰坦机甲空投！', m.x, 3.0, -m.d, 'big gold', 1.4, 1.8);
+          break;
+        }
+        case 'mechLand': {
+          const m = e.mech;
+          this.rings.spawn(m.x, -m.d, 7.5, 0x38bdf8, 0.58);
+          this.rings.spawn(m.x, -m.d, 4.8, 0xfacc15, 0.42);
+          this.debris.burst(m.x, 0.4, -m.d, 22, 8.5, 0.85, 0.18, STONE_COLS, 20, 0.65);
+          this.sparks.burst(m.x, 0.9, -m.d, 28, 9.5, 0.6, 0.14, SHIELD_COLS, 6, 0.55);
+          this.shake(0.42);
+          break;
+        }
+        case 'critHit': {
+          this.texts.spawn(`暴击 -${formatNumber(e.dmg)}`, e.x + (Math.random() - 0.5) * 0.8, e.y * ITEM_SCALE + 0.5, -e.d, 'crit', 0.65, 1.45);
+          this.sparks.burst(e.x, e.y * ITEM_SCALE, -e.d, 5, 6.2, 0.24, 0.09, WEAPON_UP_COLS, 6, 0.5);
+          break;
+        }
+        case 'overdriveStart': {
+          const pw = Math.max(1.8, w.halfWidth + 0.8);
+          this.pillar.spawn(sq.x, -sq.d, pw, 0xfacc15);
+          this.rings.spawn(sq.x, -sq.d, pw * 3.8, 0xfacc15, 0.72);
+          this.rings.spawn(sq.x, -sq.d, pw * 2.4, 0x38bdf8, 0.55);
+          this.sparks.burst(sq.x, 1.2, -sq.d, 48, 12, 0.85, 0.16, BOSS_SPARK_COLS, 5, 0.7);
+          this.texts.spawn('战术过载！', sq.x, 3.1, -sq.d, 'big gold', 1.4, 1.8);
+          this.shake(0.38);
+          break;
+        }
+        case 'perkChosen': {
+          const rarityColor = e.perk.rarity === 'legendary' ? 0xf59e0b : e.perk.rarity === 'epic' ? 0xa855f7 : 0x38bdf8;
+          const pw = Math.max(1.6, w.halfWidth + 0.6);
+          this.pillar.spawn(sq.x, -sq.d, pw, rarityColor);
+          this.rings.spawn(sq.x, -sq.d, pw * 3.2, rarityColor, 0.6);
+          _pairCols[0] = rarityColor;
+          _pairCols[1] = 0xffffff;
+          this.sparks.burst(sq.x, 1.2, -sq.d, 34, 9.5, 0.75, 0.14, _pairCols, 5, 0.65);
+          this.texts.spawn(`${e.perk.name} Lv.${e.level}`, sq.x, 2.9, -sq.d, 'big gold', 1.35, 1.75);
+          this.shake(0.2);
+          break;
+        }
+        case 'cryoNova': {
+          this.rings.spawn(e.x, -e.d, e.r * 2.1, 0x38bdf8, 0.72);
+          this.rings.spawn(e.x, -e.d, e.r * 1.3, 0xe0f2fe, 0.52);
+          this.pillar.spawn(e.x, -e.d, 2.2, 0x38bdf8);
+          this.sparks.burst(e.x, 1.0, -e.d, 44, 11.5, 0.85, 0.16, SHIELD_COLS, 6, 0.65);
+          this.texts.spawn(e.count > 0 ? `❄ 液氮急冻 ×${e.count}！` : '❄ 液氮急冻！', e.x, 3.0, -e.d, 'big good', 1.4, 1.75);
+          this.shake(0.28);
+          break;
+        }
+        case 'mysteryRoll': {
+          const pw = Math.max(1.6, w.halfWidth + 0.6);
+          this.pillar.spawn(e.x, -e.d, pw, e.color);
+          this.rings.spawn(e.x, -e.d, 5.8, e.color, 0.62);
+          this.rings.spawn(e.x, -e.d, 3.6, 0xfacc15, 0.48);
+          _triCols[0] = e.color;
+          _triCols[1] = 0xfacc15;
+          _triCols[2] = 0xffffff;
+          this.sparks.burst(e.x, 1.4, -e.d, 38, 10, 0.8, 0.15, _triCols, 6, 0.65);
+          this.texts.spawn(e.label, e.x, 3.2, -e.d, 'big gold', 1.45, 1.85);
+          this.shake(0.22);
+          break;
+        }
+        case 'heroJoin': {
+          const info = HERO_INFO[e.hero.kind];
+          this.pillar.spawn(e.x, -e.d, 2.0, info.color);
+          this.rings.spawn(e.x, -e.d, 6.2, info.color, 0.66);
+          this.rings.spawn(e.x, -e.d, 4.0, 0xfacc15, 0.5);
+          _triCols[0] = info.color;
+          _triCols[1] = 0xfacc15;
+          _triCols[2] = 0xffffff;
+          this.sparks.burst(e.x, 1.3, -e.d, 40, 10.5, 0.85, 0.15, _triCols, 5, 0.65);
+          this.texts.spawn(`营救 ${info.name}！`, e.x, 3.1, -e.d, 'big gold', 1.45, 1.85);
+          this.shake(0.24);
+          break;
+        }
+        case 'heroSkill': {
+          if (e.kind === 'pyro') {
+            for (let s = 1; s <= 4; s++) {
+              const fd = e.d + s * 3.8;
+              this.rings.spawn(e.x, -fd, 4.8, 0xf97316, 0.42);
+              this.sparks.burst(e.x, 0.9, -fd, 14, 7.5, 0.48, 0.14, BOSS_SPARK_COLS, 4, 0.5);
+            }
+            this.shake(0.14);
+          } else if (e.kind === 'railgun') {
+            this.lightning.spawn([
+              { x: e.x, d: e.d + 0.5, y: 1.0 },
+              { x: (e.x + e.tx) * 0.5, d: (e.d + e.td) * 0.5, y: 1.05 },
+              { x: e.tx, d: e.td, y: 1.0 },
+            ]);
+            this.rings.spawn(e.tx, -e.td, 4.4, 0x38bdf8, 0.45);
+            this.sparks.burst(e.tx, 1.1, -e.td, 20, 9, 0.45, 0.13, SHIELD_COLS, 6, 0.55);
+            this.shake(0.16);
+          } else {
+            this.pillar.spawn(sq.x, -sq.d, Math.max(1.5, w.halfWidth + 0.5), 0xfacc15);
+            this.rings.spawn(sq.x, -sq.d, 5.2, 0xfacc15, 0.55);
+            this.sparks.burst(sq.x, 1.2, -sq.d, 22, 8, 0.6, 0.13, WEAPON_UP_COLS, 5, 0.55);
+            this.texts.spawn('指挥官号令 +2兵 +2盾', sq.x, 2.9, -sq.d, 'gold', 1.25, 1.6);
+          }
+          break;
+        }
+        case 'turretDeploy': {
+          const tu = e.turret;
+          this.pillar.spawn(tu.x, -tu.d, 1.5, 0x38bdf8);
+          this.rings.spawn(tu.x, -tu.d, 4.6, 0x38bdf8, 0.52);
+          this.sparks.burst(tu.x, 1.0, -tu.d, 26, 8.5, 0.65, 0.14, SHIELD_COLS, 6, 0.55);
+          this.texts.spawn('自动机枪炮台部署！', tu.x, 2.8, -tu.d, 'big good', 1.35, 1.75);
+          this.shake(0.18);
+          break;
+        }
+        case 'feverStart': {
+          const pw = Math.max(1.8, w.halfWidth + 0.8);
+          this.pillar.spawn(sq.x, -sq.d, pw, 0xfacc15);
+          this.rings.spawn(sq.x, -sq.d, pw * 4.2, 0xf97316, 0.72);
+          this.rings.spawn(sq.x, -sq.d, pw * 2.8, 0xfacc15, 0.55);
+          this.sparks.burst(sq.x, 1.3, -sq.d, 52, 12.5, 0.9, 0.16, BOSS_SPARK_COLS, 5, 0.72);
+          this.texts.spawn(`🔥 FEVER 狂热！2×金币`, sq.x, 3.2, -sq.d, 'big gold', 1.5, 1.85);
+          this.shake(0.32);
+          break;
+        }
+        case 'truckBreak': {
+          this.explosions.spawn(e.x, 1.2, -e.d, 3.2);
+          this.rings.spawn(e.x, -e.d, 9.5, 0xfacc15, 0.68);
+          this.rings.spawn(e.x, -e.d, 6.2, 0x38bdf8, 0.5);
+          this.debris.burst(e.x, 1.4, -e.d, 54, 12, 1.5, 0.24, BOSS_COIN_COLS, 20, 0.75);
+          this.sparks.burst(e.x, 1.4, -e.d, 38, 10.5, 0.85, 0.16, WEAPON_UP_COLS, 6, 0.65);
+          this.texts.spawn(`黄金补给车！+${formatNumber(e.coins)} 金币`, e.x, 3.2, -e.d, 'big gold', 1.55, 1.8);
+          this.shake(0.48);
           break;
         }
         case 'won': {
@@ -877,6 +1426,7 @@ export class GameRenderer {
     }
     const w = this.world;
     if (!w) return;
+    if (dt > 0 || realDt > 0) this.renderer.shadowMap.needsUpdate = true;
     this.time += dt;
     this.syncViews();
     this.syncTier(w.squad.tier);
@@ -891,7 +1441,6 @@ export class GameRenderer {
     const kit = this.soldierKit;
     const clip = !kit ? undefined : this.menu || (!firing && !sq.moving) ? 'idle' : sq.moving ? 'run' : 'shoot';
     const clipLen = kit && clip ? kit.body.clips[clip].duration : 1;
-    const playerScale = w.spec.mode === 'carnage' ? 0.72 : 1;
     const nSoldiers = w.soldiers.length;
     const cap = this.soldierCap;
     const keep = nSoldiers > cap ? cap / nSoldiers : 1;
@@ -908,16 +1457,16 @@ export class GameRenderer {
       _pose.stride = stride;
       if (kit) {
         _pose.phase = s.phase;
-        _pose.scale = Math.max(0.01, pop) * playerScale * (1 + this.tierFlash * 0.12);
+        _pose.scale = Math.max(0.01, pop) * ITEM_SCALE * (1 + this.tierFlash * 0.12);
         _pose.flash = this.tierFlash * 0.7;
         _pose.tilt = kick * 0.65;
         _pose.clip = clip;
         _pose.cycle = clip === 'run' ? s.phase / (Math.PI * 2) : t / clipLen + s.phase * 0.37;
         this.players.push(_pose);
-        this.blobs.push(_pose.x, -_pose.d, 0.8 * pop);
+        this.blobs.push(_pose.x, -_pose.d, 0.8 * ITEM_SCALE * pop);
       } else {
         _pose.phase = firing ? s.phase + t * 9 : s.phase;
-        _pose.scale = Math.max(0.01, pop) * playerScale;
+        _pose.scale = Math.max(0.01, pop) * ITEM_SCALE;
         _pose.flash = this.tierFlash * 0.5;
         _pose.tilt = kick * 0.8;
         _pose.clip = undefined;
@@ -938,7 +1487,7 @@ export class GameRenderer {
       const z = w.zombies[i];
       if (!z.alive || z.d < lo || z.d > hi) continue;
       const def = ZOMBIES[z.kind];
-      let scale = def.scale * weightScale(z) * (1 + z.flash * 0.13);
+      let scale = def.scale * ITEM_SCALE * weightScale(z) * (1 + z.flash * 0.13);
       let flash = z.flash;
       if (z.kind === 'exploder') {
         scale *= 1 + Math.sin(t * 8 + z.id) * 0.05;
@@ -956,14 +1505,20 @@ export class GameRenderer {
       _pose.flash = flash;
       _pose.tilt = -z.flash * (anim ? 0.34 : 0.42);
       _pose.stride = z.active ? 1 : 0.15;
-      _pose.tint = fillZombieTint(z.look, anim);
+      const tint = fillZombieTint(z.look, anim);
+      if (z.cryo && z.cryo > 0) {
+        tint[0] = tint[0] * 0.55;
+        tint[1] = tint[1] * 1.05;
+        tint[2] = Math.min(1.8, tint[2] * 1.55);
+      }
+      _pose.tint = tint;
       _pose.clip = close ? 'attack' : z.active ? 'run' : 'idle';
       _pose.cycle = close ? t * 1.3 + z.id * 0.17 : z.phase / (Math.PI * 2);
       herd.push(_pose);
       if (anim) this.blobs.push(z.x, -(z.d + z.flash * 0.24), 0.9 * scale);
       if (z.kind === 'giant') this.giantLabel(giantIdx++, z);
-      else if (w.spec.mode === 'carnage' ? z.kind === 'brute' && z.hp < z.maxHp : z.hp < z.maxHp || (w.defense && z.d < w.defense.spawnD)) {
-        this.zombieBars.push(z.x, scale * (anim ? 1.55 : 1.32) + 0.18, -z.d, 0.78 * scale, Math.max(0, z.hp / z.maxHp));
+      else if (z.hp < z.maxHp || (w.defense && z.d < w.defense.spawnD)) {
+        this.zombieBars.push(z.x, scale * (anim ? 1.55 : 1.32) + 0.14, -z.d, 0.78 * scale, Math.max(0, z.hp / z.maxHp));
       }
     }
     for (let i = giantIdx; i < this.giantLabels.length; i++) this.giantLabels[i].sprite.visible = false;
@@ -975,19 +1530,193 @@ export class GameRenderer {
     this.blobs.end();
 
     this.bullets.update(w.bullets);
-    const trail = sq.tier >= 5 ? (sq.tier === 6 ? 0xd59bff : 0xffe27a) : w.ammo.name === '电磁弹' ? 0xb98cff : 0;
+    // 广告奇袭专属 + 全模式空投泰坦机甲 / 护盾罩 / 过载光环 / 追踪导弹
+    const isBlitz = w.spec.mode === 'blitz';
+    if (isBlitz) {
+      // 左路高速 +1 传送带流动箭头（实例化单批更新，静止帧跳过矩阵上传）
+      if (dt > 0) {
+        const span = 12 * 5.2;
+        for (let i = 0; i < 12; i++) {
+          const raw = ((i * 5.2 - t * 7.8) % span + span) % span;
+          _mPos.set(-3.6, 0.03, -(raw - 2));
+          _mMat.compose(_mPos, this.blitzChevronQuat, this.blitzChevronScale);
+          this.blitzChevronMesh.setMatrixAt(i, _mMat);
+        }
+        this.blitzChevronMesh.instanceMatrix.needsUpdate = true;
+      }
+      // 友军收编坦克更新 + 进场履带能量火花
+      for (const view of this.allyTanks.values()) {
+        view.update(t);
+        if (dt > 0 && view.tank.phase === 'joining' && Math.random() < 0.7) {
+          this.sparks.spawn(view.tank.x + (Math.random() - 0.5) * 1.1 * ITEM_SCALE, 0.22, -view.tank.d - 0.8 * ITEM_SCALE, 0, 1.4, -2, 0.28, 0.1 * ITEM_SCALE, 0x38bdf8, 8);
+        }
+      }
+    }
+    // 全模式空投泰坦机甲更新 + 双臂机炮枪口火光
+    for (const view of this.allyMechs.values()) {
+      view.update(t);
+      const m = view.mech;
+      if (dt > 0 && m.dropT >= 1 && m.recoil > 0.7) {
+        this.flashes.spawn(m.x - 0.45 * ITEM_SCALE, 1.65 * ITEM_SCALE, -(m.d + 0.9 * ITEM_SCALE), 1.0 * ITEM_SCALE);
+        this.flashes.spawn(m.x + 0.45 * ITEM_SCALE, 1.65 * ITEM_SCALE, -(m.d + 0.9 * ITEM_SCALE), 1.0 * ITEM_SCALE);
+      }
+    }
+    // 传奇营救英雄协同作战更新 + 枪口火光
+    for (const view of this.allyHeroes.values()) {
+      view.update(t);
+      const h = view.hero;
+      if (dt > 0 && h.recoil > 0.65) {
+        this.flashes.spawn(h.x, 1.15 * ITEM_SCALE, -(h.d + 0.65 * ITEM_SCALE), 0.72 * ITEM_SCALE);
+      }
+    }
+    // 桥面空降双管自动加特林炮台更新 + 枪口火光
+    for (const view of this.allyTurrets.values()) {
+      view.update(t);
+      const tu = view.turret;
+      if (dt > 0 && tu.recoil > 0.65) {
+        this.flashes.spawn(tu.x, 0.92 * ITEM_SCALE, -(tu.d + 0.58 * ITEM_SCALE), 0.68 * ITEM_SCALE);
+      }
+    }
+    // 友军重炮弹飞行与炽烈拖尾
+    let si = 0;
+    if (isBlitz && w.allyShells.length > 0) {
+      for (let i = 0; i < w.allyShells.length && si < 40; i++) {
+        const sh = w.allyShells[i];
+        const k = Math.min(1, sh.t / sh.T);
+        const y = 1.15 * ITEM_SCALE + Math.sin(k * Math.PI) * 2.0 - k * 0.35;
+        const x = THREE.MathUtils.lerp(sh.x0, sh.x, k);
+        const d = THREE.MathUtils.lerp(sh.d0, sh.d, k);
+        _mDir.set(sh.x - sh.x0, Math.cos(k * Math.PI) * 4.2 - 0.4, -(sh.d - sh.d0)).normalize();
+        _mQuat.setFromUnitVectors(_mUp, _mDir);
+        _mPos.set(x, y, -d);
+        _mMat.compose(_mPos, _mQuat, _mScale);
+        this.allyShellMesh.setMatrixAt(si++, _mMat);
+        if (dt > 0) {
+          this.sparks.spawn(x, y, -d, (Math.random() - 0.5) * 1.2, 0.4, 2.2, 0.24, 0.11 * ITEM_SCALE, sh.tier >= 3 ? 0xfacc15 : 0xff7b24, 0);
+        }
+      }
+    }
+    this.prevAllyShells = commitInstances(this.allyShellMesh, si, this.prevAllyShells);
+
+    // 3D 空袭战机低空呼啸掠过动画
+    if (this.jetT >= 0) {
+      this.jetT += dt;
+      const dur = 1.45;
+      const k = this.jetT / dur;
+      if (k >= 1) {
+        this.jetT = -1;
+        this.airstrikeJet.visible = false;
+      } else {
+        const jz = THREE.MathUtils.lerp(18, -72, k);
+        const jy = 7.4 + Math.sin(k * Math.PI) * 1.5;
+        this.airstrikeJet.visible = true;
+        this.airstrikeJet.position.set(this.jetX, jy, jz);
+        this.airstrikeJet.rotation.set(-0.08, 0, Math.sin(k * Math.PI * 2) * 0.22);
+        if (dt > 0) {
+          this.sparks.spawn(this.jetX - 0.28 * ITEM_SCALE, jy - 0.02, jz + 2.2 * ITEM_SCALE, 0, 0, 8, 0.28, 0.14 * ITEM_SCALE, 0xff9f1c, 0);
+          this.sparks.spawn(this.jetX + 0.28 * ITEM_SCALE, jy - 0.02, jz + 2.2 * ITEM_SCALE, 0, 0, 8, 0.28, 0.14 * ITEM_SCALE, 0xffd34d, 0);
+        }
+      }
+    }
+
+    const droneCount = isBlitz ? Math.min(this.blitzDrones.length, w.blitz.drones) : 0;
+    for (let i = 0; i < this.blitzDrones.length; i++) {
+      const dm = this.blitzDrones[i];
+      if (i < droneCount && sq.count > 0) {
+        dm.visible = true;
+        const side = i % 2 === 0 ? -1 : 1;
+        const ring = Math.floor(i / 2) + 1;
+        const angle = t * 2.4 + i * 1.3;
+        dm.position.set(
+          sq.x + side * (Math.max(0.85, w.halfWidth + 0.25) + (ring - 1) * 0.36) + Math.sin(angle) * 0.16,
+          (2.1 + Math.sin(t * 4.8 + i) * 0.2 + (ring - 1) * 0.22) * ITEM_SCALE,
+          -(sq.d + 0.3 - (ring - 1) * 0.55),
+        );
+        dm.rotation.y = Math.sin(t * 2.4 + i) * 0.3;
+        dm.rotation.z = Math.cos(angle) * 0.18;
+      } else {
+        dm.visible = false;
+      }
+    }
+    this.shieldFlash = Math.max(0, this.shieldFlash - dt * 4);
+    if (w.shield > 0 && sq.count > 0) {
+      this.shieldAura.visible = true;
+      this.shieldDome.visible = true;
+      const r = Math.max(0.95, w.halfWidth + 0.35);
+      const pulse = 1 + this.shieldFlash * 0.14 + Math.sin(t * 5) * 0.025;
+      this.shieldAura.position.set(sq.x, 0.08, -sq.d);
+      this.shieldAura.scale.setScalar(r * pulse);
+      this.shieldMat.opacity = 0.24 + this.shieldFlash * 0.34 + Math.sin(t * 4) * 0.05;
+      this.shieldDome.position.set(sq.x, 0.02, -sq.d);
+      this.shieldDome.scale.set(r * pulse, Math.min(2.6, r * 0.85) * ITEM_SCALE * pulse, r * pulse);
+      this.shieldDomeMat.opacity = 0.08 + this.shieldFlash * 0.22 + Math.sin(t * 4.5) * 0.025;
+    } else {
+      this.shieldAura.visible = false;
+      this.shieldDome.visible = false;
+    }
+    // 战术过载 / FEVER 黄金狂热光环 / 火力倍增 / 多重弹道炽烈光环
+    const odActive = w.overdrive.active > 0;
+    const feverOn = w.fever.active > 0;
+    if ((odActive || feverOn || (isBlitz && (w.blitz.damageBonus > 0 || w.blitz.multishot > 1)) || w.perkLevel('fan_volley') > 0) && sq.count > 0) {
+      this.powerAura.visible = true;
+      const boost = odActive || feverOn;
+      const pr = Math.max(0.85, w.halfWidth + (boost ? 0.34 : 0.18));
+      this.powerAura.position.set(sq.x, 0.05, -sq.d);
+      this.powerAura.scale.setScalar(pr * (1 + Math.sin(t * (boost ? 11 : 6.5)) * (boost ? 0.07 : 0.04)));
+      this.powerAuraMat.color.setHex(
+        odActive ? 0xfacc15 : feverOn ? 0xfb923c : isBlitz && w.blitz.damageBonus > 0 ? 0xf97316 : 0xa855f7,
+      );
+      this.powerAuraMat.opacity = (boost ? 0.34 : 0.18) + Math.sin(t * (boost ? 11 : 6.5)) * 0.06;
+    } else {
+      this.powerAura.visible = false;
+    }
+    let mi = 0;
+    if (w.rockets.length > 0) {
+      for (let i = 0; i < w.rockets.length && mi < 48; i++) {
+        const r = w.rockets[i];
+        const k = Math.min(1, r.t / r.T);
+        const y = 1.65 + Math.sin(k * Math.PI) * 3.4 - k * 1.0;
+        const x = THREE.MathUtils.lerp(r.x0, r.x, k);
+        const d = THREE.MathUtils.lerp(r.d0, r.d, k);
+        _mDir.set(r.x - r.x0, Math.cos(k * Math.PI) * 7.5 - 1.1, -(r.d - r.d0)).normalize();
+        _mQuat.setFromUnitVectors(_mUp, _mDir);
+        _mPos.set(x, y, -d);
+        _mMat.compose(_mPos, _mQuat, _mScale);
+        this.blitzMissiles.setMatrixAt(mi++, _mMat);
+        if (dt > 0) this.sparks.spawn(x, y, -d, 0, -0.3, 1.5, 0.2, 0.08 * ITEM_SCALE, 0x38bdf8, 0);
+      }
+    }
+    this.prevBlitzMissiles = commitInstances(this.blitzMissiles, mi, this.prevBlitzMissiles);
+    const trail =
+      odActive
+        ? 0xfacc15
+        : feverOn
+          ? 0xfb923c
+          : w.perkLevel('cryo_rounds') > 0
+            ? 0x67e8f9
+            : sq.tier >= 5
+              ? sq.tier === 6
+                ? 0xd59bff
+                : 0xffe27a
+              : w.ammo.name === '电磁弹'
+                ? 0x67e8f9
+                : w.ammo.name === '爆裂弹'
+                  ? 0xff7b24
+                  : (isBlitz && w.blitz.multishot > 1) || w.perkLevel('fan_volley') > 0
+                    ? 0xe879f9
+                    : 0;
     if (trail && w.bullets.length && dt > 0) {
       for (let i = 0; i < 6; i++) {
         const b = w.bullets[Math.floor(Math.random() * w.bullets.length)];
         this.sparks.spawn(
-          b.x + (Math.random() - 0.5) * 0.2,
-          0.72 + (Math.random() - 0.5) * 0.2,
-          -b.d + 0.4,
+          b.x + (Math.random() - 0.5) * 0.16,
+          0.72 * ITEM_SCALE + (Math.random() - 0.5) * 0.16,
+          -b.d + 0.35,
           (Math.random() - 0.5) * 1.5,
           Math.random() * 1.5,
           0,
           0.22,
-          0.07,
+          0.07 * ITEM_SCALE,
           Math.random() < 0.5 ? trail : 0xffffff,
           0,
         );
@@ -996,19 +1725,30 @@ export class GameRenderer {
     this.tierFlash = Math.max(0, this.tierFlash - dt * 2.5);
     if ((w.state === 'run' || w.state === 'boss') && w.soldiers.length > 0 && dt > 0 && !this.menu) {
       const flashes = Math.min(20, Math.ceil(w.soldiers.length / 4));
-      const size = 0.44 + sq.tier * 0.07;
+      const size = (0.44 + sq.tier * 0.07) * ITEM_SCALE;
       const m = this.muzzle;
       for (let i = 0; i < flashes; i++) {
         const s = w.soldiers[Math.floor(Math.random() * w.soldiers.length)];
-        this.flashes.spawn(sq.x + s.ox + m.x, m.y, -(sq.d + s.oz + m.z), size);
+        this.flashes.spawn(sq.x + s.ox + m.x * ITEM_SCALE, m.y * ITEM_SCALE, -(sq.d + s.oz + m.z * ITEM_SCALE), size);
       }
       if (Math.random() < 0.75) {
         const s = w.soldiers[Math.floor(Math.random() * w.soldiers.length)];
-        this.sparks.spawn(sq.x + s.ox + m.x + 0.12, m.y + 0.05, -(sq.d + s.oz + m.z * 0.5), 1.4 + Math.random() * 1.6, 2.2 + Math.random() * 1.5, 0.6, 0.18, 0.055, 0xffd86b, 16);
+        this.sparks.spawn(
+          sq.x + s.ox + (m.x + 0.12) * ITEM_SCALE,
+          (m.y + 0.05) * ITEM_SCALE,
+          -(sq.d + s.oz + m.z * 0.5 * ITEM_SCALE),
+          1.4 + Math.random() * 1.6,
+          2.2 + Math.random() * 1.5,
+          0.6,
+          0.18,
+          0.055 * ITEM_SCALE,
+          0xffd86b,
+          16,
+        );
       }
     }
 
-    this.squadPos.set(sq.x, 1, -sq.d);
+    this.squadPos.set(sq.x, 1 * ITEM_SCALE, -sq.d);
     stripeTexture.offset.x -= dt * 0.6;
     const queueFar = w.defense ? (this.menuBlend > 0.5 ? -1e9 : DEFENSE_VIEW_D) : Infinity;
     for (const v of this.gates.values()) {
@@ -1021,19 +1761,23 @@ export class GameRenderer {
       v.update(dt, t);
     }
     for (const v of this.barrels.values()) {
-      v.group.visible = v.barrel.d > sq.d - 15 && v.barrel.d < Math.min(sq.d + VIEW_AHEAD + 30, queueFar);
+      const visible = v.barrel.d > sq.d - 15 && v.barrel.d < Math.min(sq.d + VIEW_AHEAD + 30, queueFar);
+      v.group.visible = visible;
+      if (!visible && !v.isFlying) continue;
       v.update(dt, t, this.squadPos);
       const b = v.barrel;
-      if (!b.alive || !v.group.visible) continue;
+      if (!b.alive || !visible) continue;
       const stage = v.consumeStage();
       if (stage) {
-        this.debris.burst(b.x, v.topY * 0.6, -b.d + b.r * 0.5, 12 + stage * 5, 6.8, 0.85, 0.19 + stage * 0.03, BARREL_STAGE_COLS, 20, 0.6);
-        this.sparks.burst(b.x, v.topY * 0.6, -b.d + b.r * 0.5, 14, 7.5, 0.45, 0.13, WEAPON_UP_COLS, 8, 0.5);
+        this.debris.burst(b.x, v.worldTopY * 0.6, -b.d + b.r * 0.5 * ITEM_SCALE, 12 + stage * 5, 6.8, 0.85, (0.19 + stage * 0.03) * ITEM_SCALE, BARREL_STAGE_COLS, 20, 0.6);
+        this.sparks.burst(b.x, v.worldTopY * 0.6, -b.d + b.r * 0.5 * ITEM_SCALE, 14, 7.5, 0.45, 0.13 * ITEM_SCALE, WEAPON_UP_COLS, 8, 0.5);
         this.shake(0.11 + stage * 0.04);
       }
       const ratio = v.hpRatio;
-      if (ratio < 0.5 && Math.random() < dt * (ratio < 0.25 ? 9 : 4)) this.explosions.spawn(b.x + (Math.random() - 0.5) * b.r, v.topY * 0.8, -b.d, 0.35 + Math.random() * 0.3, true);
-      if (ratio < 0.25 && Math.random() < dt * 6) this.sparks.burst(b.x, v.topY * 0.7, -b.d + b.r * 0.4, 3, 4, 0.35, 0.08, BARREL_SPARK_COLS, 10, 0.7);
+      if (ratio < 0.5 && Math.random() < dt * (ratio < 0.25 ? 9 : 4))
+        this.explosions.spawn(b.x + (Math.random() - 0.5) * b.r * ITEM_SCALE, v.worldTopY * 0.8, -b.d, (0.35 + Math.random() * 0.3) * ITEM_SCALE, true);
+      if (ratio < 0.25 && Math.random() < dt * 6)
+        this.sparks.burst(b.x, v.worldTopY * 0.7, -b.d + b.r * 0.4 * ITEM_SCALE, 3, 4, 0.35, 0.08 * ITEM_SCALE, BARREL_SPARK_COLS, 10, 0.7);
     }
     for (const v of this.hazards.values()) {
       v.group.visible = v.hazard.d1 > sq.d - 15 && v.hazard.d0 < sq.d + VIEW_AHEAD + 30;
@@ -1063,37 +1807,33 @@ export class GameRenderer {
     }
     for (const v of this.bossStrikes.values()) v.update();
 
-    for (const [id, v] of this.projectiles) {
-      let active = false;
-      for (let i = 0; i < w.projectiles.length; i++) {
-        if (w.projectiles[i].id === id) {
-          active = true;
-          break;
+    if (this.projectiles.size > 0) {
+      const seen = this.seenIds;
+      seen.clear();
+      for (let i = 0; i < w.projectiles.length; i++) seen.add(w.projectiles[i].id);
+      for (const [id, v] of this.projectiles) {
+        if (seen.has(id)) v.update();
+        else {
+          v.dispose();
+          this.projectiles.delete(id);
         }
-      }
-      if (active) v.update();
-      else {
-        v.dispose();
-        this.projectiles.delete(id);
       }
     }
-    for (const [id, v] of this.strikes) {
-      let active = false;
-      for (let i = 0; i < w.strikes.length; i++) {
-        if (w.strikes[i].id === id) {
-          active = true;
-          break;
+    if (this.strikes.size > 0) {
+      const seen = this.seenIds;
+      seen.clear();
+      for (let i = 0; i < w.strikes.length; i++) seen.add(w.strikes[i].id);
+      for (const [id, v] of this.strikes) {
+        if (seen.has(id)) {
+          v.update();
+          if (dt > 0 && Math.random() < 0.6 && v.strike.t > 0) {
+            const k = v.strike.t / v.strike.T;
+            this.explosions.spawn(v.strike.x + (1 - k) * 4, 26 * (1 - k) + 1.2, -(v.strike.d - 1.5) + (1 - k) * 6, 0.35, true);
+          }
+        } else {
+          v.dispose();
+          this.strikes.delete(id);
         }
-      }
-      if (active) {
-        v.update();
-        if (Math.random() < 0.6 && v.strike.t > 0) {
-          const k = v.strike.t / v.strike.T;
-          this.explosions.spawn(v.strike.x + (1 - k) * 4, 26 * (1 - k) + 1.2, -(v.strike.d - 1.5) + (1 - k) * 6, 0.35, true);
-        }
-      } else {
-        v.dispose();
-        this.strikes.delete(id);
       }
     }
 
@@ -1107,6 +1847,8 @@ export class GameRenderer {
     this.impacts.update(dt, this.camera);
     this.splats.update(dt);
     this.explosions.update(dt);
+    this.lightning.update(dt);
+    this.orbitalBeams.update(dt);
 
     const camDamp = dt <= 0 ? 0 : 1 - Math.exp(-6.5 * dt);
     this.placeCamera(w, camDamp, realDt);
@@ -1128,14 +1870,14 @@ export class GameRenderer {
     if (!item) {
       const bar = new HpBar(320, 80);
       const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: bar.texture, depthTest: false, depthWrite: false, toneMapped: false }));
-      sprite.scale.set(3.2, 0.8, 1);
+      sprite.scale.set(3.2 * ITEM_SCALE, 0.8 * ITEM_SCALE, 1);
       sprite.renderOrder = 20;
       this.scene.add(sprite);
       item = { bar, sprite };
       this.giantLabels.push(item);
     }
     item.sprite.visible = true;
-    item.sprite.position.set(z.x, ZOMBIES.giant.scale * 1.35 + 0.7, -z.d);
+    item.sprite.position.set(z.x, ZOMBIES.giant.scale * ITEM_SCALE * 1.35 + 0.6 * ITEM_SCALE, -z.d);
     item.bar.set(z.hp / z.maxHp, formatNumber(Math.max(0, Math.ceil(z.hp))), '#ff8a1f', '巨尸');
   }
 
@@ -1175,7 +1917,7 @@ export class GameRenderer {
       _pose.phase = 0;
       _pose.scale = Math.max(0.01, k * a.scale);
       _pose.stride = 0;
-      _pose.tint = a.tint;
+      _pose.tint = a.look >= 0 ? fillZombieTint(a.look, anim) : undefined;
       if (anim) {
         _pose.y = a.y * 0.15;
         _pose.flash = Math.max(0, 0.85 - a.t * 2.2);
@@ -1208,30 +1950,30 @@ export class GameRenderer {
     const pos = _camPos.set(0, 0, 0);
     const look = _camLook.set(0, 0, 0);
     if (w.defense) {
-      const pitch = THREE.MathUtils.degToRad(wide ? 25 : 28.5);
-      const rear = Math.min(8.5, Math.max(2.6, -w.back + 1.2));
-      const aNear = pitch + Math.atan((wide ? 0.56 : 0.5) * t);
-      const halfSpan = wide ? 9.2 : 6.85;
+      const pitch = THREE.MathUtils.degToRad(wide ? 23.5 : 26.5);
+      const rear = Math.min(7.5, Math.max(2.0, -w.back + 0.9));
+      const aNear = pitch + Math.atan((wide ? 0.62 : 0.54) * t);
+      const halfSpan = wide ? 7.0 : 6.1;
       const minDist = halfSpan / hTan;
-      const h = Math.max(minDist * Math.sin(pitch), (rear + 12) * Math.tan(pitch) * 0.74);
-      const cz = Math.max(-3.5 + minDist * Math.cos(pitch), rear + h / Math.tan(aNear));
+      const h = Math.max(minDist * Math.sin(pitch), (rear + 10.5) * Math.tan(pitch) * 0.7);
+      const cz = Math.max(-2.2 + minDist * Math.cos(pitch), rear + h / Math.tan(aNear));
       pos.set(sq.x * 0.08, h, cz);
-      look.set(sq.x * 0.05, 0.42, cz - h / Math.tan(pitch));
+      look.set(sq.x * 0.05, 0.36, cz - h / Math.tan(pitch));
     } else {
       const bossFight = w.bosses.some((b) => b.active);
       this.bossBlend += ((bossFight ? 1 : 0) - this.bossBlend) * Math.min(1, k * 0.6);
       const crowd = Math.min(1, Math.sqrt(w.soldiers.length) / 18);
       const double = w.bosses.length > 1 ? 1 : 0;
-      const pitch = THREE.MathUtils.degToRad(wide ? 24.5 : 27.5);
-      const halfSpan = wide ? 8.2 : 6.25;
+      const pitch = THREE.MathUtils.degToRad(wide ? 23 : 26);
+      const halfSpan = wide ? 6.8 : 5.8;
       const minDist = halfSpan / hTan;
-      const rearGrow = Math.max(0, -w.back - 0.8) * 0.78;
-      const height = Math.max(minDist * Math.sin(pitch), wide ? 5.6 : 6.8) + crowd * 1.4 + this.bossBlend * (1.8 + double * 1.0);
-      const back = Math.max(minDist * Math.cos(pitch), wide ? 7.6 : 9.6) + rearGrow + crowd * 1.7 + this.bossBlend * (2.2 + double * 1.1);
-      const ahead = (wide ? 12.5 : 14.5) + this.bossBlend * 5.5;
+      const rearGrow = Math.max(0, -w.back - 0.8) * 0.72;
+      const height = Math.max(minDist * Math.sin(pitch), wide ? 4.6 : 5.8) + crowd * 1.2 + this.bossBlend * (1.5 + double * 0.9);
+      const back = Math.max(minDist * Math.cos(pitch), wide ? 6.2 : 8.2) + rearGrow + crowd * 1.5 + this.bossBlend * (1.9 + double * 1.0);
+      const ahead = (wide ? 11.5 : 13.5) + this.bossBlend * 5.0;
       const fx = sq.x * (0.18 - this.bossBlend * 0.08);
       pos.set(fx, height, -sq.d + back);
-      look.set(fx * 0.65, 0.55 + this.bossBlend * 0.35, -sq.d - ahead);
+      look.set(fx * 0.65, 0.45 + this.bossBlend * 0.3, -sq.d - ahead);
     }
     this.menuBlend += ((this.menu ? 1 : 0) - this.menuBlend) * Math.min(1, k * 0.45);
     const m = this.menuBlend * this.menuBlend * (3 - 2 * this.menuBlend);
@@ -1285,7 +2027,7 @@ export class GameRenderer {
       }
       return;
     }
-    const v = _badge.set(sq.x, 1.6 + Math.min(1.2, w.halfWidth * 0.12), -(sq.d + Math.max(w.back * 0.2, w.front - 2.5)));
+    const v = _badge.set(sq.x, (1.6 + Math.min(1.2, w.halfWidth * 0.12)) * ITEM_SCALE, -(sq.d + Math.max(w.back * 0.2, w.front - 2.5)));
     v.project(this.camera);
     const x = Math.round(Math.max(40, Math.min(this.width - 40, (v.x * 0.5 + 0.5) * this.width)) * 2) * 0.5;
     const y = Math.round(Math.max(90, Math.min(this.height - 130, (-v.y * 0.5 + 0.5) * this.height)) * 2) * 0.5;
@@ -1302,9 +2044,11 @@ export class GameRenderer {
     const text = formatNumber(sq.count);
     if (this.badge.textContent !== text) {
       this.badge.textContent = text;
-      this.badge.classList.remove('pulse');
-      void this.badge.offsetWidth;
-      this.badge.classList.add('pulse');
+      const now = performance.now();
+      if (!this.reducedMotion && now - this.lastBadgePulse >= 220 && typeof this.badge.animate === 'function') {
+        this.lastBadgePulse = now;
+        this.badge.animate([{ scale: '1' }, { scale: '1.18' }, { scale: '1' }], { duration: 220, easing: 'ease-out' });
+      }
     }
   }
 
@@ -1312,6 +2056,7 @@ export class GameRenderer {
     if (this.contextLost) return;
     const tRender = performance.now();
     if (this.world?.spec.mode === 'carnage') this.referenceCarnage!.render(this.renderer);
+    else if (this.quality === 0 && this.composer) this.composer.render();
     else this.renderer.render(this.scene, this.camera);
     this.perf.render = this.perf.render * 0.95 + (performance.now() - tRender) * 0.05;
     this.perf.calls = this.renderer.info.render.calls;

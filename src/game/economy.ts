@@ -11,15 +11,15 @@ import { UPGRADES, WEAPONS, ZOMBIES, soldierDps, upgradeEffects, type UpgradeId,
  */
 export const ECON = {
   /** 每过一关，所有金币数额乘这么多 */
-  growth: 1.22,
+  growth: 1.2,
   /** 击杀金币 = 丧尸基础金币 × 这个系数 */
-  kill: 0.6,
+  kill: 0.44,
   /** 中途 Boss 赏金 */
-  midBoss: 30,
+  midBoss: 26,
   /** 最终 Boss 赏金（双 Boss 各拿 60%） */
-  finalBoss: 90,
+  finalBoss: 80,
   /** 通关奖励 */
-  clear: 110,
+  clear: 95,
   /** Boss 关赏金和通关奖励的倍数 */
   bossLevel: 2,
   /** 新手奖励：前几关输了额外给（第 1 关输一把就能买到第一批升级） */
@@ -106,6 +106,8 @@ export interface RunSettleTarget {
   defenseBest: number;
   endlessBest: number;
   carnageBest: number;
+  blitzBest?: number;
+  blitzCleared?: number;
   coins: number;
   gems: number;
   kills: number;
@@ -114,7 +116,7 @@ export interface RunSettleTarget {
 }
 
 export interface RunSettleInput {
-  mode: 'defense' | 'campaign' | 'endless' | 'carnage';
+  mode: 'defense' | 'campaign' | 'endless' | 'blitz' | 'carnage';
   level: number;
   won: boolean;
   retreated: boolean;
@@ -147,6 +149,24 @@ export function settleRun(save: RunSettleTarget, input: RunSettleInput): RunSett
   if (mode === 'carnage') {
     save.carnageBest = Math.max(save.carnageBest, kills);
     return { coins: 0, bonusCoins: 0, bonusGems: 0, dist, record: false };
+  }
+  if (mode === 'blitz') {
+    const prevBest = save.blitzBest ?? 0;
+    const record = !retreated && kills > prevBest;
+    save.blitzBest = Math.max(prevBest, kills);
+    save.kills += Math.max(0, Math.floor(kills));
+    const stageLevel = level === 2 ? 10 : 5;
+    const baseCoins = Math.max(0, Math.floor(runCoins));
+    const bonusCoins = won && !retreated ? Math.round(clearBonus(stageLevel) * 0.8) : 0;
+    const bonusGems = won && !retreated && level > (save.blitzCleared ?? 0) ? 2 : 0;
+    if (won) {
+      save.wins += 1;
+      save.blitzCleared = Math.max(save.blitzCleared ?? 0, Math.min(2, level));
+    }
+    const total = baseCoins + bonusCoins;
+    save.coins += total;
+    save.gems += Math.max(0, Math.floor(runGems)) + bonusGems;
+    return { coins: total, bonusCoins, bonusGems, dist, record };
   }
   save.gems += Math.max(0, Math.floor(runGems));
   save.kills += Math.max(0, Math.floor(kills));

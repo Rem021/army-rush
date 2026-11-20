@@ -5,6 +5,7 @@ import type { Boss } from '../game/world';
 import type { LoadedModel, Models } from './assets';
 import { bossMotion } from './bossMotion';
 import { HpBar, formatNumber } from './label';
+import { ITEM_SCALE } from './scale';
 import { bakeModel, staticGeometry, type BakedModel } from './vat';
 
 /** 每档武器用士兵模型手里的哪把枪（和 WEAPONS 一一对应） */
@@ -356,7 +357,7 @@ export class ModelBossView {
   private attackIndex = -1;
   private lastMotion: 'none' | 'windup' | 'release' = 'none';
   private current: THREE.AnimationAction | null = null;
-  private readonly materials: THREE.MeshLambertMaterial[] = [];
+  private readonly materials: THREE.MeshStandardMaterial[] = [];
   private readonly bar = new HpBar(360, 96);
   private readonly hpSprite: THREE.Sprite;
   private dropT = -1;
@@ -381,13 +382,19 @@ export class ModelBossView {
       mesh.castShadow = true;
       mesh.frustumCulled = false;
       const old = mesh.material as THREE.MeshStandardMaterial;
-      const mat = new THREE.MeshLambertMaterial({ map: old.map ?? null, color: old.color?.clone() ?? new THREE.Color(1, 1, 1) });
+      const mat = new THREE.MeshStandardMaterial({
+        map: old.map ?? null,
+        color: old.color?.clone() ?? new THREE.Color(1, 1, 1),
+        roughness: 0.58,
+        metalness: 0.18,
+      });
       if (tintColor) mat.color.multiply(tintColor);
       this.materials.push(mat);
       mesh.material = mat;
     });
     const box = new THREE.Box3().setFromObject(body);
-    this.scale = src.height / Math.max(0.01, box.max.y - box.min.y);
+    const bossH = src.height * ITEM_SCALE;
+    this.scale = bossH / Math.max(0.01, box.max.y - box.min.y);
     body.scale.setScalar(this.scale);
     body.position.y = -box.min.y * this.scale;
     this.root.add(body);
@@ -425,9 +432,9 @@ export class ModelBossView {
 
     const mat = new THREE.SpriteMaterial({ map: this.bar.texture, depthTest: false, depthWrite: false, toneMapped: false });
     this.hpSprite = new THREE.Sprite(mat);
-    this.hpSprite.scale.set(1.7 * 1.9, 0.42 * 1.9, 1);
+    this.hpSprite.scale.set(1.7 * 1.9 * ITEM_SCALE, 0.42 * 1.9 * ITEM_SCALE, 1);
     this.hpSprite.renderOrder = 20;
-    this.hpSprite.position.y = src.height + 0.9;
+    this.hpSprite.position.y = bossH + 0.9 * ITEM_SCALE;
     this.root.add(this.hpSprite);
     this.root.position.set(boss.x, 0, -boss.d);
     this.lastX = boss.x;
