@@ -175,7 +175,7 @@ export class Flashes {
     g.fill();
     const tex = new THREE.CanvasTexture(c);
     tex.colorSpace = THREE.SRGBColorSpace;
-    const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0xffffff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const mat = new THREE.MeshBasicMaterial({ map: tex, color: 0xffffff, transparent: true, opacity: 0.72, blending: THREE.AdditiveBlending, depthWrite: false });
     this.mesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(1, 1), mat, cap);
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
@@ -184,7 +184,7 @@ export class Flashes {
   }
 
   setColor(color: number) {
-    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.5);
+    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.35);
   }
 
   spawn(x: number, y: number, z: number, size: number) {
@@ -396,7 +396,7 @@ export class Streaks {
 
   constructor(scene: THREE.Scene, private readonly cap = 90) {
     this.pool = Array.from({ length: cap }, () => ({ x: 0, y: 0, z: 0, v: 0, len: 1, life: 0, max: 1 }));
-    const mat = new THREE.MeshBasicMaterial({ color: 0xfff6d8, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const mat = new THREE.MeshBasicMaterial({ color: 0xfff6d8, transparent: true, opacity: 0.42, blending: THREE.AdditiveBlending, depthWrite: false });
     this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), mat, cap);
     this.mesh.frustumCulled = false;
     this.mesh.count = 0;
@@ -479,7 +479,7 @@ export class Rings {
     if (!item) {
       const mesh = new THREE.Mesh(
         getRingGeometry(),
-        new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false }),
+        new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
       );
       mesh.rotation.x = -Math.PI / 2;
       mesh.renderOrder = 3;
@@ -502,7 +502,7 @@ export class Rings {
       const k = Math.min(1, r.t / r.life);
       const s = r.size * (0.2 + 0.8 * Math.sqrt(k));
       r.mesh.scale.set(s, s, s);
-      (r.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.6;
+      (r.mesh.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.42;
       if (k >= 1) r.mesh.visible = false;
     }
   }
@@ -534,7 +534,7 @@ export class Pillar {
     ctx.fillStyle = grad;
     ctx.fillRect(0, 0, 4, 64);
     const tex = new THREE.CanvasTexture(canvas);
-    this.material = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide, toneMapped: false });
+    this.material = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
     const geo = new THREE.CylinderGeometry(1, 1, 1, 32, 1, true);
     geo.translate(0, 0.5, 0);
     this.mesh = new THREE.Mesh(geo, this.material);
@@ -558,7 +558,7 @@ export class Pillar {
     const grow = Math.min(1, k / 0.15);
     const w = this.width * (0.35 + 0.65 * grow) * (1 - 0.6 * Math.max(0, k - 0.15));
     this.mesh.scale.set(w, 9 * grow, w);
-    this.material.opacity = Math.min(1, (1 - k) * 1.6) * 0.85;
+    this.material.opacity = Math.min(1, (1 - k) * 1.6) * 0.46;
     if (k >= 1) this.mesh.visible = false;
   }
 
@@ -590,7 +590,7 @@ export class BulletMesh {
     this.cap = cap;
     const core = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
     this.mesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.062, 0.062, 1), core, cap);
-    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.65, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false });
+    const glowMat = new THREE.MeshBasicMaterial({ color: 0xffd27a, transparent: true, opacity: 0.4, blending: THREE.AdditiveBlending, depthWrite: false });
     this.glow = new THREE.InstancedMesh(new THREE.BoxGeometry(0.17, 0.17, 1.22), glowMat, cap);
     for (const m of [this.mesh, this.glow]) {
       m.frustumCulled = false;
@@ -604,9 +604,9 @@ export class BulletMesh {
   setColor(color: number, tier = 0, glow = color) {
     const safeTier = Math.max(0, Math.min(BULLET_STYLE.length - 1, tier));
     this.style = BULLET_STYLE[safeTier];
-    (this.glow.material as THREE.MeshBasicMaterial).opacity = this.style.alpha;
+    (this.glow.material as THREE.MeshBasicMaterial).opacity = this.style.alpha * 0.56;
     (this.glow.material as THREE.MeshBasicMaterial).color.set(glow);
-    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.55);
+    (this.mesh.material as THREE.MeshBasicMaterial).color.set(color).lerp(_white, 0.35);
   }
 
   update(bullets: readonly Bullet[]) {
@@ -758,7 +758,7 @@ export class Explosions {
       shade: 1,
     }));
     const geo = new THREE.IcosahedronGeometry(1, 1);
-    this.fire = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }), cap);
+    this.fire = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), cap);
     this.smoke = new THREE.InstancedMesh(geo, new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.6, depthWrite: false }), cap);
     for (const m of [this.fire, this.smoke]) {
       m.frustumCulled = false;
@@ -870,7 +870,7 @@ export class Explosions {
         ns++;
       } else {
         const fade = 1 - k;
-        _c.setRGB(1, 0.62 - k * 0.4, 0.22 - k * 0.22).multiplyScalar(fade * it.shade);
+        _c.setRGB(1, 0.52 - k * 0.36, 0.14 - k * 0.14).multiplyScalar(fade * it.shade * 0.85);
         this.fire.setMatrixAt(nf, _m);
         this.fire.setColorAt(nf, _c);
         nf++;
@@ -1049,7 +1049,7 @@ interface BeamItem {
   radius: number;
 }
 
-/** 轨道离子激光炮光束：从高空天基卫星贯通战场的超亮双层离子光柱 + 地面灼烧圆环 */
+/** 轨道离子激光炮光束：从高空天基卫星贯通战场的双层离子光柱 + 地面灼烧圆环 */
 export class OrbitalBeams {
   private readonly items: BeamItem[] = [];
 
@@ -1069,11 +1069,11 @@ export class OrbitalBeams {
       sheathGeo.translate(0, 24, 0);
       const sheath = new THREE.Mesh(
         sheathGeo,
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.55, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false }),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.38, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
       );
       const disc = new THREE.Mesh(
         new THREE.CircleGeometry(1, 32),
-        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+        new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.48, blending: THREE.AdditiveBlending, depthWrite: false }),
       );
       disc.rotation.x = -Math.PI / 2;
       disc.position.y = 0.08;
@@ -1103,9 +1103,9 @@ export class OrbitalBeams {
       b.core.scale.set(w * 0.75, 1, w * 0.75);
       b.sheath.scale.set(w * 1.35, 1, w * 1.35);
       b.disc.scale.setScalar(b.radius * (0.45 + 0.65 * Math.sqrt(k)));
-      (b.core.material as THREE.MeshBasicMaterial).opacity = Math.min(1, pop * 1.5);
-      (b.sheath.material as THREE.MeshBasicMaterial).opacity = pop * 0.6;
-      (b.disc.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.75;
+      (b.core.material as THREE.MeshBasicMaterial).opacity = Math.min(1, pop * 1.4);
+      (b.sheath.material as THREE.MeshBasicMaterial).opacity = pop * 0.38;
+      (b.disc.material as THREE.MeshBasicMaterial).opacity = (1 - k) * 0.48;
       if (k >= 1) b.group.visible = false;
     }
   }

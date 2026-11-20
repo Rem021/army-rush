@@ -41,7 +41,7 @@ export const GATE_COLORS = {
   rate: 0x14c8e0,
 };
 
-const vertexMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.46, metalness: 0.34 });
+const vertexMat = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.52, metalness: 0.32 });
 vertexMat.userData.shared = true;
 const _white = new THREE.Color(0xffffff);
 const _wallMat = new THREE.Matrix4();
@@ -95,7 +95,8 @@ export class GateView {
   private readonly panelMat: THREE.MeshBasicMaterial;
   private readonly floorMat: THREE.MeshBasicMaterial;
   private readonly postMat: THREE.MeshStandardMaterial;
-  private readonly trimMat: THREE.MeshBasicMaterial;
+  private readonly darkSteelMat: THREE.MeshStandardMaterial;
+  private readonly trimMat: THREE.MeshStandardMaterial;
   private readonly label = new Label(256, 160);
   private readonly labelMesh: THREE.Mesh;
   private readonly inner = new THREE.Group();
@@ -115,37 +116,67 @@ export class GateView {
     const w = gate.x1 - gate.x0;
     this.group.position.set((gate.x0 + gate.x1) / 2, 0, -gate.d);
     this.group.add(this.inner);
-    this.panelMat = new THREE.MeshBasicMaterial({ map: stripeTexture, transparent: true, opacity: 0.48, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
-    this.floorMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.34, depthWrite: false, blending: THREE.AdditiveBlending, toneMapped: false });
-    this.postMat = new THREE.MeshStandardMaterial({ color: 0x253041, roughness: 0.36, metalness: 0.72 });
-    this.trimMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
+    this.panelMat = new THREE.MeshBasicMaterial({ map: stripeTexture, transparent: true, opacity: 0.34, depthWrite: false, side: THREE.DoubleSide });
+    this.floorMat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.15, depthWrite: false, blending: THREE.AdditiveBlending });
+    this.postMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.44, metalness: 0.62 });
+    this.darkSteelMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.52, metalness: 0.55 });
+    this.trimMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0xffffff, emissiveIntensity: 0.58, roughness: 0.35, metalness: 0.4 });
 
-    const panel = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.3 * ITEM_SCALE, 1.75 * ITEM_SCALE), this.panelMat);
-    panel.position.y = 0.97 * ITEM_SCALE;
+    const s = ITEM_SCALE;
+    const panel = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.34 * s, 1.72 * s), this.panelMat);
+    panel.position.y = 0.98 * s;
     panel.renderOrder = 2;
-    const floor = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.1, 2.2 * ITEM_SCALE), this.floorMat);
+    const floor = new THREE.Mesh(new THREE.PlaneGeometry(w - 0.14, 1.95 * s), this.floorMat);
     floor.rotation.x = -Math.PI / 2;
-    floor.position.set(0, 0.03, 0.9 * ITEM_SCALE);
-    const topBar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.25 * ITEM_SCALE, 0.22 * ITEM_SCALE, 0.24 * ITEM_SCALE), this.postMat);
-    topBar.position.y = 1.9 * ITEM_SCALE;
-    const topGlow = new THREE.Mesh(new THREE.BoxGeometry(w - 0.36 * ITEM_SCALE, 0.08 * ITEM_SCALE, 0.28 * ITEM_SCALE), this.trimMat);
-    topGlow.position.y = 1.9 * ITEM_SCALE;
-    this.inner.add(panel, floor, topBar, topGlow);
-    const postR = 0.18 * ITEM_SCALE;
+    floor.position.set(0, 0.025, 0.78 * s);
+
+    // 顶部装甲龙门横梁 + 凹槽导光带 + 加强桁架肋
+    const topBar = new THREE.Mesh(new THREE.BoxGeometry(w - 0.2 * s, 0.24 * s, 0.3 * s), this.postMat);
+    topBar.position.y = 1.92 * s;
+    topBar.castShadow = true;
+    const topCrown = new THREE.Mesh(new THREE.BoxGeometry(w - 0.46 * s, 0.1 * s, 0.22 * s), this.darkSteelMat);
+    topCrown.position.y = 2.08 * s;
+    const topGlow = new THREE.Mesh(new THREE.BoxGeometry(w - 0.38 * s, 0.075 * s, 0.32 * s), this.trimMat);
+    topGlow.position.y = 1.92 * s;
+    this.inner.add(panel, floor, topBar, topCrown, topGlow);
+
+    const postR = 0.19 * s;
     for (const side of [-1, 1]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.6, 2.05 * ITEM_SCALE, postR * 1.6), this.postMat);
-      post.position.set(side * (w / 2 - postR), 1.02 * ITEM_SCALE, 0);
+      const px = side * (w / 2 - postR);
+      // 阶梯装甲底座与防撞基座
+      const plinth = new THREE.Mesh(new THREE.BoxGeometry(postR * 2.3, 0.26 * s, postR * 2.5), this.darkSteelMat);
+      plinth.position.set(px, 0.13 * s, 0);
+      plinth.castShadow = true;
+      // 主立柱钢骨
+      const post = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.55, 2.04 * s, postR * 1.65), this.postMat);
+      post.position.set(px, 1.04 * s, 0);
       post.castShadow = true;
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.85, 0.16 * ITEM_SCALE, postR * 1.85), this.trimMat);
-      cap.position.set(side * (w / 2 - postR), 2.08 * ITEM_SCALE, 0);
-      this.inner.add(post, cap);
+      // 外侧装甲护板与三条加固钢肋
+      const armor = new THREE.Mesh(new THREE.BoxGeometry(postR * 0.42, 1.65 * s, postR * 1.88), this.darkSteelMat);
+      armor.position.set(px + side * postR * 0.72, 1.02 * s, 0);
+      // 内侧能量投射镜面光条
+      const emitter = new THREE.Mesh(new THREE.BoxGeometry(postR * 0.26, 1.54 * s, postR * 0.56), this.trimMat);
+      emitter.position.set(px - side * postR * 0.74, 1.02 * s, 0);
+      // 柱顶装甲帽与信号灯块
+      const capBase = new THREE.Mesh(new THREE.BoxGeometry(postR * 2.0, 0.14 * s, postR * 2.05), this.darkSteelMat);
+      capBase.position.set(px, 2.08 * s, 0);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.5, 0.11 * s, postR * 1.5), this.trimMat);
+      cap.position.set(px, 2.19 * s, 0);
+      this.inner.add(plinth, post, armor, emitter, capBase, cap);
+
+      // 立柱双道金属箍环
+      for (const ry of [0.58 * s, 1.44 * s]) {
+        const rib = new THREE.Mesh(new THREE.BoxGeometry(postR * 1.84, 0.1 * s, postR * 1.94), this.darkSteelMat);
+        rib.position.set(px, ry, 0);
+        this.inner.add(rib);
+      }
     }
-    this.labelMesh = labelPlane(this.label, Math.min(3.3 * ITEM_SCALE, w - 0.4), 2.06 * ITEM_SCALE);
-    this.labelMesh.position.set(0, 0.98 * ITEM_SCALE, 0.05);
+    this.labelMesh = labelPlane(this.label, Math.min(3.3 * s, w - 0.4), 2.06 * s);
+    this.labelMesh.position.set(0, 0.98 * s, 0.05);
     this.inner.add(this.labelMesh);
     if (gate.kind === 'weapon') {
-      this.gun = new THREE.Mesh(gunGeometry(Math.max(0, gate.value), 3.6 * ITEM_SCALE), vertexMat);
-      this.gun.position.set(0, 2.55 * ITEM_SCALE, 0);
+      this.gun = new THREE.Mesh(gunGeometry(Math.max(0, gate.value), 3.6 * s), vertexMat);
+      this.gun.position.set(0, 2.6 * s, 0);
       this.gun.castShadow = true;
       this.inner.add(this.gun);
     }
@@ -163,9 +194,10 @@ export class GateView {
       this.base.set(color);
       this.panelMat.color.set(color);
       this.floorMat.color.set(color);
-      this.trimMat.color.set(color).lerp(_white, 0.25);
+      this.trimMat.color.set(color).lerp(_white, 0.15);
+      this.trimMat.emissive.set(color);
     }
-    const stroke = 'rgba(20,30,40,0.85)';
+    const stroke = 'rgba(15,23,42,0.9)';
     if (g.kind === 'mul') this.label.set(`×${g.value}`, { fill: '#ffffff', stroke, size: 100 });
     else if (g.kind === 'add') this.label.set(g.value > 0 ? `+${g.value}` : String(g.value), { fill: '#ffffff', stroke, size: 100 });
     else if (g.kind === 'rate') this.label.set(`${g.value > 0 ? '+' : ''}${g.value}%`, { fill: '#ffffff', stroke, size: 80, icon: 'bolt', sub: '射速' });
@@ -189,13 +221,14 @@ export class GateView {
       this.lastValue = g.value;
     }
     this.pop = Math.max(0, this.pop - dt * 4);
-    this.panelMat.color.copy(this.base).lerp(_white, g.bump * 0.45);
-    if (!g.consumed) this.panelMat.opacity = 0.5 + g.bump * 0.25;
+    this.panelMat.color.copy(this.base).lerp(_white, g.bump * 0.32);
+    this.trimMat.emissiveIntensity = 0.56 + g.bump * 0.35;
+    if (!g.consumed) this.panelMat.opacity = 0.34 + g.bump * 0.2;
     this.inner.rotation.z = Math.sin(time * 47) * g.bump * 0.025;
     this.labelMesh.scale.setScalar(1 + g.bump * 0.08 + easePop(this.pop) * 0.35);
     if (this.gun) {
       this.gun.rotation.y = time * 1.6;
-      this.gun.position.y = (2.55 + Math.sin(time * 3) * 0.1) * ITEM_SCALE;
+      this.gun.position.y = (2.6 + Math.sin(time * 3) * 0.1) * ITEM_SCALE;
       this.gun.scale.setScalar(1 + g.bump * 0.15);
     }
     if (!g.consumed) {
@@ -206,13 +239,13 @@ export class GateView {
     this.fade = Math.min(1, this.fade + dt * (g.taken ? 5 : 2.5));
     const k = this.fade;
     if (g.taken) {
-      this.panelMat.opacity = 0.5 + (1 - k) * 0.35 - k * 0.5;
+      this.panelMat.opacity = 0.34 + (1 - k) * 0.26 - k * 0.34;
       this.inner.position.y = -k * k * 2.4;
     } else {
       this.inner.position.y = -k * 2.4;
-      this.panelMat.opacity = 0.5 * (1 - k);
+      this.panelMat.opacity = 0.34 * (1 - k);
     }
-    this.floorMat.opacity = 0.32 * (1 - k);
+    this.floorMat.opacity = 0.15 * (1 - k);
     (this.labelMesh.material as THREE.MeshBasicMaterial).opacity = 1 - k;
     if (k >= 1) this.group.visible = false;
   }
@@ -436,11 +469,10 @@ export class BarrelView {
         new THREE.MeshBasicMaterial({
           color: 0xff3b30,
           transparent: true,
-          opacity: 0.6,
+          opacity: 0.35,
           blending: THREE.AdditiveBlending,
           depthWrite: false,
           side: THREE.DoubleSide,
-          toneMapped: false,
         }),
       );
       this.bombHalo.rotation.x = -Math.PI / 2;
@@ -522,7 +554,7 @@ export class BarrelView {
       const s = (1 + pulse * (b.tank ? 0.045 : 0.11)) * base;
       this.body.scale.set(s, (1 - pulse * (b.tank ? 0.03 : 0.08)) * base, s);
       const ratio = b.maxHp > 0 ? b.hp / b.maxHp : 1;
-      this.mat.emissive.setRGB(pulse * 0.52, pulse * 0.42, pulse * 0.28);
+      this.mat.emissive.setRGB(pulse * 0.36, pulse * 0.28, pulse * 0.18);
       const shake = b.bump * (b.tank ? 0.045 : 0.075 + (1 - ratio) * 0.085);
       this.body.position.x = Math.sin(time * 59) * shake;
       this.body.position.z = -pulse * (b.tank ? 0.05 : 0.09);
@@ -562,14 +594,14 @@ export class BarrelView {
         const beat = 1 + Math.sin(time * 5.2 + b.id) * 0.08;
         this.reward.scale.setScalar(beat);
         if (this.podBeam) {
-          (this.podBeam.material as THREE.MeshBasicMaterial).opacity = 0.22 + Math.sin(time * 4.5 + b.id) * 0.08;
+          (this.podBeam.material as THREE.MeshBasicMaterial).opacity = 0.13 + Math.sin(time * 4.5 + b.id) * 0.05;
           this.podBeam.scale.set(0.95 + Math.sin(time * 6 + b.id) * 0.1, 1, 0.95 + Math.sin(time * 6 + b.id) * 0.1);
         }
       }
       if (this.bombHalo) {
         const sc = 0.9 + Math.sin(time * 7 + b.id) * 0.18;
         this.bombHalo.scale.setScalar(sc);
-        (this.bombHalo.material as THREE.MeshBasicMaterial).opacity = 0.35 + Math.max(0, Math.sin(time * 7 + b.id)) * 0.4;
+        (this.bombHalo.material as THREE.MeshBasicMaterial).opacity = 0.22 + Math.max(0, Math.sin(time * 7 + b.id)) * 0.24;
       }
       return;
     }
@@ -602,11 +634,10 @@ function holoBeam(color: number): THREE.Mesh {
     new THREE.MeshBasicMaterial({
       color,
       transparent: true,
-      opacity: 0.24,
+      opacity: 0.14,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
-      toneMapped: false,
     }),
   );
   beam.position.y = 1.85;
@@ -616,7 +647,7 @@ function holoBeam(color: number): THREE.Mesh {
 function glowRing(color: number): THREE.Mesh {
   const ring = new THREE.Mesh(
     new THREE.RingGeometry(0.5, 0.95, 32),
-    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.45, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }),
   );
   ring.rotation.x = -Math.PI / 2;
   ring.position.y = -0.45;
@@ -1057,11 +1088,10 @@ export class AllyTankView {
     this.haloMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
-      opacity: 0.65,
+      opacity: 0.35,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
-      toneMapped: false,
     });
     this.halo = new THREE.Mesh(new THREE.RingGeometry(tank.r * 1.05, tank.r * 1.38, 32), this.haloMat);
     this.halo.rotation.x = -Math.PI / 2;
@@ -1093,11 +1123,11 @@ export class AllyTankView {
     this.turret.position.set(0, this.turretY + bob, -t.recoil * 0.36);
 
     // 收编高光 + 开炮微闪
-    const glow = Math.max(t.captureGlow * 0.75, t.recoil * 0.25);
-    this.mat.emissive.setRGB(glow * 0.22, glow * 0.55, glow * 0.85);
+    const glow = Math.max(t.captureGlow * 0.52, t.recoil * 0.18);
+    this.mat.emissive.setRGB(glow * 0.2, glow * 0.48, glow * 0.72);
     const ringScale = 1 + t.captureGlow * 0.45 + Math.sin(time * 5 + t.id) * 0.04;
     this.halo.scale.setScalar(ringScale);
-    this.haloMat.opacity = 0.42 + t.captureGlow * 0.48 + Math.sin(time * 4 + t.id) * 0.08;
+    this.haloMat.opacity = 0.26 + t.captureGlow * 0.34 + Math.sin(time * 4 + t.id) * 0.06;
     this.badgeSprite.position.y = (t.r / 1.5) * 2.55 + Math.sin(time * 3 + t.id) * 0.08;
   }
 
@@ -1131,8 +1161,8 @@ export class AllyMechView {
     this.group.position.set(mech.x, 0, -mech.d);
     this.group.scale.setScalar(ITEM_SCALE * 1.18);
     this.mat = vertexMat.clone();
-    this.mat.roughness = 0.32;
-    this.mat.metalness = 0.62;
+    this.mat.roughness = 0.36;
+    this.mat.metalness = 0.56;
     this.mat.userData.shared = false;
 
     const legGeo = mechLegGeometry();
@@ -1162,11 +1192,10 @@ export class AllyMechView {
     this.haloMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
-      opacity: 0.72,
+      opacity: 0.35,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
-      toneMapped: false,
     });
     this.halo = new THREE.Mesh(new THREE.RingGeometry(0.92, 1.24, 32), this.haloMat);
     this.halo.rotation.x = -Math.PI / 2;
@@ -1178,11 +1207,10 @@ export class AllyMechView {
       new THREE.MeshBasicMaterial({
         color: 0x38bdf8,
         transparent: true,
-        opacity: 0.65,
+        opacity: 0.4,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
         side: THREE.DoubleSide,
-        toneMapped: false,
       }),
     );
     this.dropBeam.position.y = 18;
@@ -1208,7 +1236,7 @@ export class AllyMechView {
       const k = 1 - m.dropT;
       this.body.position.y = k * k * 28;
       this.dropBeam.visible = true;
-      (this.dropBeam.material as THREE.MeshBasicMaterial).opacity = Math.max(0.05, k * 0.8);
+      (this.dropBeam.material as THREE.MeshBasicMaterial).opacity = Math.max(0.05, k * 0.45);
       this.halo.scale.setScalar(1 + k * 0.7);
     } else {
       const stride = Math.sin(m.phase) * 0.45;
@@ -1221,8 +1249,8 @@ export class AllyMechView {
     this.upper.rotation.y = -m.yaw;
     this.armL.position.z = -0.04 + m.recoil * 0.24;
     this.armR.position.z = -0.04 + m.recoil * 0.24;
-    const glow = m.recoil * 0.35 + (m.dropT < 1 ? 0.5 : 0);
-    this.mat.emissive.setRGB(glow * 0.2, glow * 0.65, glow * 0.95);
+    const glow = m.recoil * 0.25 + (m.dropT < 1 ? 0.35 : 0);
+    this.mat.emissive.setRGB(glow * 0.18, glow * 0.52, glow * 0.78);
     this.badgeSprite.position.y = 3.35 + this.body.position.y + Math.sin(time * 3 + m.id) * 0.06;
   }
 

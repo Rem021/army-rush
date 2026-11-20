@@ -505,162 +505,376 @@ export function cageGeometry(colors: SoldierColors): Part {
   return merged(parts);
 }
 
-/** 军用补给箱 */
+/** 军用战术补给箱：倒角箱体 + 八角防撞护角 + 加强筋 + 卡扣锁 + 侧提手 + 警示带 */
 export function crateGeometry(): Part {
-  const parts: Part[] = [paint(at(new THREE.BoxGeometry(1.7, 1.3, 1.7), 0, 0.65, 0), 0x5b6b3a)];
-  for (const y of [0.05, 1.25]) {
-    for (const [x, z, w, d] of [
-      [0, -0.86, 1.74, 0.1],
-      [0, 0.86, 1.74, 0.1],
-      [-0.86, 0, 0.1, 1.74],
-      [0.86, 0, 0.1, 1.74],
-    ] as const) {
-      parts.push(paint(at(new THREE.BoxGeometry(w, 0.1, d), x, y, z), 0x3d4a26));
+  const parts: Part[] = [
+    // 主箱体与略微突出的顶盖
+    paint(at(new THREE.BoxGeometry(1.66, 1.18, 1.66), 0, 0.61, 0), 0x4d5c33),
+    paint(at(new THREE.BoxGeometry(1.74, 0.18, 1.74), 0, 1.24, 0), 0x3b4827),
+    // 顶部凹陷加强肋条
+    paint(at(new THREE.BoxGeometry(1.36, 0.05, 0.14), 0, 1.34, -0.45), 0x2d371e),
+    paint(at(new THREE.BoxGeometry(1.36, 0.05, 0.14), 0, 1.34, 0), 0x2d371e),
+    paint(at(new THREE.BoxGeometry(1.36, 0.05, 0.14), 0, 1.34, 0.45), 0x2d371e),
+    // 底部托盘滑轨
+    paint(at(new THREE.BoxGeometry(1.7, 0.1, 0.24), 0, 0.05, -0.62), 0x252b20),
+    paint(at(new THREE.BoxGeometry(1.7, 0.1, 0.24), 0, 0.05, 0.62), 0x252b20),
+    // 中腰战术警示涂装带
+    paint(at(new THREE.BoxGeometry(1.7, 0.2, 1.7), 0, 0.66, 0), 0xd4a418),
+    paint(at(new THREE.BoxGeometry(1.72, 0.05, 1.72), 0, 0.78, 0), 0x1e221b),
+    paint(at(new THREE.BoxGeometry(1.72, 0.05, 1.72), 0, 0.54, 0), 0x1e221b),
+  ];
+  // 八角金属防撞护角与竖向加强立柱
+  for (const sx of [-1, 1]) {
+    for (const sz of [-1, 1]) {
+      parts.push(paint(at(new THREE.BoxGeometry(0.16, 1.28, 0.16), sx * 0.81, 0.66, sz * 0.81), 0x283024));
+      for (const y of [0.14, 1.24]) {
+        parts.push(paint(at(new THREE.BoxGeometry(0.22, 0.16, 0.22), sx * 0.81, y, sz * 0.81), 0x1c2026));
+      }
+    }
+    // 两侧金属提手
+    parts.push(paint(at(new THREE.BoxGeometry(0.08, 0.08, 0.44), sx * 0.88, 0.92, 0), 0x5c6470));
+  }
+  // 前后双金属搭扣锁
+  for (const sz of [-1, 1]) {
+    for (const sx of [-0.42, 0.42]) {
+      parts.push(paint(at(new THREE.BoxGeometry(0.14, 0.28, 0.08), sx, 1.08, sz * 0.86), 0x737d8c));
     }
   }
-  parts.push(paint(at(new THREE.BoxGeometry(1.72, 0.22, 1.72), 0, 0.65, 0), 0xf2c21b));
   return merged(parts);
 }
 
 export function crateHeight(): number {
-  return 1.3;
+  return 1.36;
 }
 
-/** 空袭导弹，头朝 -y */
+/** 精确制导空袭导弹（头朝 -y）：导引头 + 多段弹体 + 前鸭翼 + 后掠十字尾翼 + 喷口 */
 export function missileGeometry(): Part {
+  const parts: Part[] = [
+    // 主弹体与黑灰热防护段
+    paint(at(new THREE.CylinderGeometry(0.13, 0.14, 1.08, 12), 0, 0.04, 0), 0x525d50),
+    paint(at(new THREE.CylinderGeometry(0.142, 0.142, 0.12, 12), 0, -0.22, 0), 0xd4a418),
+    paint(at(new THREE.CylinderGeometry(0.142, 0.142, 0.08, 12), 0, 0.26, 0), 0x2a2f36),
+    // 红色战斗部与导引光学头罩
+    paint(at(new THREE.ConeGeometry(0.13, 0.36, 12), 0, -0.68, 0, Math.PI), 0xc93524),
+    paint(at(new THREE.SphereGeometry(0.06, 8, 6), 0, -0.84, 0), 0x1e293b),
+    // 尾部收敛喷口
+    paint(at(new THREE.CylinderGeometry(0.1, 0.13, 0.16, 10), 0, 0.64, 0), 0x1e2228),
+    // 前部十字鸭翼
+    paint(at(new THREE.BoxGeometry(0.36, 0.16, 0.03), 0, -0.28, 0), 0x333c36),
+    paint(at(new THREE.BoxGeometry(0.03, 0.16, 0.36), 0, -0.28, 0), 0x333c36),
+    // 后部大展弦比十字稳定尾翼
+    paint(at(new THREE.BoxGeometry(0.6, 0.28, 0.035), 0, 0.46, 0), 0x2c3530),
+    paint(at(new THREE.BoxGeometry(0.035, 0.28, 0.6), 0, 0.46, 0), 0x2c3530),
+  ];
+  return merged(parts);
+}
+
+/** 无人机/机甲发射的细长追踪火箭弹（轴沿 +y，头朝 +y） */
+export function rocketProjectileGeometry(scale = 1): Part {
+  const s = scale;
   return merged([
-    paint(at(new THREE.CylinderGeometry(0.13, 0.13, 1.1, 10), 0, 0, 0), 0x6b7a5a),
-    paint(at(new THREE.ConeGeometry(0.13, 0.35, 10), 0, -0.72, 0, Math.PI), 0xd9361f),
-    paint(at(new THREE.BoxGeometry(0.5, 0.25, 0.04), 0, 0.45, 0), 0x3d4a26),
-    paint(at(new THREE.BoxGeometry(0.04, 0.25, 0.5), 0, 0.45, 0), 0x3d4a26),
+    paint(at(new THREE.CylinderGeometry(0.075 * s, 0.085 * s, 0.62 * s, 10), 0, 0, 0), 0xcbd5e1),
+    paint(at(new THREE.ConeGeometry(0.075 * s, 0.24 * s, 10), 0, 0.43 * s, 0), 0x38bdf8),
+    paint(at(new THREE.CylinderGeometry(0.088 * s, 0.088 * s, 0.07 * s, 10), 0, 0.18 * s, 0), 0x0284c7),
+    paint(at(new THREE.BoxGeometry(0.28 * s, 0.16 * s, 0.025 * s), 0, -0.24 * s, 0), 0x334155),
+    paint(at(new THREE.BoxGeometry(0.025 * s, 0.16 * s, 0.28 * s), 0, -0.24 * s, 0), 0x334155),
+    paint(at(new THREE.ConeGeometry(0.065 * s, 0.18 * s, 8), 0, -0.38 * s, 0, Math.PI), 0x67e8f9),
   ]);
 }
 
-/** 装甲路障：钢板 + 黄黑警示条 + 尖刺，很耐打，撞进阵型压死一片 */
+/** 友军重坦主炮穿甲榴弹（轴沿 +y，头朝 +y） */
+export function tankShellGeometry(scale = 1): Part {
+  const s = scale;
+  return merged([
+    paint(at(new THREE.CylinderGeometry(0.11 * s, 0.13 * s, 0.56 * s, 10), 0, 0, 0), 0xd97706),
+    paint(at(new THREE.ConeGeometry(0.11 * s, 0.34 * s, 10), 0, 0.45 * s, 0), 0xfef08a),
+    paint(at(new THREE.CylinderGeometry(0.136 * s, 0.136 * s, 0.08 * s, 10), 0, -0.14 * s, 0), 0x475569),
+    paint(at(new THREE.ConeGeometry(0.095 * s, 0.22 * s, 8), 0, -0.38 * s, 0, Math.PI), 0xf97316),
+  ]);
+}
+
+/** 重装装甲推土路障：斜置装甲板 + 强化钢肋 + 黄黑警示梁 + 破障尖齿 + 双侧重型胎 */
 export function armorGeometry(r: number): Part {
   const w = r * 2.2;
-  const parts: Part[] = [];
-  parts.push(paint(at(new THREE.BoxGeometry(w, 1.5, 1.1), 0, 0.75, 0), 0x5a6270));
-  parts.push(paint(at(new THREE.BoxGeometry(w * 0.86, 0.6, 0.9), 0, 1.75, 0.05), 0x4a515c));
-  // 警示条
+  const parts: Part[] = [
+    // 主钢箱与上层斜甲
+    paint(at(new THREE.BoxGeometry(w, 1.25, 1.05), 0, 0.72, 0.05), 0x454e5b),
+    paint(at(new THREE.BoxGeometry(w * 0.96, 0.75, 0.24), 0, 0.62, -0.52, -0.32), 0x363e4a),
+    paint(at(new THREE.BoxGeometry(w * 0.88, 0.52, 0.84), 0, 1.58, 0.08), 0x3b434f),
+    // 顶部防滑格栅与吊耳
+    paint(at(new THREE.BoxGeometry(w * 0.76, 0.08, 0.62), 0, 1.88, 0.08), 0x262c35),
+  ];
+  // 竖向焊缝加强肋
+  for (const fx of [-0.36, 0, 0.36]) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.12, 1.32, 1.14), fx * w, 0.78, 0.05), 0x2c333d));
+  }
+  // 斜条纹警示横梁
   const n = 7;
   for (let i = 0; i < n; i++) {
-    parts.push(paint(at(new THREE.BoxGeometry(w / n, 0.28, 0.06), -w / 2 + (i + 0.5) * (w / n), 1.25, -0.58, 0, 0, 0.5), i % 2 ? 0x1c1c1f : 0xf2c21b));
+    parts.push(paint(at(new THREE.BoxGeometry(w / n, 0.24, 0.07), -w / 2 + (i + 0.5) * (w / n), 1.22, -0.55, 0, 0, 0.45), i % 2 ? 0x1b1e23 : 0xd9a91a));
   }
-  // 铆钉
+  // 装甲螺栓铆钉
   for (let i = 0; i < 6; i++) {
-    parts.push(paint(at(new THREE.SphereGeometry(0.07, 6, 5), -w / 2 + 0.3 + i * ((w - 0.6) / 5), 0.45, -0.57), 0xb8bec6));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.06, 0.06, 0.06, 6), -w / 2 + 0.28 + i * ((w - 0.56) / 5), 0.44, -0.62, Math.PI / 2), 0x8f9aa8));
   }
-  // 正面的尖刺
+  // 前部破障冲角尖刺 + 基座
   for (let i = 0; i < 5; i++) {
-    parts.push(paint(at(new THREE.ConeGeometry(0.12, 0.6, 6), -w / 2 + 0.45 + i * ((w - 0.9) / 4), 0.9, -0.85, -Math.PI / 2), 0xd6dbe1));
+    const sx = -w / 2 + 0.42 + i * ((w - 0.84) / 4);
+    parts.push(paint(at(new THREE.CylinderGeometry(0.14, 0.16, 0.14, 8), sx, 0.88, -0.58, Math.PI / 2), 0x2c333d));
+    parts.push(paint(at(new THREE.ConeGeometry(0.11, 0.58, 6), sx, 0.88, -0.92, -Math.PI / 2), 0xbec6d0));
   }
-  // 两侧轮子
+  // 两侧轮毂与轮胎
   for (const s of [-1, 1]) {
-    parts.push(paint(at(new THREE.CylinderGeometry(0.42, 0.42, 0.3, 14), s * (w / 2 - 0.1), 0.42, 0, 0, 0, Math.PI / 2), 0x1c1c1f));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.44, 0.44, 0.32, 14), s * (w / 2 - 0.08), 0.44, 0.05, 0, 0, Math.PI / 2), 0x1a1c20));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.22, 0.22, 0.35, 10), s * (w / 2 - 0.08), 0.44, 0.05, 0, 0, Math.PI / 2), 0x5c6573));
   }
   return merged(parts);
 }
 
 const TANK_PALETTES = [
-  { hull: 0x4f633e, armor: 0x3b4b2e, accent: 0x98b56c, barrel: 0x2c322c }, // Tier 1 轻甲绿
-  { hull: 0x8f7a53, armor: 0x6b5a3c, accent: 0xe6c36a, barrel: 0x33302b }, // Tier 2 沙漠重甲
-  { hull: 0x8d2b2b, armor: 0x5c1d1d, accent: 0xff7847, barrel: 0x2a2626 }, // Tier 3 赤焰双管
-  { hull: 0xc99628, armor: 0x7a5713, accent: 0xfff08a, barrel: 0x2e2a22 }, // Tier 4 黄金天启
+  { hull: 0x455837, armor: 0x303e26, accent: 0x8aa85e, barrel: 0x252b25, trim: 0x5d734b }, // Tier 1 轻甲绿
+  { hull: 0x7d6a47, armor: 0x594a30, accent: 0xd4ae52, barrel: 0x2b2824, trim: 0x99835b }, // Tier 2 沙漠重甲
+  { hull: 0x7d2626, armor: 0x4f1818, accent: 0xe66235, barrel: 0x242020, trim: 0x9e3535 }, // Tier 3 赤焰双管
+  { hull: 0xb08220, armor: 0x6b4b10, accent: 0xebd46c, barrel: 0x26231c, trim: 0xc99c34 }, // Tier 4 黄金天启
 ] as const;
 
 const ALLY_TANK_PALETTES = [
-  { hull: 0x1d4ed8, armor: 0x1e3a8a, accent: 0x38bdf8, barrel: 0x1e293b }, // 友军 1 阶蓝钢
-  { hull: 0x0284c7, armor: 0x0c4a6e, accent: 0x67e8f9, barrel: 0x1e293b }, // 友军 2 阶天青重坦
-  { hull: 0x2563eb, armor: 0x1e3a8a, accent: 0xfacc15, barrel: 0x1e293b }, // 友军 3 阶双管雷霆
-  { hull: 0x0ea5e9, armor: 0x1d4ed8, accent: 0xfef08a, barrel: 0x0f172a }, // 友军 4 阶天启金蓝
+  { hull: 0x1e40af, armor: 0x172554, accent: 0x38bdf8, barrel: 0x1e293b, trim: 0x3b82f6 }, // 友军 1 阶蓝钢
+  { hull: 0x0369a1, armor: 0x0c4a6e, accent: 0x67e8f9, barrel: 0x1e293b, trim: 0x0ea5e9 }, // 友军 2 阶天青重坦
+  { hull: 0x1d4ed8, armor: 0x1e3a8a, accent: 0xeab308, barrel: 0x1e293b, trim: 0x60a5fa }, // 友军 3 阶双管雷霆
+  { hull: 0x0284c7, armor: 0x1e3a8a, accent: 0xfde047, barrel: 0x0f172a, trim: 0x38bdf8 }, // 友军 4 阶天启金蓝
 ] as const;
 
-/** 3D 重装坦克底盘（车体 + 双侧履带 + 负重轮 + 反应装甲 + 前大灯；ally=true 时为收编友军蓝金涂装） */
+/** 现代主战坦克精细 3D 底盘（斜楔首上/首下复合装甲 + 分段 ERA 反应裙甲 + 6 对负重轮与主动轮 + 挡泥板 + 尾油桶/散热格栅 + 前大灯护笼） */
 export function tankHullGeometry(tier: 1 | 2 | 3 | 4, r: number, ally = false): Part {
   const pals = ally ? ALLY_TANK_PALETTES : TANK_PALETTES;
   const pal = pals[Math.min(3, Math.max(0, tier - 1))];
   const sc = r / 1.5;
   const parts: Part[] = [];
-  // 左右重型履带与裙甲
+
+  // 1. 楔形复合装甲车体（利用 ExtrudeGeometry 做出真实的现代主战坦克首上/首下倾斜轮廓）
+  const hullProfile = new THREE.Shape();
+  hullProfile.moveTo(-1.45 * sc, 0.34 * sc); // 车尾下沿
+  hullProfile.lineTo(1.36 * sc, 0.34 * sc); // 首下底部
+  hullProfile.lineTo(1.74 * sc, 0.64 * sc); // 首上鼻尖
+  hullProfile.lineTo(1.12 * sc, 1.02 * sc); // 首上顶部折角
+  hullProfile.lineTo(-1.26 * sc, 1.02 * sc); // 引擎盖顶部
+  hullProfile.lineTo(-1.52 * sc, 0.78 * sc); // 车尾斜坡
+  hullProfile.closePath();
+  const hullCore = new THREE.ExtrudeGeometry(hullProfile, { depth: 1.84 * sc, bevelEnabled: true, bevelThickness: 0.05 * sc, bevelSize: 0.04 * sc, bevelSegments: 2 });
+  hullCore.rotateY(-Math.PI / 2); // 让轮廓沿 Z 轴（车头朝 +Z）
+  hullCore.translate(0.92 * sc, 0, 0);
+  parts.push(paint(hullCore, pal.hull));
+
+  // 首上附加反应装甲块（4 块斜置 ERA 装甲砖）
+  for (let i = -1.5; i <= 1.5; i += 1) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.4 * sc, 0.11 * sc, 0.44 * sc), i * 0.44 * sc, 0.87 * sc, 1.42 * sc, 0.56), pal.armor));
+  }
+  // 首下防雷铲条 + 双拖车钩
+  parts.push(paint(at(new THREE.BoxGeometry(1.72 * sc, 0.12 * sc, 0.16 * sc), 0, 0.48 * sc, 1.56 * sc, -0.58), pal.armor));
+  for (const sx of [-0.62, 0.62]) {
+    parts.push(paint(at(new THREE.TorusGeometry(0.09 * sc, 0.03 * sc, 6, 10), sx * sc, 0.62 * sc, 1.72 * sc, Math.PI / 2), 0x262930));
+  }
+
+  // 2. 左右重型履带总成（橡胶履带带体 + 前主动轮/后诱导轮 + 6 对负重轮与轮毂 + 挡泥板 + 分段 ERA 反应裙甲）
   for (const s of [-1, 1]) {
-    parts.push(paint(at(new THREE.BoxGeometry(0.62 * sc, 0.68 * sc, 3.1 * sc), s * 1.12 * sc, 0.38 * sc, 0), 0x1e2024));
-    parts.push(paint(at(new THREE.BoxGeometry(0.14 * sc, 0.44 * sc, 2.9 * sc), s * 1.44 * sc, 0.56 * sc, 0), pal.armor));
-    for (let i = -2; i <= 2; i++) {
-      parts.push(
-        paint(
-          at(new THREE.CylinderGeometry(0.24 * sc, 0.24 * sc, 0.66 * sc, 10), s * 1.12 * sc, 0.25 * sc, i * 0.58 * sc, 0, 0, Math.PI / 2),
-          ally ? 0x60a5fa : 0x484d55,
-        ),
-      );
+    // 履带包络轮廓
+    const trackShape = new THREE.Shape();
+    trackShape.moveTo(-1.42 * sc, 0.08 * sc);
+    trackShape.lineTo(1.38 * sc, 0.08 * sc);
+    trackShape.lineTo(1.66 * sc, 0.52 * sc);
+    trackShape.lineTo(1.48 * sc, 0.72 * sc);
+    trackShape.lineTo(-1.46 * sc, 0.72 * sc);
+    trackShape.lineTo(-1.62 * sc, 0.48 * sc);
+    trackShape.closePath();
+    const trackGeo = new THREE.ExtrudeGeometry(trackShape, { depth: 0.56 * sc, bevelEnabled: false });
+    trackGeo.rotateY(-Math.PI / 2);
+    trackGeo.translate(s * 1.14 * sc + 0.28 * sc, 0, 0);
+    parts.push(paint(trackGeo, 0x1a1d22));
+
+    // 上部翼子板挡泥板 + 前后护板
+    parts.push(paint(at(new THREE.BoxGeometry(0.68 * sc, 0.08 * sc, 3.16 * sc), s * 1.18 * sc, 0.78 * sc, 0.02 * sc), pal.trim));
+    parts.push(paint(at(new THREE.BoxGeometry(0.66 * sc, 0.28 * sc, 0.12 * sc), s * 1.18 * sc, 0.65 * sc, 1.62 * sc, -0.3), pal.armor));
+
+    // 5 块分段式侧裙反应装甲（带缝隙，避免一整块平板）
+    for (let k = -2; k <= 2; k++) {
+      parts.push(paint(at(new THREE.BoxGeometry(0.12 * sc, 0.36 * sc, 0.54 * sc), s * 1.52 * sc, 0.62 * sc, k * 0.6 * sc), k % 2 === 0 ? pal.armor : pal.hull));
+      parts.push(paint(at(new THREE.BoxGeometry(0.05 * sc, 0.08 * sc, 0.48 * sc), s * 1.58 * sc, 0.74 * sc, k * 0.6 * sc), pal.accent));
+    }
+
+    // 6 对独立负重轮 + 轮毂中心盖
+    for (let i = 0; i < 6; i++) {
+      const wz = (-1.22 + i * 0.49) * sc;
+      parts.push(paint(at(new THREE.CylinderGeometry(0.21 * sc, 0.21 * sc, 0.6 * sc, 10), s * 1.14 * sc, 0.24 * sc, wz, 0, 0, Math.PI / 2), 0x2d323a));
+      parts.push(paint(at(new THREE.CylinderGeometry(0.11 * sc, 0.11 * sc, 0.64 * sc, 8), s * 1.14 * sc, 0.24 * sc, wz, 0, 0, Math.PI / 2), ally ? 0x60a5fa : 0x5c6470));
+    }
+    // 前主动齿轮 & 后诱导轮（高位）
+    for (const ez of [-1.46 * sc, 1.48 * sc]) {
+      parts.push(paint(at(new THREE.CylinderGeometry(0.22 * sc, 0.22 * sc, 0.62 * sc, 10), s * 1.14 * sc, 0.5 * sc, ez, 0, 0, Math.PI / 2), 0x3b424d));
     }
   }
-  // 主装甲车体 + 前倾斜装甲
-  parts.push(paint(at(new THREE.BoxGeometry(1.92 * sc, 0.72 * sc, 2.85 * sc), 0, 0.7 * sc, 0), pal.hull));
-  parts.push(paint(at(new THREE.BoxGeometry(1.88 * sc, 0.46 * sc, 0.65 * sc), 0, 0.62 * sc, 1.5 * sc, 0.42), pal.armor));
-  // 警示涂装条与前灯（敌方朝 +z，友方由外层 group 旋转 180° 朝 -z 面向敌阵）
-  parts.push(paint(at(new THREE.BoxGeometry(1.75 * sc, 0.14 * sc, 0.12 * sc), 0, 0.88 * sc, 1.45 * sc), pal.accent));
-  for (const s of [-0.65, 0.65]) {
-    parts.push(paint(at(new THREE.SphereGeometry(0.11 * sc, 8, 6), s * sc, 0.82 * sc, 1.62 * sc), ally ? 0x67e8f9 : 0xfff3b0));
+
+  // 3. 驾驶员潜望观察窗 + 护笼大灯
+  parts.push(paint(at(new THREE.BoxGeometry(0.46 * sc, 0.1 * sc, 0.14 * sc), 0, 1.05 * sc, 1.04 * sc), 0x161b22));
+  parts.push(paint(at(new THREE.BoxGeometry(0.38 * sc, 0.05 * sc, 0.16 * sc), 0, 1.05 * sc, 1.05 * sc), ally ? 0x38bdf8 : 0x94a3b8));
+  for (const sx of [-0.74, 0.74]) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.24 * sc, 0.18 * sc, 0.2 * sc), sx * sc, 0.88 * sc, 1.48 * sc), 0x23272e));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.065 * sc, 0.065 * sc, 0.08 * sc, 8), sx * sc, 0.88 * sc, 1.58 * sc, Math.PI / 2), ally ? 0x67e8f9 : 0xfde68a));
   }
+
+  // 4. 车尾双散热百叶窗格栅 + 双排气管 + 外挂副油箱
+  for (const sx of [-0.46, 0.46]) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.72 * sc, 0.09 * sc, 0.76 * sc), sx * sc, 1.05 * sc, -0.82 * sc), 0x1f242b));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.09 * sc, 0.09 * sc, 0.28 * sc, 8), sx * sc, 0.66 * sc, -1.52 * sc, Math.PI / 2), 0x282d35));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.18 * sc, 0.18 * sc, 0.62 * sc, 10), sx * sc, 0.94 * sc, -1.44 * sc, 0, 0, Math.PI / 2), pal.armor));
+  }
+
   if (ally) {
-    // 友军金色识别菱徽与尾翼发光能量条
-    parts.push(paint(at(new THREE.OctahedronGeometry(0.26 * sc, 0), 0, 1.12 * sc, 0.78 * sc, 0, Math.PI / 4, 0, 1.2, 0.35, 1.2), 0xfacc15));
-    parts.push(paint(at(new THREE.BoxGeometry(1.6 * sc, 0.14 * sc, 0.16 * sc), 0, 1.06 * sc, -1.25 * sc), 0x38bdf8));
+    // 友军金色识别星徽与车尾蓝色动力导条
+    parts.push(paint(at(new THREE.OctahedronGeometry(0.24 * sc, 0), 0, 1.09 * sc, 0.76 * sc, 0, Math.PI / 4, 0, 1.15, 0.3, 1.15), 0xeab308));
+    parts.push(paint(at(new THREE.BoxGeometry(1.56 * sc, 0.1 * sc, 0.14 * sc), 0, 1.08 * sc, -1.24 * sc), 0x38bdf8));
   }
-  // 车尾散热格栅
-  parts.push(paint(at(new THREE.BoxGeometry(1.4 * sc, 0.14 * sc, 0.65 * sc), 0, 1.09 * sc, -0.95 * sc), 0x26292e));
   return merged(parts);
 }
 
-/** 3D 坦克旋转炮塔（炮塔本体 + 指挥塔 + 单管或天启双管主炮，炮口朝 +z） */
+/** 现代主战坦克精细 3D 旋转炮塔（低矮斜楔装甲炮塔 + 尾舱弹药架 + 炮盾 + 抽烟筒/制退器主炮 + 烟幕弹发射器 + 车长周视镜与遥控机枪 + 双天线） */
 export function tankTurretGeometry(tier: 1 | 2 | 3 | 4, r: number, twin = false, ally = false): Part {
   const pals = ally ? ALLY_TANK_PALETTES : TANK_PALETTES;
   const pal = pals[Math.min(3, Math.max(0, tier - 1))];
   const sc = r / 1.5;
   const parts: Part[] = [];
-  // 炮塔座圈与装甲外壳
-  parts.push(paint(at(new THREE.CylinderGeometry(0.92 * sc, 1.05 * sc, 0.58 * sc, 8), 0, 0.29 * sc, -0.1 * sc), pal.hull));
-  parts.push(paint(at(new THREE.BoxGeometry(1.48 * sc, 0.54 * sc, 1.55 * sc), 0, 0.3 * sc, -0.15 * sc), pal.hull));
-  parts.push(paint(at(new THREE.BoxGeometry(1.56 * sc, 0.14 * sc, 1.25 * sc), 0, 0.58 * sc, -0.15 * sc), pal.accent));
-  // 车长观察塔 + 天线
-  parts.push(paint(at(new THREE.CylinderGeometry(0.32 * sc, 0.36 * sc, 0.24 * sc, 10), -0.35 * sc, 0.72 * sc, -0.35 * sc), pal.armor));
-  parts.push(paint(at(new THREE.CylinderGeometry(0.03 * sc, 0.03 * sc, 0.9 * sc, 5), 0.52 * sc, 0.98 * sc, -0.65 * sc), ally ? 0x38bdf8 : 0x1e2024));
-  // 主炮管（单管或双管）
-  const xs = twin ? [-0.28 * sc, 0.28 * sc] : [0];
+
+  // 炮塔座圈
+  parts.push(paint(at(new THREE.CylinderGeometry(0.86 * sc, 0.92 * sc, 0.14 * sc, 14), 0, 0.06 * sc, -0.04 * sc), 0x20252c));
+
+  // 多边形斜楔主装甲炮塔轮廓（俯视六边形挤出 + 顶盖倒角）
+  const turretPlan = new THREE.Shape();
+  turretPlan.moveTo(-0.56 * sc, 0.86 * sc); // 前左脸
+  turretPlan.lineTo(0.56 * sc, 0.86 * sc); // 前右脸
+  turretPlan.lineTo(0.92 * sc, 0.24 * sc); // 右颊外扩
+  turretPlan.lineTo(0.84 * sc, -0.82 * sc); // 右侧装甲
+  turretPlan.lineTo(0.64 * sc, -1.22 * sc); // 尾舱右角
+  turretPlan.lineTo(-0.64 * sc, -1.22 * sc); // 尾舱左角
+  turretPlan.lineTo(-0.84 * sc, -0.82 * sc); // 左侧装甲
+  turretPlan.lineTo(-0.92 * sc, 0.24 * sc); // 左颊外扩
+  turretPlan.closePath();
+  const turretBody = new THREE.ExtrudeGeometry(turretPlan, { depth: 0.46 * sc, bevelEnabled: true, bevelThickness: 0.08 * sc, bevelSize: 0.09 * sc, bevelSegments: 2 });
+  turretBody.rotateX(Math.PI / 2); // Shape XY -> XZ 平面，+Y 映射为 +Z（炮口方向）
+  turretBody.translate(0, 0.56 * sc, 0);
+  parts.push(paint(turretBody, pal.hull));
+
+  // 炮塔顶部装甲识别条与泄压板
+  parts.push(paint(at(new THREE.BoxGeometry(1.1 * sc, 0.08 * sc, 0.72 * sc), 0, 0.66 * sc, -0.58 * sc), pal.armor));
+  parts.push(paint(at(new THREE.BoxGeometry(0.94 * sc, 0.05 * sc, 0.22 * sc), 0, 0.67 * sc, 0.18 * sc), pal.accent));
+
+  // 炮塔尾舱储物筐（金属栏杆框 + 弹药箱）
+  parts.push(paint(at(new THREE.BoxGeometry(1.24 * sc, 0.28 * sc, 0.34 * sc), 0, 0.44 * sc, -1.36 * sc), 0x2a3038));
+  parts.push(paint(at(new THREE.BoxGeometry(1.32 * sc, 0.05 * sc, 0.4 * sc), 0, 0.6 * sc, -1.36 * sc), pal.trim));
+
+  // 两侧 3 联装烟幕弹发射器 + 侧挂工具箱
+  for (const s of [-1, 1]) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.14 * sc, 0.26 * sc, 0.76 * sc), s * 0.92 * sc, 0.38 * sc, -0.35 * sc), pal.armor));
+    for (let k = 0; k < 3; k++) {
+      parts.push(
+        paint(
+          at(
+            new THREE.CylinderGeometry(0.045 * sc, 0.045 * sc, 0.24 * sc, 6),
+            s * (0.76 + k * 0.07) * sc,
+            0.46 * sc,
+            (0.46 - k * 0.14) * sc,
+            0.65,
+            s * 0.45,
+            0,
+          ),
+          0x20242b,
+        ),
+      );
+    }
+  }
+
+  // 重型防盾（炮耳与主炮基座）
+  parts.push(paint(at(new THREE.BoxGeometry(twin ? 0.92 * sc : 0.62 * sc, 0.38 * sc, 0.38 * sc), 0, 0.36 * sc, 0.88 * sc), pal.armor));
+
+  // 车长观察塔舱盖 + 炮长周视热成像仪（CITV） + 顶置遥控机枪
+  parts.push(paint(at(new THREE.CylinderGeometry(0.28 * sc, 0.32 * sc, 0.16 * sc, 10), -0.36 * sc, 0.7 * sc, -0.22 * sc), pal.armor));
+  parts.push(paint(at(new THREE.CylinderGeometry(0.14 * sc, 0.16 * sc, 0.22 * sc, 8), 0.36 * sc, 0.74 * sc, 0.04 * sc), 0x262c34));
+  parts.push(paint(at(new THREE.BoxGeometry(0.16 * sc, 0.1 * sc, 0.12 * sc), 0.36 * sc, 0.78 * sc, 0.14 * sc), ally ? 0x38bdf8 : 0xf59e0b));
+  // 车长顶置机枪
+  parts.push(paint(at(new THREE.BoxGeometry(0.12 * sc, 0.14 * sc, 0.42 * sc), -0.36 * sc, 0.86 * sc, -0.14 * sc), 0x1e2228));
+  parts.push(paint(at(new THREE.CylinderGeometry(0.03 * sc, 0.035 * sc, 0.68 * sc, 6), -0.36 * sc, 0.88 * sc, 0.32 * sc, Math.PI / 2), 0x14171c));
+
+  // 双鞭状战术无线电天线
+  for (const sx of [-0.56, 0.56]) {
+    parts.push(paint(at(new THREE.CylinderGeometry(0.018 * sc, 0.03 * sc, 1.05 * sc, 5), sx * sc, 1.12 * sc, -0.96 * sc, -0.12), ally ? 0x38bdf8 : 0x1e2228));
+  }
+
+  // 主炮管（单管或天启双管）：加粗根部护套 + 中段抽烟筒 + 热护套 + 制退器
+  const xs = twin ? [-0.26 * sc, 0.26 * sc] : [0];
   for (const bx of xs) {
-    parts.push(paint(at(new THREE.CylinderGeometry(0.14 * sc, 0.18 * sc, 2.15 * sc, 10), bx, 0.34 * sc, 1.42 * sc, Math.PI / 2), pal.barrel));
-    // 炮口制退器 + 高亮环
-    parts.push(paint(at(new THREE.CylinderGeometry(0.21 * sc, 0.19 * sc, 0.32 * sc, 10), bx, 0.34 * sc, 2.48 * sc, Math.PI / 2), 0x1c1e22));
-    parts.push(paint(at(new THREE.CylinderGeometry(0.19 * sc, 0.19 * sc, 0.12 * sc, 10), bx, 0.34 * sc, 2.15 * sc, Math.PI / 2), pal.accent));
+    // 炮根护套
+    parts.push(paint(at(new THREE.CylinderGeometry(0.16 * sc, 0.19 * sc, 0.62 * sc, 10), bx, 0.36 * sc, 1.12 * sc, Math.PI / 2), pal.armor));
+    // 长身管主炮
+    parts.push(paint(at(new THREE.CylinderGeometry(0.105 * sc, 0.135 * sc, 1.85 * sc, 12), bx, 0.36 * sc, 1.72 * sc, Math.PI / 2), pal.barrel));
+    // 中段圆柱抽烟筒（Fume Extractor）
+    parts.push(paint(at(new THREE.CylinderGeometry(0.165 * sc, 0.165 * sc, 0.44 * sc, 12), bx, 0.36 * sc, 1.66 * sc, Math.PI / 2), pal.trim));
+    // 警示识别环 + 炮口制退器
+    parts.push(paint(at(new THREE.CylinderGeometry(0.135 * sc, 0.135 * sc, 0.1 * sc, 10), bx, 0.36 * sc, 2.32 * sc, Math.PI / 2), pal.accent));
+    parts.push(paint(at(new THREE.BoxGeometry(0.28 * sc, 0.22 * sc, 0.34 * sc), bx, 0.36 * sc, 2.66 * sc), 0x1c1f25));
   }
   return merged(parts);
 }
 
-/** 广告奇袭中路爆裂红油桶：高亮红漆 + 黄黑警示环 + 顶部引信灯 */
+/** 工业重型爆裂危化红油桶：压筋桶身 + 上下卷边 + 危险警示环 + 顶注口阀 + 脉冲引信灯 */
 export function bombBarrelGeometry(r: number): Part {
-  const h = r * 2.05;
+  const h = r * 2.02;
   const parts: Part[] = [
-    paint(at(new THREE.CylinderGeometry(r * 0.78, r * 0.82, h, 14), 0, h / 2, 0), 0xe02828),
-    paint(at(new THREE.CylinderGeometry(r * 0.85, r * 0.85, h * 0.16, 14), 0, h * 0.5, 0), 0xfacc15),
-    paint(at(new THREE.CylinderGeometry(r * 0.86, r * 0.86, h * 0.06, 14), 0, h * 0.22, 0), 0x222226),
-    paint(at(new THREE.CylinderGeometry(r * 0.86, r * 0.86, h * 0.06, 14), 0, h * 0.78, 0), 0x222226),
-    paint(at(new THREE.SphereGeometry(r * 0.26, 10, 8), 0, h + r * 0.1, 0), 0xffdd33),
+    paint(at(new THREE.CylinderGeometry(r * 0.78, r * 0.8, h, 18), 0, h / 2, 0), 0xc82323),
+    // 顶底加固卷边
+    paint(at(new THREE.TorusGeometry(r * 0.79, r * 0.055, 8, 18), 0, h * 0.96, 0, Math.PI / 2), 0x262930),
+    paint(at(new THREE.TorusGeometry(r * 0.81, r * 0.055, 8, 18), 0, h * 0.04, 0, Math.PI / 2), 0x262930),
+    // 双压筋滚动加强环
+    paint(at(new THREE.TorusGeometry(r * 0.82, r * 0.045, 8, 18), 0, h * 0.32, 0, Math.PI / 2), 0x22252b),
+    paint(at(new THREE.TorusGeometry(r * 0.82, r * 0.045, 8, 18), 0, h * 0.68, 0, Math.PI / 2), 0x22252b),
+    // 居中警示黄带
+    paint(at(new THREE.CylinderGeometry(r * 0.81, r * 0.81, h * 0.2, 18), 0, h * 0.5, 0), 0xdfa919),
+    // 顶盖暗凹面 + 注油塞 + 电子引信座与预警灯
+    paint(at(new THREE.CylinderGeometry(r * 0.72, r * 0.72, r * 0.06, 16), 0, h * 0.98, 0), 0x3b1717),
+    paint(at(new THREE.CylinderGeometry(r * 0.1, r * 0.1, r * 0.12, 8), r * 0.34, h + r * 0.04, r * 0.18), 0x737b86),
+    paint(at(new THREE.CylinderGeometry(r * 0.24, r * 0.28, r * 0.14, 10), 0, h + r * 0.06, 0), 0x1e2228),
+    paint(at(new THREE.SphereGeometry(r * 0.18, 10, 8), 0, h + r * 0.18, 0), 0xfbbf24),
   ];
   return merged(parts);
 }
 
-/** 战斗支援无人机（既作奖励浮空图标，也作小队护航实体） */
+/** 战术四旋翼涵道攻击无人机（机身装甲 + 前置光电球头 + 4 碳纤维臂 + 涵道旋翼环 + 翼下双微型导弹挂架） */
 export function droneGeometry(scale = 1): Part {
   const s = scale;
   const parts: Part[] = [
-    paint(at(new THREE.OctahedronGeometry(0.28 * s, 1), 0, 0, 0, 0, 0, 0, 1.35, 0.55, 1.35), 0x2563eb),
-    paint(at(new THREE.SphereGeometry(0.14 * s, 10, 8), 0, 0.05 * s, -0.18 * s), 0x67e8f9),
+    // 流线型碳蓝装甲机身与顶部 GPS 导航盖
+    paint(at(new THREE.OctahedronGeometry(0.28 * s, 1), 0, 0.02 * s, 0, 0, 0, 0, 1.32, 0.52, 1.55), 0x1e3a8a),
+    paint(at(new THREE.BoxGeometry(0.42 * s, 0.12 * s, 0.56 * s), 0, 0.07 * s, 0.02 * s), 0x2563eb),
+    paint(at(new THREE.CylinderGeometry(0.11 * s, 0.13 * s, 0.06 * s, 10), 0, 0.16 * s, 0.06 * s), 0x94a3b8),
+    // 前置光电侦察云台球头 + 镜头
+    paint(at(new THREE.SphereGeometry(0.11 * s, 10, 8), 0, -0.07 * s, -0.34 * s), 0x0f172a),
+    paint(at(new THREE.CylinderGeometry(0.055 * s, 0.055 * s, 0.06 * s, 8), 0, -0.07 * s, -0.43 * s, Math.PI / 2), 0x38bdf8),
+    // 机腹双微型追踪弹发射管
+    paint(at(new THREE.CylinderGeometry(0.045 * s, 0.045 * s, 0.34 * s, 8), -0.15 * s, -0.11 * s, -0.02 * s, Math.PI / 2), 0x334155),
+    paint(at(new THREE.CylinderGeometry(0.045 * s, 0.045 * s, 0.34 * s, 8), 0.15 * s, -0.11 * s, -0.02 * s, Math.PI / 2), 0x334155),
+    paint(at(new THREE.ConeGeometry(0.045 * s, 0.1 * s, 8), -0.15 * s, -0.11 * s, -0.24 * s, -Math.PI / 2), 0xf97316),
+    paint(at(new THREE.ConeGeometry(0.045 * s, 0.1 * s, 8), 0.15 * s, -0.11 * s, -0.24 * s, -Math.PI / 2), 0xf97316),
   ];
   for (const sx of [-1, 1]) {
     for (const sz of [-1, 1]) {
-      parts.push(paint(at(new THREE.BoxGeometry(0.45 * s, 0.05 * s, 0.07 * s), sx * 0.22 * s, 0.04 * s, sz * 0.22 * s, 0, sx * sz * 0.78), 0x334155));
-      parts.push(paint(at(new THREE.TorusGeometry(0.17 * s, 0.03 * s, 6, 12), sx * 0.36 * s, 0.08 * s, sz * 0.36 * s, Math.PI / 2), 0x38bdf8));
+      const rx = sx * 0.42 * s;
+      const rz = sz * 0.38 * s;
+      // 碳纤维斜撑臂
+      parts.push(paint(at(new THREE.BoxGeometry(0.5 * s, 0.05 * s, 0.07 * s), sx * 0.24 * s, 0.04 * s, sz * 0.2 * s, 0, sx * sz * 0.72), 0x1e293b));
+      // 涵道风筒外壳 + 高亮识别边 + 电机轴心 + 十字桨叶
+      parts.push(paint(at(new THREE.CylinderGeometry(0.18 * s, 0.17 * s, 0.08 * s, 14, 1, true), rx, 0.08 * s, rz), 0x334155));
+      parts.push(paint(at(new THREE.TorusGeometry(0.18 * s, 0.024 * s, 6, 14), rx, 0.12 * s, rz, Math.PI / 2), 0x38bdf8));
+      parts.push(paint(at(new THREE.CylinderGeometry(0.045 * s, 0.045 * s, 0.1 * s, 8), rx, 0.08 * s, rz), 0x94a3b8));
+      parts.push(paint(at(new THREE.BoxGeometry(0.28 * s, 0.015 * s, 0.04 * s), rx, 0.1 * s, rz, 0, 0.4), 0x64748b));
+      parts.push(paint(at(new THREE.BoxGeometry(0.04 * s, 0.015 * s, 0.28 * s), rx, 0.1 * s, rz, 0, 0.4), 0x64748b));
     }
   }
   return merged(parts);
@@ -669,14 +883,14 @@ export function droneGeometry(scale = 1): Part {
 /** 多重弹道 3D 浮空图标：三联扇形光束炮管 + 紫金分束核心 */
 export function multishotGeometry(): Part {
   const parts: Part[] = [
-    paint(at(new THREE.OctahedronGeometry(0.28, 1), 0, 0, -0.1), 0xa855f7),
-    paint(at(new THREE.TorusGeometry(0.38, 0.055, 8, 16), 0, 0, -0.05), 0xfacc15),
+    paint(at(new THREE.OctahedronGeometry(0.28, 1), 0, 0, -0.1), 0x9333ea),
+    paint(at(new THREE.TorusGeometry(0.38, 0.05, 8, 18), 0, 0, -0.05), 0xeab308),
   ];
   for (const ang of [-0.42, 0, 0.42]) {
     const bx = Math.sin(ang) * 0.34;
     const bz = Math.cos(ang) * 0.34;
-    parts.push(paint(at(new THREE.CylinderGeometry(0.075, 0.095, 0.68, 8), bx, 0.04, bz, Math.PI / 2, ang), 0xe879f9));
-    parts.push(paint(at(new THREE.ConeGeometry(0.11, 0.22, 8), bx * 1.85, 0.04, bz * 1.85, Math.PI / 2, ang), 0xfef08a));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.075, 0.095, 0.68, 10), bx, 0.04, bz, Math.PI / 2, ang), 0xc084fc));
+    parts.push(paint(at(new THREE.ConeGeometry(0.11, 0.22, 10), bx * 1.85, 0.04, bz * 1.85, Math.PI / 2, ang), 0xfde047));
   }
   return merged(parts);
 }
@@ -685,20 +899,17 @@ export function multishotGeometry(): Part {
 export function ammoCoreGeometry(level: number): Part {
   const parts: Part[] = [];
   if (level >= 3) {
-    // 电磁弹：雷电能量球 + 双倾斜磁环
-    parts.push(paint(at(new THREE.IcosahedronGeometry(0.32, 1), 0, 0.06, 0), 0x38bdf8));
-    parts.push(paint(at(new THREE.TorusGeometry(0.48, 0.05, 8, 18), 0, 0.06, 0, 0.65, 0.3), 0xa855f7));
-    parts.push(paint(at(new THREE.TorusGeometry(0.48, 0.05, 8, 18), 0, 0.06, 0, -0.65, -0.3), 0x67e8f9));
+    parts.push(paint(at(new THREE.IcosahedronGeometry(0.32, 1), 0, 0.06, 0), 0x0284c7));
+    parts.push(paint(at(new THREE.TorusGeometry(0.48, 0.048, 8, 18), 0, 0.06, 0, 0.65, 0.3), 0x9333ea));
+    parts.push(paint(at(new THREE.TorusGeometry(0.48, 0.048, 8, 18), 0, 0.06, 0, -0.65, -0.3), 0x38bdf8));
   } else if (level === 2) {
-    // 爆裂弹：烈焰重型弹头 + 尾翼
-    parts.push(paint(at(new THREE.CylinderGeometry(0.22, 0.24, 0.62, 12), 0, 0, 0, 0.3, 0, -0.3), 0xea580c));
-    parts.push(paint(at(new THREE.ConeGeometry(0.22, 0.38, 12), 0.14, 0.44, 0.14, 0.3, 0, -0.3), 0xfef08a));
-    parts.push(paint(at(new THREE.TorusGeometry(0.34, 0.055, 6, 14), 0, 0.05, 0, Math.PI / 2), 0xff4d4d));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.22, 0.24, 0.62, 12), 0, 0, 0, 0.3, 0, -0.3), 0xc2410c));
+    parts.push(paint(at(new THREE.ConeGeometry(0.22, 0.38, 12), 0.14, 0.44, 0.14, 0.3, 0, -0.3), 0xfbbf24));
+    parts.push(paint(at(new THREE.TorusGeometry(0.34, 0.05, 6, 14), 0, 0.05, 0, Math.PI / 2), 0xdc2626));
   } else {
-    // 穿甲弹：三枚并列黄金穿甲弹芯
     for (const sx of [-0.24, 0, 0.24]) {
-      parts.push(paint(at(new THREE.CylinderGeometry(0.085, 0.1, 0.56, 10), sx, 0, 0), 0xf59e0b));
-      parts.push(paint(at(new THREE.ConeGeometry(0.09, 0.28, 10), sx, 0.4, 0), 0xfffbeb));
+      parts.push(paint(at(new THREE.CylinderGeometry(0.085, 0.1, 0.56, 10), sx, 0, 0), 0xd97706));
+      parts.push(paint(at(new THREE.ConeGeometry(0.09, 0.28, 10), sx, 0.4, 0), 0xfef3c7));
     }
   }
   return merged(parts);
@@ -707,9 +918,9 @@ export function ammoCoreGeometry(level: number): Part {
 /** 火力倍增 3D 浮空图标：炽烈熔火水晶 + 双能量增幅环 */
 export function damageCoreGeometry(): Part {
   const parts: Part[] = [
-    paint(at(new THREE.OctahedronGeometry(0.36, 0), 0, 0.08, 0, 0, 0, 0, 0.9, 1.45, 0.9), 0xff4d1f),
-    paint(at(new THREE.OctahedronGeometry(0.24, 0), 0, 0.08, 0, 0, Math.PI / 4, 0, 1.15, 0.9, 1.15), 0xfacc15),
-    paint(at(new THREE.TorusGeometry(0.46, 0.05, 6, 16), 0, 0.08, 0, 0.5, 0.4), 0xfb923c),
+    paint(at(new THREE.OctahedronGeometry(0.36, 0), 0, 0.08, 0, 0, 0, 0, 0.9, 1.45, 0.9), 0xea580c),
+    paint(at(new THREE.OctahedronGeometry(0.24, 0), 0, 0.08, 0, 0, Math.PI / 4, 0, 1.15, 0.9, 1.15), 0xeab308),
+    paint(at(new THREE.TorusGeometry(0.46, 0.048, 6, 16), 0, 0.08, 0, 0.5, 0.4), 0xf97316),
   ];
   return merged(parts);
 }
@@ -717,9 +928,9 @@ export function damageCoreGeometry(): Part {
 /** 小队护盾 3D 浮空图标：六角能量盾牌 + 发光晶核 */
 export function shieldCoreGeometry(): Part {
   const parts: Part[] = [
-    paint(at(new THREE.CylinderGeometry(0.46, 0.38, 0.16, 6), 0, 0.06, 0, Math.PI / 2), 0x06b6d4),
-    paint(at(new THREE.CylinderGeometry(0.32, 0.26, 0.22, 6), 0, 0.06, 0, Math.PI / 2), 0x67e8f9),
-    paint(at(new THREE.OctahedronGeometry(0.18, 0), 0, 0.06, 0.14), 0xecfeff),
+    paint(at(new THREE.CylinderGeometry(0.46, 0.38, 0.16, 6), 0, 0.06, 0, Math.PI / 2), 0x0891b2),
+    paint(at(new THREE.CylinderGeometry(0.32, 0.26, 0.22, 6), 0, 0.06, 0, Math.PI / 2), 0x38bdf8),
+    paint(at(new THREE.OctahedronGeometry(0.18, 0), 0, 0.06, 0.14), 0xe0f2fe),
   ];
   return merged(parts);
 }
@@ -727,92 +938,179 @@ export function shieldCoreGeometry(): Part {
 /** 极速射速 3D 浮空图标：立体闪电增压核 */
 export function rateBoltGeometry(): Part {
   const parts: Part[] = [
-    paint(at(new THREE.BoxGeometry(0.22, 0.56, 0.16), 0.1, 0.26, 0, 0, 0, -0.45), 0xfacc15),
-    paint(at(new THREE.BoxGeometry(0.22, 0.56, 0.16), -0.08, -0.18, 0, 0, 0, -0.45), 0x38bdf8),
-    paint(at(new THREE.TorusGeometry(0.42, 0.045, 6, 14), 0, 0.05, 0), 0x67e8f9),
+    paint(at(new THREE.BoxGeometry(0.22, 0.56, 0.16), 0.1, 0.26, 0, 0, 0, -0.45), 0xeab308),
+    paint(at(new THREE.BoxGeometry(0.22, 0.56, 0.16), -0.08, -0.18, 0, 0, 0, -0.45), 0x0ea5e9),
+    paint(at(new THREE.TorusGeometry(0.42, 0.042, 6, 14), 0, 0.05, 0), 0x38bdf8),
   ];
   return merged(parts);
 }
 
-/** 空袭超音速战机 3D 模型（空袭触发时低空呼啸掠过战场，双尾喷拖曳烈焰！） */
+/** 隐身超音速空袭战机 3D 模型（F-22/J-20 风格：菱形主翼 + 侧进气道 + 气泡座舱 + 外倾双垂尾 + 翼下挂弹 + 矢量双尾喷） */
 export function jetGeometry(): Part {
-  const parts: Part[] = [
-    // 机身与机头锥
-    paint(at(new THREE.CylinderGeometry(0.22, 0.34, 3.2, 10), 0, 0, 0, Math.PI / 2), 0x334155),
-    paint(at(new THREE.ConeGeometry(0.22, 1.1, 10), 0, 0, -2.15, -Math.PI / 2), 0x94a3b8),
-    // 驾驶舱玻璃罩
-    paint(at(new THREE.SphereGeometry(0.26, 10, 8), 0, 0.22, -0.65, 0, 0, 0, 0.85, 0.65, 2.1), 0x38bdf8),
-    // 后掠三角主翼 + 警示翼尖条
-    paint(at(new THREE.BoxGeometry(4.4, 0.1, 1.25), 0, -0.02, 0.35), 0x475569),
-    paint(at(new THREE.BoxGeometry(2.6, 0.12, 0.35), 0, 0.02, -0.2), 0xf97316),
-    // 双垂尾
-    forWing(-0.65),
-    forWing(0.65),
-    // 双发动机尾喷口 + 高亮加力燃烧室
-    paint(at(new THREE.CylinderGeometry(0.16, 0.18, 0.45, 10), -0.28, -0.02, 1.72, Math.PI / 2), 0x1e293b),
-    paint(at(new THREE.CylinderGeometry(0.16, 0.18, 0.45, 10), 0.28, -0.02, 1.72, Math.PI / 2), 0x1e293b),
-    paint(at(new THREE.ConeGeometry(0.15, 0.72, 8), -0.28, -0.02, 2.25, Math.PI / 2), 0xffb347),
-    paint(at(new THREE.ConeGeometry(0.15, 0.72, 8), 0.28, -0.02, 2.25, Math.PI / 2), 0xffb347),
-  ];
+  const parts: Part[] = [];
+
+  // 扁平隐身机身中段 + 锐利雷达罩机头
+  parts.push(paint(at(new THREE.BoxGeometry(0.74, 0.32, 2.9), 0, 0, 0.05), 0x334155));
+  parts.push(paint(at(new THREE.ConeGeometry(0.34, 1.55, 6), 0, -0.01, -2.15, -Math.PI / 2, Math.PI / 6), 0x475569));
+  // 两侧斜切 DSI 进气道
+  for (const s of [-1, 1]) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.26, 0.24, 1.55), s * 0.44, -0.04, -0.2), 0x263140));
+    parts.push(paint(at(new THREE.BoxGeometry(0.2, 0.18, 0.08), s * 0.44, -0.04, -1.0), 0x0f172a));
+  }
+
+  // 金色反光镀膜气泡驾驶舱 + 座舱框架
+  parts.push(paint(at(new THREE.SphereGeometry(0.25, 12, 8), 0, 0.18, -0.82, 0, 0, 0, 0.85, 0.65, 2.45), 0x38bdf8));
+  parts.push(paint(at(new THREE.TorusGeometry(0.22, 0.025, 6, 12, Math.PI), 0, 0.16, -0.68), 0x1e293b));
+
+  // 后掠菱形隐身三角主翼（ExtrudeGeometry 真实翼型）
+  const wingShape = new THREE.Shape();
+  wingShape.moveTo(0, -0.85);
+  wingShape.lineTo(2.45, 0.72);
+  wingShape.lineTo(2.45, 1.1);
+  wingShape.lineTo(0.45, 1.15);
+  wingShape.lineTo(-0.45, 1.15);
+  wingShape.lineTo(-2.45, 1.1);
+  wingShape.lineTo(-2.45, 0.72);
+  wingShape.closePath();
+  const wingGeo = new THREE.ExtrudeGeometry(wingShape, { depth: 0.08, bevelEnabled: true, bevelThickness: 0.02, bevelSize: 0.02, bevelSegments: 1 });
+  wingGeo.rotateX(Math.PI / 2);
+  wingGeo.translate(0, 0.02, 0.12);
+  parts.push(paint(wingGeo, 0x3f4c5e));
+
+  // 后掠平尾
+  const tailShape = new THREE.Shape();
+  tailShape.moveTo(0, 0);
+  tailShape.lineTo(1.22, 0.56);
+  tailShape.lineTo(1.22, 0.88);
+  tailShape.lineTo(0.28, 0.92);
+  tailShape.lineTo(-0.28, 0.92);
+  tailShape.lineTo(-1.22, 0.88);
+  tailShape.lineTo(-1.22, 0.56);
+  tailShape.closePath();
+  const tailGeo = new THREE.ExtrudeGeometry(tailShape, { depth: 0.06, bevelEnabled: false });
+  tailGeo.rotateX(Math.PI / 2);
+  tailGeo.translate(0, 0.01, 1.05);
+  parts.push(paint(tailGeo, 0x2d3848));
+
+  // 外倾双垂尾（梯形后掠）
+  for (const s of [-1, 1]) {
+    const fin = new THREE.Shape();
+    fin.moveTo(0, 0);
+    fin.lineTo(0.78, 0);
+    fin.lineTo(0.55, 0.82);
+    fin.lineTo(0.18, 0.82);
+    fin.closePath();
+    const finGeo = new THREE.ExtrudeGeometry(fin, { depth: 0.05, bevelEnabled: false });
+    finGeo.rotateY(Math.PI / 2);
+    finGeo.rotateZ(-s * 0.34);
+    finGeo.translate(s * 0.46, 0.12, 1.62);
+    parts.push(paint(finGeo, 0x1e293b));
+
+    // 机翼警示战术标识条 + 翼下双空地导弹挂架
+    parts.push(paint(at(new THREE.BoxGeometry(0.7, 0.11, 0.14), s * 1.45, 0.02, 0.72, 0, -s * 0.55), 0xea580c));
+    parts.push(paint(at(new THREE.CylinderGeometry(0.055, 0.055, 0.95, 8), s * 1.15, -0.14, 0.48, Math.PI / 2), 0x94a3b8));
+    parts.push(paint(at(new THREE.ConeGeometry(0.055, 0.2, 8), s * 1.15, -0.14, -0.08, -Math.PI / 2), 0xdc2626));
+  }
+
+  // 双矩形矢量发动机尾喷口 + 加力火焰锥
+  for (const sx of [-0.26, 0.26]) {
+    parts.push(paint(at(new THREE.BoxGeometry(0.32, 0.24, 0.48), sx, -0.02, 1.72), 0x161d29));
+    parts.push(paint(at(new THREE.ConeGeometry(0.12, 0.68, 8), sx, -0.02, 2.25, Math.PI / 2), 0xf59e0b));
+  }
   return merged(parts);
 }
 
-function forWing(x: number): Part {
-  return paint(at(new THREE.BoxGeometry(0.1, 0.85, 0.75), x, 0.42, 1.15, 0, 0, x < 0 ? 0.22 : -0.22), 0x1e293b);
-}
-
-/** 空投泰坦机甲躯干（装甲核心 + 发光青色战术目镜 + 双肩追踪导弹巢 + 背部推进器，面朝 -z） */
+/** 泰坦重装机甲精细躯干（多层斜切装甲驾驶舱 + 护眉目镜 + 双肩 6 联装导弹巢 + 液压腰转盘 + 双矢量推进背包，面朝 -z） */
 export function mechTorsoGeometry(): Part {
   const parts: Part[] = [
-    // 重型骨盆与装甲胸甲
-    paint(at(new THREE.BoxGeometry(0.76, 0.34, 0.62), 0, 1.15, 0), 0x1e293b),
-    paint(at(new THREE.BoxGeometry(1.18, 0.92, 0.88), 0, 1.78, -0.04), 0x1d4ed8),
-    // 倾斜前胸反应装甲 + 金色指挥徽标
-    paint(at(new THREE.BoxGeometry(0.92, 0.54, 0.24), 0, 1.82, -0.5, 0.22), 0x0f172a),
-    paint(at(new THREE.OctahedronGeometry(0.18, 0), 0, 1.84, -0.62, 0, Math.PI / 4, 0, 1.1, 1.1, 0.4), 0xfacc15),
-    // 头部驾驶舱 + 高亮战术目镜
-    paint(at(new THREE.BoxGeometry(0.56, 0.38, 0.56), 0, 2.38, -0.06), 0x334155),
-    paint(at(new THREE.BoxGeometry(0.46, 0.14, 0.12), 0, 2.4, -0.34), 0x67e8f9),
-    // 顶部雷达天线
-    paint(at(new THREE.CylinderGeometry(0.025, 0.035, 0.6, 6), 0.24, 2.78, 0.05), 0x94a3b8),
-    // 背部双喷气推进背包
-    paint(at(new THREE.BoxGeometry(0.84, 0.72, 0.42), 0, 1.85, 0.56), 0x1e293b),
-    paint(at(new THREE.CylinderGeometry(0.14, 0.18, 0.28, 8), -0.24, 1.42, 0.62), 0x38bdf8),
-    paint(at(new THREE.CylinderGeometry(0.14, 0.18, 0.28, 8), 0.24, 1.42, 0.62), 0x38bdf8),
+    // 重型装甲骨盆与前后护裆甲 + 腰部液压转盘
+    paint(at(new THREE.BoxGeometry(0.84, 0.32, 0.68), 0, 1.12, 0), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.34, 0.44, 0.3), 0, 1.04, -0.34, 0.18), 0x1e3a8a),
+    paint(at(new THREE.CylinderGeometry(0.36, 0.42, 0.24, 12), 0, 1.32, 0), 0x334155),
+    // 主胸装甲壳 + 斜置前胸复合装甲板
+    paint(at(new THREE.BoxGeometry(1.18, 0.88, 0.9), 0, 1.8, -0.02), 0x1d4ed8),
+    paint(at(new THREE.BoxGeometry(1.04, 0.62, 0.34), 0, 1.84, -0.46, 0.24), 0x1e3a8a),
+    paint(at(new THREE.BoxGeometry(0.76, 0.44, 0.18), 0, 1.88, -0.62, 0.24), 0x0f172a),
+    // 胸口金边战术徽记 + 能量核心
+    paint(at(new THREE.OctahedronGeometry(0.18, 0), 0, 1.88, -0.71, 0, Math.PI / 4, 0, 1.1, 1.1, 0.35), 0xeab308),
+    paint(at(new THREE.CylinderGeometry(0.08, 0.08, 0.08, 8), 0, 1.88, -0.74, Math.PI / 2), 0x38bdf8),
+    // 胸侧进气格栅
+    paint(at(new THREE.BoxGeometry(0.16, 0.32, 0.16), -0.44, 1.72, -0.52, 0.2), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.16, 0.32, 0.16), 0.44, 1.72, -0.52, 0.2), 0x1e293b),
+    // 装甲颈环 + 倾斜重装头盔 + 发光战术目镜 + 额顶传感器
+    paint(at(new THREE.CylinderGeometry(0.28, 0.34, 0.16, 10), 0, 2.26, -0.04), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.56, 0.36, 0.6), 0, 2.46, -0.06), 0x334155),
+    paint(at(new THREE.BoxGeometry(0.62, 0.12, 0.64), 0, 2.6, -0.08, 0.1), 0x1d4ed8),
+    paint(at(new THREE.BoxGeometry(0.46, 0.12, 0.12), 0, 2.46, -0.36), 0x38bdf8),
+    // 头侧通讯天线与顶部雷达
+    paint(at(new THREE.CylinderGeometry(0.02, 0.032, 0.72, 6), 0.3, 2.86, 0.08, -0.14), 0x94a3b8),
+    paint(at(new THREE.CylinderGeometry(0.018, 0.025, 0.5, 6), -0.28, 2.76, 0.08, -0.1), 0x94a3b8),
+    // 背部重型跳帮推进背包 + 散热鳍片 + 双矢量喷口
+    paint(at(new THREE.BoxGeometry(0.92, 0.78, 0.46), 0, 1.86, 0.6), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.76, 0.12, 0.52), 0, 2.28, 0.62), 0x334155),
+    paint(at(new THREE.CylinderGeometry(0.16, 0.22, 0.34, 10), -0.26, 1.38, 0.68, 0.18), 0x475569),
+    paint(at(new THREE.CylinderGeometry(0.16, 0.22, 0.34, 10), 0.26, 1.38, 0.68, 0.18), 0x475569),
+    paint(at(new THREE.CylinderGeometry(0.11, 0.14, 0.1, 8), -0.26, 1.22, 0.72, 0.18), 0x38bdf8),
+    paint(at(new THREE.CylinderGeometry(0.11, 0.14, 0.1, 8), 0.26, 1.22, 0.72, 0.18), 0x38bdf8),
   ];
-  // 双肩重型装甲护肩 + 6 联追踪导弹发射巢
+
+  // 双肩分层重型护肩甲 + 6 联装追踪导弹发射巢（带独立红橙弹头）
   for (const s of [-1, 1]) {
-    parts.push(paint(at(new THREE.BoxGeometry(0.42, 0.46, 0.72), s * 0.76, 2.08, -0.02, 0, 0, -s * 0.18), 0x2563eb));
-    parts.push(paint(at(new THREE.BoxGeometry(0.36, 0.32, 0.54), s * 0.72, 2.42, 0.06), 0x334155));
-    for (const mx of [-0.09, 0.09]) {
-      for (const my of [-0.07, 0.07]) {
-        parts.push(paint(at(new THREE.CylinderGeometry(0.045, 0.045, 0.16, 6), s * 0.72 + mx, 2.42 + my, -0.22, Math.PI / 2), 0xf97316));
+    parts.push(paint(at(new THREE.BoxGeometry(0.46, 0.48, 0.78), s * 0.8, 2.08, -0.02, 0, 0, -s * 0.22), 0x2563eb));
+    parts.push(paint(at(new THREE.BoxGeometry(0.12, 0.44, 0.66), s * 1.02, 2.04, -0.02, 0, 0, -s * 0.22), 0xeab308));
+    parts.push(paint(at(new THREE.BoxGeometry(0.42, 0.36, 0.58), s * 0.72, 2.48, 0.08), 0x283242));
+    parts.push(paint(at(new THREE.BoxGeometry(0.46, 0.06, 0.62), s * 0.72, 2.67, 0.08), 0x475569));
+    for (const mx of [-0.11, 0, 0.11]) {
+      for (const my of [-0.08, 0.08]) {
+        parts.push(paint(at(new THREE.CylinderGeometry(0.038, 0.038, 0.16, 6), s * 0.72 + mx, 2.48 + my, -0.2, Math.PI / 2), 0xea580c));
       }
     }
   }
   return merged(parts);
 }
 
-/** 泰坦机甲单腿（反关节重装机械腿，枢轴在 y=0 髋部，向下延伸约 1.15m） */
+/** 泰坦机甲精细单腿（装甲大腿 + 外露液压缸 + 膝盖装甲盾 + 小腿护胫 + 三趾重型着陆脚爪，枢轴在 y=0 髋部） */
 export function mechLegGeometry(): Part {
   return merged([
-    paint(at(new THREE.BoxGeometry(0.3, 0.56, 0.34), 0, -0.28, -0.04, 0.14), 0x334155),
-    paint(at(new THREE.CylinderGeometry(0.16, 0.16, 0.36, 8), 0, -0.56, -0.08, 0, 0, Math.PI / 2), 0xfacc15),
-    paint(at(new THREE.BoxGeometry(0.28, 0.54, 0.32), 0, -0.84, 0.04, -0.1), 0x1d4ed8),
-    paint(at(new THREE.BoxGeometry(0.44, 0.18, 0.68), 0, -1.08, -0.06), 0x0f172a),
+    // 髋关节球承与大腿装甲
+    paint(at(new THREE.CylinderGeometry(0.16, 0.16, 0.34, 10), 0, -0.04, 0, 0, 0, Math.PI / 2), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.34, 0.52, 0.38), 0, -0.28, -0.05, 0.16), 0x334155),
+    paint(at(new THREE.BoxGeometry(0.26, 0.42, 0.1), 0, -0.26, -0.25, 0.16), 0x1d4ed8),
+    // 后部银色液压推杆
+    paint(at(new THREE.CylinderGeometry(0.045, 0.045, 0.52, 8), 0, -0.34, 0.16, -0.15), 0x94a3b8),
+    // 膝关节旋转鼓与前护膝盾
+    paint(at(new THREE.CylinderGeometry(0.17, 0.17, 0.38, 10), 0, -0.56, -0.09, 0, 0, Math.PI / 2), 0xeab308),
+    paint(at(new THREE.BoxGeometry(0.32, 0.26, 0.16), 0, -0.56, -0.26, -0.12), 0x0f172a),
+    // 小腿反关节重型护胫
+    paint(at(new THREE.BoxGeometry(0.3, 0.52, 0.34), 0, -0.84, 0.04, -0.12), 0x1d4ed8),
+    paint(at(new THREE.BoxGeometry(0.34, 0.38, 0.16), 0, -0.86, -0.12, -0.12), 0x2563eb),
+    // 踝关节与三趾重型稳定爪（前双趾 + 后踵刺）
+    paint(at(new THREE.BoxGeometry(0.38, 0.14, 0.42), 0, -1.07, -0.02), 0x0f172a),
+    paint(at(new THREE.BoxGeometry(0.16, 0.12, 0.34), -0.14, -1.1, -0.3, 0.08), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.16, 0.12, 0.34), 0.14, -1.1, -0.3, 0.08), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.22, 0.12, 0.28), 0, -1.1, 0.26, -0.08), 0x1e293b),
   ]);
 }
 
-/** 泰坦机甲机械臂旋转多管机炮（枢轴在肩关节，炮口朝 -z） */
+/** 泰坦机甲重型 6 管旋转加特林机炮臂（装甲肩关节 + 供弹鼓 + 炮匣 + 6 联装炮管 + 双散热箍环，炮口朝 -z） */
 export function mechArmGeometry(): Part {
   const parts: Part[] = [
-    paint(at(new THREE.BoxGeometry(0.26, 0.42, 0.3), 0, -0.18, 0), 0x334155),
-    paint(at(new THREE.BoxGeometry(0.3, 0.3, 0.74), 0, -0.44, -0.34), 0x1e293b),
-    paint(at(new THREE.CylinderGeometry(0.13, 0.13, 0.16, 10), 0, -0.44, -0.76, Math.PI / 2), 0xfacc15),
+    // 肩关节云台与上臂
+    paint(at(new THREE.CylinderGeometry(0.15, 0.15, 0.28, 10), 0, 0, 0, 0, 0, Math.PI / 2), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.26, 0.42, 0.32), 0, -0.2, 0), 0x334155),
+    // 机炮主匣 + 侧面供弹箱 + 蓝色装甲护罩
+    paint(at(new THREE.BoxGeometry(0.34, 0.32, 0.78), 0, -0.44, -0.34), 0x1e293b),
+    paint(at(new THREE.BoxGeometry(0.38, 0.18, 0.56), 0, -0.32, -0.36), 0x1d4ed8),
+    paint(at(new THREE.CylinderGeometry(0.14, 0.14, 0.28, 10), 0, -0.62, -0.32, 0, 0, Math.PI / 2), 0x475569),
+    // 旋转转盘与双炮管固定箍环
+    paint(at(new THREE.CylinderGeometry(0.15, 0.15, 0.14, 12), 0, -0.44, -0.78, Math.PI / 2), 0xeab308),
+    paint(at(new THREE.CylinderGeometry(0.135, 0.135, 0.08, 12), 0, -0.44, -1.24, Math.PI / 2), 0x334155),
+    paint(at(new THREE.CylinderGeometry(0.145, 0.145, 0.1, 12), 0, -0.44, -1.62, Math.PI / 2), 0x1e293b),
   ];
-  for (let i = 0; i < 4; i++) {
-    const a = (i / 4) * Math.PI * 2 + 0.4;
-    parts.push(paint(at(new THREE.CylinderGeometry(0.036, 0.036, 0.95, 6), Math.cos(a) * 0.07, -0.44 + Math.sin(a) * 0.07, -1.18, Math.PI / 2), 0x94a3b8));
+  // 6 根高密度旋转机炮管
+  for (let i = 0; i < 6; i++) {
+    const a = (i / 6) * Math.PI * 2;
+    parts.push(paint(at(new THREE.CylinderGeometry(0.028, 0.028, 1.02, 6), Math.cos(a) * 0.082, -0.44 + Math.sin(a) * 0.082, -1.25, Math.PI / 2), 0x94a3b8));
   }
   return merged(parts);
 }

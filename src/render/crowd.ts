@@ -39,7 +39,7 @@ export class Crowd {
 
   constructor(scene: THREE.Scene, capacity: number, body: THREE.BufferGeometry, legs: THREE.BufferGeometry) {
     this.capacity = capacity;
-    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.56, metalness: 0.18 });
+    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.62, metalness: 0.16 });
     this.body = new THREE.InstancedMesh(body, this.material, capacity);
     this.legs = new THREE.InstancedMesh(legs, this.material, capacity * 2);
     for (const mesh of [this.body, this.legs]) {
@@ -83,7 +83,7 @@ export class Crowd {
     _leg.setPosition(LEG_X, HIP_Y, 0);
     _tmp.multiplyMatrices(_m, _leg);
     this.legs.setMatrixAt(i * 2 + 1, _tmp);
-    const f = 1 + a.flash * 1.6;
+    const f = 1 + a.flash * 1.1;
     if (a.tint) this.body.setColorAt(i, _c.setRGB(a.tint[0] * f, a.tint[1] * f, a.tint[2] * f));
     else this.body.setColorAt(i, _c.setRGB(f, f, f));
   }

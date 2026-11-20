@@ -411,7 +411,7 @@ export class VatCrowd {
   private readonly anim: THREE.InstancedBufferAttribute;
   private readonly animAttrs: readonly [THREE.InstancedBufferAttribute];
   private readonly uniforms: Record<string, THREE.IUniform>;
-  private readonly material: THREE.MeshLambertMaterial;
+  private readonly material: THREE.MeshStandardMaterial;
   private readonly geoCache = new WeakMap<BakedModel, THREE.BufferGeometry>();
 
   constructor(scene: THREE.Scene, capacity: number, model: BakedModel, opts: { shadow?: boolean } = {}) {
@@ -422,7 +422,7 @@ export class VatCrowd {
       uVatWidth: { value: model.width },
       uVatRows: { value: model.rows },
     };
-    this.material = new THREE.MeshLambertMaterial({ vertexColors: true, map: model.map, flatShading: true });
+    this.material = new THREE.MeshStandardMaterial({ vertexColors: true, map: model.map, flatShading: true, roughness: 0.66, metalness: 0.16 });
     this.material.onBeforeCompile = (shader) => {
       Object.assign(shader.uniforms, this.uniforms);
       injectVertex(shader);
@@ -431,7 +431,7 @@ export class VatCrowd {
         `#include <color_vertex>
   vFlash = 0.0;
 #ifdef USE_INSTANCING_COLOR
-  vFlash = clamp((max(instanceColor.r, max(instanceColor.g, instanceColor.b)) - 1.12) * 0.45, 0.0, 0.78);
+  vFlash = clamp((max(instanceColor.r, max(instanceColor.g, instanceColor.b)) - 1.12) * 0.45, 0.0, 0.55);
 #endif`,
       );
       shader.fragmentShader = 'varying float vTex;\nvarying float vFlash;\n' + shader.fragmentShader.replace(
@@ -443,7 +443,7 @@ export class VatCrowd {
   diffuseColor.rgb = mix(diffuseColor.rgb, vec3(1.0, 0.94, 0.8), vFlash);`,
       );
     };
-    this.material.customProgramCacheKey = () => `vat-${this.material.map ? 1 : 0}`;
+    this.material.customProgramCacheKey = () => `vat-pbr-${this.material.map ? 1 : 0}`;
     this.anim = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
     this.anim.setUsage(THREE.DynamicDrawUsage);
     this.animAttrs = [this.anim];
@@ -519,7 +519,7 @@ export class VatCrowd {
     const f0 = Math.min(clip.frames - 1, Math.floor(t));
     const f1 = nonLoop ? Math.min(clip.frames - 1, f0 + 1) : (f0 + 1) % clip.frames;
     this.anim.setXYZ(i, clip.start + f0, clip.start + f1, t - f0);
-    const f = 1 + a.flash * 2.2;
+    const f = 1 + a.flash * 1.35;
     if (a.tint) this.mesh.setColorAt(i, _col.setRGB(a.tint[0] * f, a.tint[1] * f, a.tint[2] * f));
     else this.mesh.setColorAt(i, _col.setRGB(f, f, f));
   }

@@ -16,7 +16,7 @@ import { AllyMechView, AllyTankView, BarrelView, BossStrikeView, BossView, GATE_
 import { Environment } from './environment';
 import { HpBar, formatNumber } from './label';
 import { setGunProvider, soldierBody, soldierLeg } from './models';
-import { droneGeometry, jetGeometry, zombieBody, zombieLeg } from './props';
+import { droneGeometry, jetGeometry, rocketProjectileGeometry, tankShellGeometry, zombieBody, zombieLeg } from './props';
 import { ITEM_SCALE } from './scale';
 import { VatCrowd } from './vat';
 
@@ -266,20 +266,20 @@ export class GameRenderer {
     this.renderer.shadowMap.enabled = true;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.06;
+    this.renderer.toneMappingExposure = 0.96;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
 
-    // 次世代 PBR 环境反射（IBL）与电影级辉光后处理管线（低配自动回退直出）
+    // 次世代 PBR 环境反射（IBL）与克制的选择性 HDR 辉光管线（低配自动回退直出）
     try {
       const pmrem = new THREE.PMREMGenerator(this.renderer);
       this.envRT = pmrem.fromScene(new RoomEnvironment(), 0.04);
       this.scene.environment = this.envRT.texture;
-      this.scene.environmentIntensity = 0.65;
+      this.scene.environmentIntensity = 0.36;
       pmrem.dispose();
 
       const composer = new EffectComposer(this.renderer);
       composer.addPass(new RenderPass(this.scene, this.camera));
-      const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.34, 0.42, 0.86);
+      const bloom = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.16, 0.3, 1.08);
       composer.addPass(bloom);
       composer.addPass(new OutputPass());
       this.composer = composer;
@@ -300,9 +300,9 @@ export class GameRenderer {
 
     this.skin = skin;
     this.env = new Environment(this.scene);
-    this.hemi = new THREE.HemisphereLight(0xffffff, 0x9fb3c8, 1.6);
+    this.hemi = new THREE.HemisphereLight(0xffffff, 0x9fb3c8, 0.78);
     this.scene.add(this.hemi);
-    this.sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    this.sun = new THREE.DirectionalLight(0xffffff, 1.88);
     this.sun.castShadow = true;
     const size = mobile ? 1024 : 2048;
     this.sun.shadow.mapSize.set(size, size);
@@ -313,8 +313,8 @@ export class GameRenderer {
     sc.bottom = -14;
     sc.near = 1;
     sc.far = 70;
-    this.sun.shadow.bias = -0.0008;
-    this.sun.shadow.normalBias = 0.02;
+    this.sun.shadow.bias = -0.0005;
+    this.sun.shadow.normalBias = 0.025;
     this.scene.add(this.sun, this.sun.target);
 
     // 有外部模型就用烘焙动画的实例网格，没有就退回代码生成的小人
@@ -349,7 +349,7 @@ export class GameRenderer {
     this.sparks = new Particles(
       this.scene,
       new THREE.OctahedronGeometry(1, 0),
-      new THREE.MeshBasicMaterial({ transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false }),
       1000,
     );
     this.debris = new Particles(this.scene, new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ roughness: 0.65, metalness: 0.25 }), 1100);
@@ -386,11 +386,10 @@ export class GameRenderer {
     this.shieldMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
-      opacity: 0.45,
+      opacity: 0.28,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
-      toneMapped: false,
     });
     this.shieldAura = new THREE.Mesh(new THREE.RingGeometry(0.86, 1.06, 36), this.shieldMat);
     this.shieldAura.rotation.x = -Math.PI / 2;
@@ -401,11 +400,10 @@ export class GameRenderer {
     this.shieldDomeMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
-      opacity: 0.16,
+      opacity: 0.09,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
-      toneMapped: false,
     });
     this.shieldDome = new THREE.Mesh(new THREE.SphereGeometry(1, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.5), this.shieldDomeMat);
     this.shieldDome.position.y = 0.04;
@@ -415,11 +413,10 @@ export class GameRenderer {
     this.powerAuraMat = new THREE.MeshBasicMaterial({
       color: 0xf97316,
       transparent: true,
-      opacity: 0.34,
+      opacity: 0.24,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
-      toneMapped: false,
     });
     this.powerAura = new THREE.Mesh(new THREE.RingGeometry(0.68, 0.94, 32), this.powerAuraMat);
     this.powerAura.rotation.x = -Math.PI / 2;
@@ -428,8 +425,14 @@ export class GameRenderer {
     this.scene.add(this.powerAura);
 
     this.blitzMissiles = new THREE.InstancedMesh(
-      new THREE.ConeGeometry(0.11 * ITEM_SCALE, 0.72 * ITEM_SCALE, 8),
-      new THREE.MeshBasicMaterial({ color: 0x67e8f9, toneMapped: false }),
+      rocketProjectileGeometry(1.1 * ITEM_SCALE),
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.35,
+        metalness: 0.55,
+        emissive: 0x0ea5e9,
+        emissiveIntensity: 0.35,
+      }),
       48,
     );
     this.blitzMissiles.frustumCulled = false;
@@ -438,8 +441,14 @@ export class GameRenderer {
     this.scene.add(this.blitzMissiles);
 
     this.allyShellMesh = new THREE.InstancedMesh(
-      new THREE.CapsuleGeometry(0.18 * ITEM_SCALE, 0.62 * ITEM_SCALE, 6, 10),
-      new THREE.MeshBasicMaterial({ color: 0xffe066, toneMapped: false }),
+      tankShellGeometry(1.15 * ITEM_SCALE),
+      new THREE.MeshStandardMaterial({
+        vertexColors: true,
+        roughness: 0.35,
+        metalness: 0.6,
+        emissive: 0xd97706,
+        emissiveIntensity: 0.35,
+      }),
       40,
     );
     this.allyShellMesh.frustumCulled = false;
@@ -454,7 +463,7 @@ export class GameRenderer {
     this.scene.add(this.airstrikeJet);
 
     this.blitzLanes = new THREE.Group();
-    const laneMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, transparent: true, opacity: 0.36, depthWrite: false });
+    const laneMat = new THREE.MeshBasicMaterial({ color: 0xfef08a, transparent: true, opacity: 0.26, depthWrite: false });
     const dashGeo = new THREE.PlaneGeometry(0.12, 2.2);
     for (const lx of [-1.85, 1.85]) {
       for (let d = -2; d < 64; d += 4.2) {
@@ -468,11 +477,10 @@ export class GameRenderer {
     const chevMat = new THREE.MeshBasicMaterial({
       color: 0x38bdf8,
       transparent: true,
-      opacity: 0.38,
+      opacity: 0.22,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
       side: THREE.DoubleSide,
-      toneMapped: false,
     });
     const chevGeo = new THREE.RingGeometry(0.45, 0.68, 3);
     for (let i = 0; i < 12; i++) {
@@ -1465,10 +1473,10 @@ export class GameRenderer {
       const pulse = 1 + this.shieldFlash * 0.14 + Math.sin(t * 5) * 0.025;
       this.shieldAura.position.set(sq.x, 0.08, -sq.d);
       this.shieldAura.scale.setScalar(r * pulse);
-      this.shieldMat.opacity = 0.38 + this.shieldFlash * 0.48 + Math.sin(t * 4) * 0.08;
+      this.shieldMat.opacity = 0.24 + this.shieldFlash * 0.34 + Math.sin(t * 4) * 0.05;
       this.shieldDome.position.set(sq.x, 0.02, -sq.d);
       this.shieldDome.scale.set(r * pulse, Math.min(2.6, r * 0.85) * ITEM_SCALE * pulse, r * pulse);
-      this.shieldDomeMat.opacity = 0.14 + this.shieldFlash * 0.34 + Math.sin(t * 4.5) * 0.04;
+      this.shieldDomeMat.opacity = 0.08 + this.shieldFlash * 0.22 + Math.sin(t * 4.5) * 0.025;
     } else {
       this.shieldAura.visible = false;
       this.shieldDome.visible = false;
@@ -1481,7 +1489,7 @@ export class GameRenderer {
       this.powerAura.position.set(sq.x, 0.05, -sq.d);
       this.powerAura.scale.setScalar(pr * (1 + Math.sin(t * (odActive ? 11 : 6.5)) * (odActive ? 0.07 : 0.04)));
       this.powerAuraMat.color.setHex(odActive ? 0xfacc15 : isBlitz && w.blitz.damageBonus > 0 ? 0xf97316 : 0xa855f7);
-      this.powerAuraMat.opacity = (odActive ? 0.52 : 0.26) + Math.sin(t * (odActive ? 11 : 6.5)) * 0.1;
+      this.powerAuraMat.opacity = (odActive ? 0.34 : 0.18) + Math.sin(t * (odActive ? 11 : 6.5)) * 0.06;
     } else {
       this.powerAura.visible = false;
     }

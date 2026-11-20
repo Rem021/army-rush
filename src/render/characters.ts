@@ -357,7 +357,7 @@ export class ModelBossView {
   private attackIndex = -1;
   private lastMotion: 'none' | 'windup' | 'release' = 'none';
   private current: THREE.AnimationAction | null = null;
-  private readonly materials: THREE.MeshLambertMaterial[] = [];
+  private readonly materials: THREE.MeshStandardMaterial[] = [];
   private readonly bar = new HpBar(360, 96);
   private readonly hpSprite: THREE.Sprite;
   private dropT = -1;
@@ -382,7 +382,12 @@ export class ModelBossView {
       mesh.castShadow = true;
       mesh.frustumCulled = false;
       const old = mesh.material as THREE.MeshStandardMaterial;
-      const mat = new THREE.MeshLambertMaterial({ map: old.map ?? null, color: old.color?.clone() ?? new THREE.Color(1, 1, 1) });
+      const mat = new THREE.MeshStandardMaterial({
+        map: old.map ?? null,
+        color: old.color?.clone() ?? new THREE.Color(1, 1, 1),
+        roughness: 0.58,
+        metalness: 0.18,
+      });
       if (tintColor) mat.color.multiply(tintColor);
       this.materials.push(mat);
       mesh.material = mat;
